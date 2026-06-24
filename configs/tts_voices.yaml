@@ -1,0 +1,33 @@
+# ==============================================================================
+# DubbingStory — TTS Voice Configuration
+# ==============================================================================
+
+# Piper TTS voices (CPU-only, MIT license)
+piper:
+  id:
+    voice_id: "id_ID-news_tts-medium"
+    sample_rate: 22050
+    description: "Indonesian news-style voice (medium quality)"
+  en:
+    voice_id: "en_US-lessac-medium"
+    sample_rate: 22050
+    description: "US English voice (medium quality)"
+  en_gb:
+    voice_id: "en_GB-semaine-medium"
+    sample_rate: 22050
+    description: "British English voice (medium quality)"
+
+# VoxCPM2 voices (GPU required, Apache-2.0)
+voxcpm2:
+  id:
+    language_code: "id"
+    description: "Native Indonesian — 48kHz studio quality"
+    sample_rate: 48000
+  en:
+    language_code: "en"
+    description: "English — 48kHz studio quality"
+    sample_rate: 48000
+  voice_design:
+    # VoxCPM2 supports generating voices from text descriptions
+    # Example: "warm and gentle male voice" or "energetic young female narrator"
+    default_description: "warm and clear narrator voice, professional tone"

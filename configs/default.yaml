@@ -1,0 +1,57 @@
+# ==============================================================================
+# DubbingStory — Default Pipeline Configuration
+# ==============================================================================
+
+# ── Project ──────────────────────────────────────────────────────────────────
+project:
+  name: ""                          # Auto-generated from video filename if empty
+  output_dir: "outputs"
+
+# ── Ingest ───────────────────────────────────────────────────────────────────
+ingest:
+  download_height: "max"            # "max", "1080", "720", etc.
+  read_subtitles: true              # Auto-read SRT/ASS/VTT if found alongside video
+
+# ── Scene Detection ──────────────────────────────────────────────────────────
+segment:
+  detector: "adaptive"              # "adaptive" | "content" | "threshold"
+  adaptive_threshold: 3.0
+  min_scene_duration: 2.0           # Minimum scene length in seconds
+  merge_short_scenes: true          # Merge scenes shorter than min_scene_duration
+
+# ── Keyframe Extraction ──────────────────────────────────────────────────────
+keyframes:
+  strategy: "distributed"           # "distributed" (start,25%,50%,75%,end) | "interval"
+  interval_seconds: 2.0             # For "interval" strategy
+  max_per_scene: 7                  # Max keyframes per scene
+
+# ── Vision (Gemini API) ─────────────────────────────────────────────────────
+vision:
+  provider: "gemini"                # "gemini" | "nvidia"
+  gemini_model: "gemini-2.5-flash"
+  gemini_fallback_model: "gemini-2.0-flash"
+  analysis_mode: "keyframes"        # "keyframes" | "video_upload"
+  domain_hint: ""                   # e.g., "workshop", "cooking", "repair"
+
+# ── Narration ────────────────────────────────────────────────────────────────
+narration:
+  style: "viral_fb"                 # "viral_fb" | "documentary" | "technical" | "calm_educational"
+  languages: ["id", "en"]           # Languages to generate
+  max_words_per_scene: 50           # Approximate max words per scene narration
+  hedging_threshold: 0.5            # Below this confidence, use hedging language
+
+# ── TTS ──────────────────────────────────────────────────────────────────────
+tts:
+  engine: "piper"                   # "piper" | "voxcpm2"
+  voices:
+    id: "id_ID-news_tts-medium"
+    en: "en_US-lessac-medium"
+  speaking_rate: 1.0                # Speed multiplier
+
+# ── Render ───────────────────────────────────────────────────────────────────
+render:
+  ratios: ["16:9"]                  # Output ratios: "16:9", "9:16", or both
+  audio_strategy: "duck"            # "duck" | "replace" | "mute_original"
+  original_volume: 0.15             # Volume level for original audio when ducking
+  burn_subtitles: false             # Burn subtitles into video
+  video_quality_crf: 20

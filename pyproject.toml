@@ -1,0 +1,31 @@
+[project]
+name = "dubbingstory"
+version = "0.1.0"
+description = "Automated video narration & dubbing — turn silent/foreign videos into dubbed stories with AI"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "yt-dlp[default]",
+    "opencv-python",
+    "scenedetect[opencv]",
+    "google-genai",
+    "piper-tts",
+    "pysubs2",
+    "Pillow",
+    "pyyaml",
+    "python-dotenv",
+    "requests",
+    "fastapi",
+    "uvicorn",
+    "python-multipart",
+    "jinja2",
+]
+
+[project.optional-dependencies]
+advanced = [
+    "torch",
+    "torchaudio",
+]
+
+[project.scripts]
+dubbingstory = "dubbingstory.cli:main"

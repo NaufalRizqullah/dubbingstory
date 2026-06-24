@@ -1,0 +1,300 @@
+"""
+dubbingstory.vision.scene_understanding — Scene understanding orchestrator
+
+Coordinates per-scene visual analysis and builds the final storyboard.
+"""
+
+import json
+import os
+
+from dubbingstory.vision.gemini_analyzer import GeminiVideoAnalyzer
+from dubbingstory.vision.prompts import build_scene_prompt, build_temporal_prompt
+
+
+def _get_subtitle_for_scene(
+    subtitle_entries: list[dict] | None,
+    start_time: float,
+    end_time: float,
+) -> str:
+    """Extract subtitle text that falls within a scene's time range."""
+    if not subtitle_entries:
+        return ""
+
+    lines = []
+    for entry in subtitle_entries:
+        # Check if subtitle overlaps with scene time range
+        sub_start = entry.get("start_seconds", 0)
+        sub_end = entry.get("end_seconds", 0)
+
+        if sub_start < end_time and sub_end > start_time:
+            lines.append(entry["text"])
+
+    return "\n".join(lines) if lines else ""
+
+
+def run_analysis(
+    segment_data: dict,
+    project_dir: str,
+    cfg,
+    subtitle_context: dict | None = None,
+    domain_hint: str = "",
+) -> dict:
+    """
+    Run visual understanding on all scenes.
+
+    Pipeline:
+    1. Analyze each scene independently (keyframes or video upload)
+    2. Build temporal flow understanding across all scenes
+    3. Generate storyboard with narration cues
+
+    Parameters
+    ----------
+    segment_data : dict
+        Segment manifest from scene detection step.
+    project_dir : str
+        Project output directory.
+    cfg : SimpleNamespace
+        Config object.
+    subtitle_context : dict | None
+        Parsed subtitle data from ingest step.
+    domain_hint : str
+        Domain hint (e.g., "workshop", "repair").
+
+    Returns
+    -------
+    dict
+        Complete storyboard with scene analyses and narrative context.
+    """
+    api_key = getattr(cfg, "api_key_gemini", "")
+    if not api_key:
+        raise ValueError(
+            "❌ GOOGLE_API_KEY not found.\n"
+            "   Set via .env file or environment variable."
+        )
+
+    model = getattr(cfg, "vision_gemini_model", "gemini-2.5-flash")
+    fallback = getattr(cfg, "vision_gemini_fallback_model", "gemini-2.0-flash")
+    analysis_mode = getattr(cfg, "vision_analysis_mode", "keyframes")
+
+    analyzer = GeminiVideoAnalyzer(
+        api_key=api_key,
+        model=model,
+        fallback_model=fallback,
+    )
+
+    scenes = segment_data.get("scenes", [])
+    keyframes_data = segment_data.get("keyframes", {})
+    video_path = segment_data.get("video_path", "")
+
+    # Get subtitle entries for context
+    subtitle_entries = None
+    full_subtitle_context = ""
+    if subtitle_context:
+        subtitle_entries = subtitle_context.get("entries")
+        full_subtitle_context = subtitle_context.get("context_string", "")
+
+    # Get video metadata for context hints
+    video_meta = {}
+    meta_path = os.path.join(project_dir, "video_metadata.json")
+    if os.path.exists(meta_path):
+        with open(meta_path, "r", encoding="utf-8") as f:
+            video_meta = json.load(f)
+
+    # Build context hint from video title/description
+    context_hint = domain_hint
+    if video_meta.get("title"):
+        context_hint += f"\nVideo title: {video_meta['title']}"
+    if video_meta.get("description"):
+        desc = video_meta["description"][:500]
+        context_hint += f"\nVideo description: {desc}"
+
+    print(f"\n   👁️ Analyzing {len(scenes)} scenes (mode: {analysis_mode})...")
+    if domain_hint:
+        print(f"   🏷️ Domain hint: {domain_hint}")
+    if subtitle_entries:
+        print(f"   📝 Using subtitle context ({len(subtitle_entries)} lines)")
+
+    # ── Step 1: Per-scene analysis ──────────────────────────────────────
+    scene_analyses = []
+    cache_dir = os.path.join(project_dir, "vision_cache")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    for scene in scenes:
+        scene_id = scene["scene_id"]
+        cache_path = os.path.join(cache_dir, f"{scene_id}_analysis.json")
+
+        # Check cache
+        if os.path.exists(cache_path):
+            print(f"   ⏩ {scene_id}: cached, skip.")
+            with open(cache_path, "r", encoding="utf-8") as f:
+                analysis = json.load(f)
+            scene_analyses.append(analysis)
+            continue
+
+        time_range = f"{scene['start_time']:.1f}s - {scene['end_time']:.1f}s"
+
+        # Get subtitle text for this scene
+        scene_subtitle = _get_subtitle_for_scene(
+            subtitle_entries,
+            scene["start_time"],
+            scene["end_time"],
+        )
+
+        # Build prompt
+        kf_paths = keyframes_data.get(scene_id, [])
+        prompt = build_scene_prompt(
+            scene_id=scene_id,
+            time_range=time_range,
+            n_frames=len(kf_paths),
+            domain=domain_hint or "general",
+            context_hint=context_hint,
+            subtitle_text=scene_subtitle,
+        )
+
+        # Analyze
+        try:
+            if analysis_mode == "video_upload" and scene.get("file_path"):
+                analysis = analyzer.analyze_scene_from_video(
+                    video_path=scene["file_path"],
+                    prompt=prompt,
+                )
+            else:
+                analysis = analyzer.analyze_scene_from_frames(
+                    keyframe_paths=kf_paths,
+                    prompt=prompt,
+                )
+
+            # Add scene timing info
+            analysis["start_time"] = scene["start_time"]
+            analysis["end_time"] = scene["end_time"]
+            analysis["duration"] = scene["duration"]
+
+            # Cache result
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(analysis, f, ensure_ascii=False, indent=2)
+
+            scene_analyses.append(analysis)
+            conf = analysis.get("confidence", 0)
+            print(f"   ✅ {scene_id}: analyzed (confidence: {conf:.2f})")
+
+        except Exception as e:
+            print(f"   ❌ {scene_id}: analysis failed — {e}")
+            # Create a minimal fallback analysis
+            fallback_analysis = {
+                "scene_id": scene_id,
+                "time_range": time_range,
+                "start_time": scene["start_time"],
+                "end_time": scene["end_time"],
+                "duration": scene["duration"],
+                "visible_objects": [],
+                "people": "Unable to analyze",
+                "action": "Unable to analyze",
+                "changes": "Unable to analyze",
+                "environment": "Unable to analyze",
+                "likely_context": "Unable to analyze",
+                "text_visible": [],
+                "confidence": 0.0,
+                "error": str(e),
+            }
+            scene_analyses.append(fallback_analysis)
+
+    # ── Step 2: Temporal flow analysis ──────────────────────────────────
+    print(f"\n   🔄 Building temporal flow understanding...")
+
+    temporal_prompt = build_temporal_prompt(
+        scene_analyses=scene_analyses,
+        domain=domain_hint or "general",
+        subtitle_context=full_subtitle_context,
+    )
+
+    try:
+        temporal_data = analyzer.analyze_temporal_flow(
+            scene_analyses=scene_analyses,
+            prompt=temporal_prompt,
+        )
+    except Exception as e:
+        print(f"   ⚠️ Temporal analysis failed: {e}")
+        temporal_data = {
+            "video_summary": "Unable to generate summary.",
+            "narrative_arc": "unknown",
+            "domain": domain_hint or "unknown",
+            "scenes_enriched": [],
+        }
+
+    # ── Step 3: Build storyboard ────────────────────────────────────────
+    storyboard = _build_storyboard(
+        scene_analyses=scene_analyses,
+        temporal_data=temporal_data,
+        video_meta=video_meta,
+    )
+
+    print(f"\n   📋 Storyboard built:")
+    print(f"      Summary: {storyboard.get('video_summary', '')[:80]}...")
+    print(f"      Arc: {storyboard.get('narrative_arc', 'unknown')}")
+    print(f"      Scenes: {len(storyboard.get('scenes', []))}")
+
+    return storyboard
+
+
+def _build_storyboard(
+    scene_analyses: list[dict],
+    temporal_data: dict,
+    video_meta: dict,
+) -> dict:
+    """
+    Build the final storyboard JSON from analyses.
+
+    This is the single source of truth that can be edited manually
+    before generating narration.
+    """
+    enriched_scenes = temporal_data.get("scenes_enriched", [])
+
+    # Merge per-scene analysis with temporal enrichment
+    scenes = []
+    for analysis in scene_analyses:
+        scene_id = analysis.get("scene_id", "")
+
+        # Find matching temporal enrichment
+        enrichment = {}
+        for e in enriched_scenes:
+            if e.get("scene_id") == scene_id:
+                enrichment = e
+                break
+
+        scene_entry = {
+            "scene_id": scene_id,
+            "start_time": analysis.get("start_time", 0),
+            "end_time": analysis.get("end_time", 0),
+            "duration": analysis.get("duration", 0),
+            "analysis": {
+                "visible_objects": analysis.get("visible_objects", []),
+                "people": analysis.get("people", ""),
+                "action": analysis.get("action", ""),
+                "changes": analysis.get("changes", ""),
+                "environment": analysis.get("environment", ""),
+                "likely_context": analysis.get("likely_context", ""),
+                "text_visible": analysis.get("text_visible", []),
+                "confidence": analysis.get("confidence", 0),
+            },
+            "narrative": {
+                "role": enrichment.get("narrative_role", "process"),
+                "importance": enrichment.get("narration_importance", 0.5),
+                "cue": enrichment.get("narration_cue", ""),
+                "connects_to_next": enrichment.get("connects_to_next", ""),
+            },
+        }
+
+        scenes.append(scene_entry)
+
+    total_duration = sum(s["duration"] for s in scenes)
+
+    return {
+        "video_title": video_meta.get("title", ""),
+        "video_description": video_meta.get("description", "")[:500],
+        "video_summary": temporal_data.get("video_summary", ""),
+        "narrative_arc": temporal_data.get("narrative_arc", "unknown"),
+        "domain": temporal_data.get("domain", "general"),
+        "total_scenes": len(scenes),
+        "total_duration": round(total_duration, 2),
+        "scenes": scenes,
+    }

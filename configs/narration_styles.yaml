@@ -1,0 +1,81 @@
+# ==============================================================================
+# DubbingStory — Narration Style Definitions
+# ==============================================================================
+
+styles:
+  viral_fb:
+    name: "Viral Facebook/TikTok"
+    tone: "excited, engaging, casual, amazed"
+    language_style:
+      id: "Bahasa Indonesia gaul, casual, penuh ekspresi"
+      en: "Casual English, short punchy sentences, excited tone"
+    rules:
+      - "Gunakan kalimat pendek, langsung, emosional"
+      - "Sering pakai exclamation mark"
+      - "Ajak penonton: 'Lihat ini!', 'Check this out!'"
+      - "Bikin penasaran: 'Ternyata...', 'Wait for it...'"
+      - "Relate ke perasaan penonton"
+    examples:
+      id:
+        - "Lihat ini! Komponen yang awalnya hancur lebur ternyata masih bisa diselamatkan..."
+        - "Gila sih ini prosesnya! Dari besi karatan jadi kayak baru lagi!"
+        - "Kalian pasti gak nyangka hasilnya..."
+      en:
+        - "Check this out! This completely destroyed part is about to get a second life..."
+        - "The transformation here is absolutely insane!"
+        - "You won't believe what happens next..."
+
+  documentary:
+    name: "Documentary"
+    tone: "formal, informative, neutral, authoritative"
+    language_style:
+      id: "Bahasa Indonesia formal, deskriptif, kalimat pasif"
+      en: "Formal English, descriptive, third-person narration"
+    rules:
+      - "Gunakan kalimat pasif dan deskriptif"
+      - "Netral, tidak emosional berlebihan"
+      - "Fokus pada fakta dan proses"
+      - "Struktur: konteks → proses → hasil"
+    examples:
+      id:
+        - "Pada bagian ini, mekanik mulai memeriksa kerusakan pada komponen coupling fan hub..."
+        - "Proses perbaikan dimulai dengan pembersihan permukaan yang terkorosi..."
+      en:
+        - "In this segment, the mechanic begins examining the damage to the fan hub coupling..."
+        - "The repair process starts with cleaning the corroded surface..."
+
+  technical:
+    name: "Technical Expert"
+    tone: "precise, expert, analytical"
+    language_style:
+      id: "Bahasa Indonesia teknis, istilah spesifik"
+      en: "Technical English, specific terminology"
+    rules:
+      - "Gunakan istilah teknis yang tepat"
+      - "Spesifik soal proses dan material"
+      - "Analitis, bukan emosional"
+    examples:
+      id:
+        - "Kerusakan terjadi pada area hub coupling, kemungkinan akibat beban puntir berlebih..."
+        - "Teknisi menggunakan mesin bubut untuk mempresisi dimensi bearing seat..."
+      en:
+        - "The failure occurred at the hub coupling interface, likely due to excessive torsional load..."
+        - "The technician uses a lathe to precision-machine the bearing seat dimensions..."
+
+  calm_educational:
+    name: "Calm Educational"
+    tone: "gentle, patient, step-by-step"
+    language_style:
+      id: "Bahasa Indonesia lembut, sabar, bertahap"
+      en: "Calm English, patient explanation, educational tone"
+    rules:
+      - "Nada tenang dan sabar"
+      - "Jelaskan step-by-step"
+      - "Cocok untuk tutorial dan pembelajaran"
+    examples:
+      id:
+        - "Proses dimulai dengan mengamati bagian yang patah secara seksama..."
+        - "Perhatikan bagaimana mekanik dengan hati-hati membersihkan setiap bagian..."
+      en:
+        - "The process begins with a careful observation of the fractured area..."
+        - "Notice how the mechanic carefully cleans each component..."
