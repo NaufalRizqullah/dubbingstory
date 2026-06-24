@@ -37,7 +37,12 @@ cp .env.sample .env
 
 ### 3. Jalankan
 
+Anda dapat menggunakan perintah CLI `dubbingstory` atau menjalankan file `main.py` secara langsung:
+
 ```bash
+# Menggunakan file main.py (jika perintah CLI belum bisa digunakan)
+python main.py run --input video.mp4
+
 # Pipa lengkap — video lokal
 dubbingstory run --input video.mp4
 

@@ -37,7 +37,12 @@ cp .env.sample .env
 
 ### 3. Run
 
+You can use the `dubbingstory` CLI command or run the `main.py` file directly:
+
 ```bash
+# Using main.py (alternative if CLI is not recognized in PATH)
+python main.py run --input video.mp4
+
 # Full pipeline — local video
 dubbingstory run --input video.mp4
 

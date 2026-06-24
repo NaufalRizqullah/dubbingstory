@@ -1,6 +1,6 @@
 [project]
 name = "dubbingstory"
-version = "0.1.0"
+version = "0.1.1"
 description = "Automated video narration & dubbing — turn silent/foreign videos into dubbed stories with AI"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+All notable changes to the **dubbingstory** project will be documented in this file.
+
+**The Standard Structure (SemVer)**
+- **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
+- **Minor (x.Y.z)**: Incremented for new functionality introduced in a backward-compatible manner.
+- **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
+
+
+## [0.1.1] - 2026-06-24
+
+### Added
+- Created `main.py` at the project root as an alternative, easier entry point for execution.
+
+### Changed
+- Updated `README.md` and `README_EN.md` execution instructions to use `python main.py` instead of `python -m dubbingstory.cli`.
+
 ## [0.1.0] - 2026-06-20
 
 ### Added
