@@ -1,0 +1,18 @@
+yt-dlp[default]
+opencv-python
+scenedetect[opencv]
+google-genai
+piper-tts
+pysubs2
+Pillow
+pyyaml
+python-dotenv
+requests
+fastapi
+uvicorn
+python-multipart
+jinja2
+
+# Optional / advanced
+torch
+torchaudio
