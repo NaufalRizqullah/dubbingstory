@@ -74,17 +74,50 @@ def extract_frames(video_path: str, start_sec: int = 1, end_sec: int = 5) -> lis
     return frame_paths
 
 
-def download_video(url: str) -> str:
-    """Download video from URL using yt-dlp. Returns path to downloaded file."""
+# Quality label → pixel height mapping
+QUALITY_MAP = {
+    "720": 720,
+    "1080": 1080,
+    "2k": 1440,
+    "4k": 2160,
+}
+
+
+def download_video(url: str, quality: str = "1080") -> str:
+    """Download video from URL using yt-dlp.
+
+    Parameters
+    ----------
+    url : str
+        Video URL.
+    quality : str
+        Quality label: "720", "1080" (default), "2k", "4k".
+
+    Returns path to downloaded file.
+    """
     from yt_dlp import YoutubeDL
+
+    height = QUALITY_MAP.get(quality, 1080)
 
     output_dir = os.path.join(os.path.dirname(__file__) or ".", "test_output")
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, "test_video.mp4")
 
+    # Skip AV1 codec (lacks HW accel on many platforms)
+    codec_filter = "[vcodec!^=av01]"
+
+    fmt = (
+        f"bestvideo[height<=?{height}][ext=mp4]+bestaudio[ext=m4a]/"
+        f"bestvideo[height<=?{height}]{codec_filter}+bestaudio/"
+        f"best[height<=?{height}][ext=mp4]/"
+        f"best[height<=?{height}]{codec_filter}/"
+        f"best"
+    )
+
     print(f"\n   📥 Downloading video from URL...")
+    print(f"      🎯 Quality: up to {quality}p ({height}px)")
     ydl_opts = {
-        "format": "bestvideo[height<=?720][ext=mp4]+bestaudio[ext=m4a]/best[height<=?720][ext=mp4]/best",
+        "format": fmt,
         "outtmpl": output_path,
         "quiet": True,
         "merge_output_format": "mp4",
@@ -329,6 +362,11 @@ def main():
     parser.add_argument("--url", "-u", type=str, help="YouTube/video URL to test with")
     parser.add_argument("--input", "-i", type=str, help="Path to local video file")
     parser.add_argument(
+        "--quality", "-q", type=str, default="1080",
+        choices=["720", "1080", "2k", "4k"],
+        help="Download quality (default: 1080). Options: 720, 1080, 2k, 4k"
+    )
+    parser.add_argument(
         "--skip-upload", action="store_true",
         help="Skip the video upload test (Test 2)"
     )
@@ -354,7 +392,7 @@ def main():
 
     # Get video
     if args.url:
-        video_path = download_video(args.url)
+        video_path = download_video(args.url, quality=args.quality)
     else:
         video_path = args.input
         if not os.path.exists(video_path):

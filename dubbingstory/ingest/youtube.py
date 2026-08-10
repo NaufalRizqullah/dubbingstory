@@ -9,34 +9,48 @@ import os
 from yt_dlp import YoutubeDL
 
 
-def _build_format_selector(download_height: str | int = "max") -> str:
+# ── Quality label → pixel height mapping ─────────────────────────────────────
+QUALITY_MAP = {
+    "720": 720,
+    "1080": 1080,
+    "2k": 1440,
+    "4k": 2160,
+    "max": "max",
+}
+
+
+def _resolve_height(download_height: str | int) -> str | int:
+    """Resolve a human-friendly quality label to a pixel height value."""
+    if isinstance(download_height, int):
+        return download_height
+    label = str(download_height).lower().strip()
+    return QUALITY_MAP.get(label, label)
+
+
+def _build_format_selector(download_height: str | int = "1080") -> str:
     """
     Build yt-dlp format selector string.
 
     Skips AV1 codec (lacks HW acceleration on many platforms).
+    Accepts labels: "720", "1080", "2k", "4k", "max".
     """
     codec_filter = "[vcodec!^=av01]"
 
-    if download_height == "max":
+    h_val = _resolve_height(download_height)
+
+    if h_val == "max":
         return f"bestvideo{codec_filter}+bestaudio/best{codec_filter}/best"
 
     try:
-        h_val = int(download_height)
+        h_val = int(h_val)
     except (ValueError, TypeError):
-        h_val = 0
-
-    if 0 < h_val <= 1080:
-        return (
-            f"bestvideo[height<=?{h_val}][ext=mp4]+bestaudio[ext=m4a]/"
-            f"bestvideo[height<=?{h_val}]{codec_filter}+bestaudio/"
-            f"best[height<=?{h_val}][ext=mp4]/"
-            f"best[height<=?{h_val}]{codec_filter}/"
-            f"best"
-        )
+        h_val = 1080  # fallback to 1080p if invalid
 
     return (
-        f"bestvideo[height<=?{download_height}]{codec_filter}+bestaudio/"
-        f"best[height<=?{download_height}]{codec_filter}/"
+        f"bestvideo[height<=?{h_val}][ext=mp4]+bestaudio[ext=m4a]/"
+        f"bestvideo[height<=?{h_val}]{codec_filter}+bestaudio/"
+        f"best[height<=?{h_val}][ext=mp4]/"
+        f"best[height<=?{h_val}]{codec_filter}/"
         f"best"
     )
 
@@ -74,7 +88,7 @@ def extract_video_info(url: str) -> dict:
 def download_video(
     url: str,
     output_dir: str,
-    download_height: str | int = "max",
+    download_height: str | int = "1080",
 ) -> str:
     """
     Download a video from YouTube (or other supported sites) using yt-dlp.
@@ -86,7 +100,7 @@ def download_video(
     output_dir : str
         Directory to save the downloaded video.
     download_height : str | int
-        Target resolution height ("max", "1080", "720", etc.)
+        Target resolution: "720", "1080" (default), "2k", "4k", "max".
 
     Returns
     -------
@@ -95,11 +109,12 @@ def download_video(
     """
     output_path = os.path.join(output_dir, "source.mp4")
 
+    resolved = _resolve_height(download_height)
     print(f"   📥 Downloading from URL...")
-    if download_height == "max":
+    if resolved == "max":
         print("      🎯 Quality: highest available")
     else:
-        print(f"      🎯 Quality: up to {download_height}p")
+        print(f"      🎯 Quality: up to {download_height} ({resolved}px)")
 
     # Extract metadata first
     try:

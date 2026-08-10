@@ -78,10 +78,11 @@ def cmd_ingest(args, cfg):
             sys.exit(1)
 
         print(f"   Source: URL → {args.url}")
+        download_q = getattr(args, "quality", None) or getattr(cfg, "ingest_download_height", "1080")
         video_path = youtube.download_video(
             url=args.url,
             output_dir=project_dir,
-            download_height=getattr(cfg, "ingest_download_height", "max"),
+            download_height=download_q,
         )
     else:
         print("❌ Harus menyediakan --input atau --url")
@@ -467,6 +468,11 @@ def main():
     p_run.add_argument("--engine", type=str, default=None, choices=["edge", "piper", "voxcpm2"])
     p_run.add_argument("--ratio", nargs="+", default=None, help="Output ratios (16:9, 9:16)")
     p_run.add_argument(
+        "--quality", "-q", type=str, default=None,
+        choices=["720", "1080", "2k", "4k", "max"],
+        help="Download quality (default: 1080). Options: 720, 1080, 2k, 4k, max"
+    )
+    p_run.add_argument(
         "--use-asr",
         action="store_true",
         help="If no subtitles are found, use Whisper ASR to generate a transcript.",
@@ -496,6 +502,11 @@ def main():
     p_ingest.add_argument("--url", "-u", type=str, help="YouTube/video URL")
     p_ingest.add_argument("--i-have-rights", action="store_true")
     p_ingest.add_argument("--project", "-p", type=str)
+    p_ingest.add_argument(
+        "--quality", "-q", type=str, default=None,
+        choices=["720", "1080", "2k", "4k", "max"],
+        help="Download quality (default: 1080). Options: 720, 1080, 2k, 4k, max"
+    )
     p_ingest.add_argument(
         "--use-asr",
         action="store_true",

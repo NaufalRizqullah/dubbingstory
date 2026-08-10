@@ -9,7 +9,7 @@ project:
 
 # ── Ingest ───────────────────────────────────────────────────────────────────
 ingest:
-  download_height: "max"            # "max", "1080", "720", etc.
+  download_height: "1080"            # "720", "1080" (default), "2k", "4k", "max"
   read_subtitles: true              # Auto-read SRT/ASS/VTT if found alongside video
   use_asr_fallback: true            # If no subtitles, transcribe audio with Whisper ASR
 
