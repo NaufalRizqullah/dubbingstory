@@ -11,6 +11,15 @@ project:
 ingest:
   download_height: "max"            # "max", "1080", "720", etc.
   read_subtitles: true              # Auto-read SRT/ASS/VTT if found alongside video
+  use_asr_fallback: true            # If no subtitles, transcribe audio with Whisper ASR
+
+# ── ASR (Automatic Speech Recognition) ────────────────────────────────────────
+whisper:
+  model: "base"                     # tiny | base | small | medium | large | large-v3
+  language: null                    # Force language code (e.g., "id", "en") or null for auto
+  device: "cpu"                     # "cpu" | "cuda"
+  compute_type: "int8"              # "float32", "float16", "int8_float16", "int8"
+
 
 # ── Scene Detection ──────────────────────────────────────────────────────────
 segment:

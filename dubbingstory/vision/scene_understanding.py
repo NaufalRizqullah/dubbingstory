@@ -222,10 +222,15 @@ def run_analysis(
         }
 
     # ── Step 3: Build storyboard ────────────────────────────────────────
+    transcript_source = "none"
+    if subtitle_context:
+        transcript_source = subtitle_context.get("source", "manual") or "manual"
+
     storyboard = _build_storyboard(
         scene_analyses=scene_analyses,
         temporal_data=temporal_data,
         video_meta=video_meta,
+        transcript_source=transcript_source,
     )
 
     print(f"\n   📋 Storyboard built:")
@@ -240,6 +245,7 @@ def _build_storyboard(
     scene_analyses: list[dict],
     temporal_data: dict,
     video_meta: dict,
+    transcript_source: str = "none",
 ) -> dict:
     """
     Build the final storyboard JSON from analyses.
@@ -275,6 +281,8 @@ def _build_storyboard(
                 "likely_context": analysis.get("likely_context", ""),
                 "text_visible": analysis.get("text_visible", []),
                 "confidence": analysis.get("confidence", 0),
+                # Add word-level data if available (from ASR)
+                "words": analysis.get("words", []),
             },
             "narrative": {
                 "role": enrichment.get("narrative_role", "process"),
@@ -294,6 +302,7 @@ def _build_storyboard(
         "video_summary": temporal_data.get("video_summary", ""),
         "narrative_arc": temporal_data.get("narrative_arc", "unknown"),
         "domain": temporal_data.get("domain", "general"),
+        "video_transcript_source": transcript_source,
         "total_scenes": len(scenes),
         "total_duration": round(total_duration, 2),
         "scenes": scenes,

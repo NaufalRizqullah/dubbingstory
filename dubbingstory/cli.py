@@ -94,11 +94,38 @@ def cmd_ingest(args, cfg):
             video_path, project_dir
         )
 
+    # ASR fallback: if no subtitles were found, try to generate a transcript
+    # from the video's audio track. This ensures downstream stages always have
+    # audio context to work with.
+    asr_used = False
+    if (
+        subtitle_data is None
+        and getattr(cfg, "ingest_use_asr_fallback", True)
+        and getattr(args, "use_asr", False)
+    ):
+        from dubbingstory.asr.whisper_asr import transcribe_video
+
+        print("   🎙️  No subtitles found — attempting ASR fallback...")
+        asr_result = transcribe_video(
+            video_path=video_path,
+            project_dir=project_dir,
+            model_name=getattr(cfg, "asr_model_name", "base"),
+            language=getattr(cfg, "asr_language", None),
+            device=getattr(cfg, "asr_device", "cpu"),
+        )
+        if asr_result:
+            subtitle_data = asr_result
+            asr_used = True
+            print(f"   ✅ ASR fallback produced {asr_result['total_lines']} entries")
+        else:
+            print("   ⚠️  ASR fallback failed or unavailable; continuing without transcript.")
+
     # Save ingest manifest
     manifest = {
         "project_name": project_name,
         "video_path": video_path,
         "subtitle_data": subtitle_data,
+        "asr_used": asr_used,
         "status": "ingested",
     }
     manifest_path = os.path.join(project_dir, "ingest_manifest.json")
@@ -107,7 +134,11 @@ def cmd_ingest(args, cfg):
 
     print(f"\n✅ Ingest selesai!")
     print(f"   Video: {video_path}")
-    print(f"   Subtitles: {'Found' if subtitle_data else 'None'}")
+    if subtitle_data:
+        src = subtitle_data.get("source", "manual")
+        print(f"   Subtitles: Found ({src}, {subtitle_data.get('total_lines', 0)} lines)")
+    else:
+        print(f"   Subtitles: None")
     print(f"   Manifest: {manifest_path}")
 
     return manifest
@@ -404,6 +435,29 @@ def main():
     p_run.add_argument("--lang", nargs="+", default=None, help="Languages (e.g., id en)")
     p_run.add_argument("--engine", type=str, default=None, choices=["piper", "voxcpm2"])
     p_run.add_argument("--ratio", nargs="+", default=None, help="Output ratios (16:9, 9:16)")
+    p_run.add_argument(
+        "--use-asr",
+        action="store_true",
+        help="If no subtitles are found, use Whisper ASR to generate a transcript.",
+    )
+    p_run.add_argument(
+        "--whisper-model",
+        type=str,
+        default=None,
+        help="Faster-Whisper model size (tiny, base, small, medium, large, large-v3).",
+    )
+    p_run.add_argument(
+        "--whisper-device",
+        type=str,
+        default=None,
+        help="Device for Faster-Whisper inference (cpu/cuda).",
+    )
+    p_run.add_argument(
+        "--whisper-compute-type",
+        type=str,
+        default=None,
+        help="Compute type for Faster-Whisper (float16, int8, etc.).",
+    )
 
     # ── ingest ────────────────────────────────────────────────────────────
     p_ingest = subparsers.add_parser("ingest", help="Download/validate video")
@@ -411,6 +465,32 @@ def main():
     p_ingest.add_argument("--url", "-u", type=str, help="YouTube/video URL")
     p_ingest.add_argument("--i-have-rights", action="store_true")
     p_ingest.add_argument("--project", "-p", type=str)
+    p_ingest.add_argument(
+        "--use-asr",
+        action="store_true",
+        help="If no subtitles are found, transcribe audio with Whisper ASR "
+             "to generate a transcript fallback.",
+    )
+    p_ingest.add_argument(
+        "--whisper-model",
+        type=str,
+        default=None,
+        help="Faster-Whisper model size (tiny, base, small, medium, large, large-v3). "
+             "Overrides config.whisper.model.",
+    )
+    p_ingest.add_argument(
+        "--whisper-device",
+        type=str,
+        default=None,
+        help="Device for Faster-Whisper inference (cpu/cuda). Overrides config.whisper.device.",
+    )
+    p_ingest.add_argument(
+        "--whisper-compute-type",
+        type=str,
+        default=None,
+        help="Compute type for Faster-Whisper (float16, int8, etc.). "
+             "Overrides config.whisper.compute_type.",
+    )
 
     # ── segment ───────────────────────────────────────────────────────────
     p_segment = subparsers.add_parser("segment", help="Detect scenes + keyframes")
@@ -451,6 +531,8 @@ def main():
     # Apply CLI overrides
     if hasattr(args, "ratio") and args.ratio:
         cfg.render_ratios = args.ratio
+    if hasattr(args, "asr_model") and args.asr_model:
+        cfg.asr_model_name = args.asr_model
 
     # Dispatch
     commands = {

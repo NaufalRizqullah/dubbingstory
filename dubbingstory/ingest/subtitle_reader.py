@@ -186,12 +186,21 @@ def find_and_read_subtitles(
 
     context_string = subtitles_to_context_string(entries)
 
+    # Determine the origin label for the transcript. The YouTube ingest path
+    # also uses find_and_read_subtitles, so the filename is a useful proxy.
+    primary_name = os.path.basename(primary).lower()
+    if any(tag in primary_name for tag in ("youtube", "yt-auto", "auto", "asr")):
+        source_label = "youtube_auto"
+    else:
+        source_label = "manual"
+
     result = {
         "source_files": subtitle_files,
         "primary_file": primary,
         "entries": entries,
         "context_string": context_string,
         "total_lines": len(entries),
+        "source": source_label,
     }
 
     # Save parsed subtitles
@@ -204,9 +213,10 @@ def find_and_read_subtitles(
             "primary_file": primary,
             "total_lines": len(entries),
             "entries": entries,
+            "source": source_label,
         }
         json.dump(save_data, f, ensure_ascii=False, indent=2)
 
-    print(f"   ✅ Parsed {len(entries)} subtitle lines from {os.path.basename(primary)}")
+    print(f"   ✅ Parsed {len(entries)} subtitle lines from {os.path.basename(primary)} (source={source_label})")
 
     return result

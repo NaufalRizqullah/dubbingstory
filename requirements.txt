@@ -16,3 +16,8 @@ jinja2
 # Optional / advanced
 torch
 torchaudio
+
+# ASR (transcribe audio when no subtitles exist).
+faster-whisper
+tqdm
+
