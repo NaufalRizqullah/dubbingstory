@@ -30,21 +30,24 @@ def extract_frames(video_path: str, start_sec: int = 1, end_sec: int = 5) -> lis
     Extract 1 frame per second from second 1 to 5 (inclusive).
     Returns list of saved frame paths.
     """
-    import cv2
+    import subprocess
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        print(f"❌ Cannot open video: {video_path}")
-        return []
-
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    duration = total_frames / fps if fps > 0 else 0
-
-    print(f"   📹 Video info:")
-    print(f"      FPS: {fps:.1f}")
-    print(f"      Total frames: {total_frames}")
-    print(f"      Duration: {duration:.1f}s")
+    print(f"   📹 Extracting frames with FFmpeg...")
+    
+    # Get video duration via ffprobe
+    duration_cmd = [
+        "ffprobe", "-v", "error", "-show_entries",
+        "format=duration", "-of", "default=noprint_wrappers=1:nokey=1",
+        video_path
+    ]
+    
+    try:
+        duration_str = subprocess.check_output(duration_cmd).decode("utf-8").strip()
+        duration = float(duration_str)
+        print(f"      Duration: {duration:.1f}s")
+    except Exception as e:
+        print(f"   ⚠️ Could not get duration: {e}")
+        duration = 999  # assume long enough
 
     if duration < end_sec:
         print(f"   ⚠️ Video shorter than {end_sec}s — adjusting range")
@@ -58,19 +61,23 @@ def extract_frames(video_path: str, start_sec: int = 1, end_sec: int = 5) -> lis
 
     frame_paths = []
     for sec in range(start_sec, end_sec + 1):
-        target_frame = int(sec * fps)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
-        ret, frame = cap.read()
-        if not ret:
-            print(f"   ⚠️ Could not read frame at second {sec}")
-            continue
-
         frame_path = os.path.join(frames_dir, f"frame_sec{sec:02d}.jpg")
-        cv2.imwrite(frame_path, frame)
-        frame_paths.append(frame_path)
-        print(f"   📸 Extracted frame at {sec}s → {os.path.basename(frame_path)}")
+        
+        # Use FFmpeg to seek and extract a single frame accurately
+        cmd = [
+            "ffmpeg", "-y", "-ss", str(sec), "-i", video_path,
+            "-frames:v", "1", "-q:v", "2", "-v", "error", frame_path
+        ]
+        try:
+            subprocess.run(cmd, check=True)
+            if os.path.exists(frame_path):
+                frame_paths.append(frame_path)
+                print(f"   📸 Extracted frame at {sec}s → {os.path.basename(frame_path)}")
+            else:
+                print(f"   ⚠️ Output file not found for second {sec}")
+        except subprocess.CalledProcessError as e:
+            print(f"   ⚠️ FFmpeg failed to extract frame at second {sec}: {e}")
 
-    cap.release()
     return frame_paths
 
 
