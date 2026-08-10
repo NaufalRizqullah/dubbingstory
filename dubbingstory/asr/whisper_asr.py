@@ -44,6 +44,7 @@ class WhisperConfig:
     language: str | None = None        # None = auto-detect
     device: str = "cpu"                # "cpu" | "cuda"
     compute_type: str = "int8"         # "float32", "float16", "int8_float16", "int8"
+    task: str = "transcribe"           # "transcribe" | "translate"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -133,11 +134,16 @@ class FasterWhisperASR:
         os.makedirs(work_dir, exist_ok=True)
         audio_path = os.path.join(work_dir, "asr_audio.wav")
 
-        # Use the existing extract_audio helper
-        # Faster-Whisper can take any valid audio/video file, but sometimes
-        # it's safer to extract audio explicitly if there are codec issues.
-        # The `extract_audio` helper extracts at 44.1kHz stereo by default.
-        # For now, we will extract to WAV explicitly to ensure compatibility.
+        # Skip extraction if already done (cache)
+        if os.path.exists(audio_path):
+            print(f"      ⏩ Audio already extracted: {audio_path}")
+            return audio_path
+
+        # Extract audio using the existing ffmpeg helper
+        print(f"      🔊 Extracting audio from video...")
+        extract_audio(video_path, audio_path)
+        print(f"      ✅ Audio extracted: {audio_path}")
+        return audio_path
 
     # ── Transcription ──────────────────────────────────────────────────────
 
@@ -163,10 +169,8 @@ class FasterWhisperASR:
                 "❌ Cannot determine video duration; ASR aborted."
             )
 
-        # Faster-Whisper can process directly from video, but if `extract_audio`
-        # is robust, we can use the pre-extracted WAV for consistency.
-        # For now, let Faster-Whisper handle direct video input to leverage its internal audio processing.
-        audio_source_path = video_path # self.prepare_audio_for_transcription(video_path, work_dir)
+        # Extract audio to WAV for consistent, reliable transcription
+        audio_source_path = self.prepare_audio_for_transcription(video_path, work_dir)
 
         model = self._load_model()
 

@@ -135,3 +135,107 @@ def download_video(
 
     print(f"      ✅ Download selesai: {output_path}")
     return output_path
+
+
+def download_subtitles(
+    url: str,
+    output_dir: str,
+    languages: list[str] | None = None,
+) -> str | None:
+    """
+    Download subtitles (auto-generated or manual) from YouTube via yt-dlp.
+
+    Tries manual subs first, then falls back to auto-generated subs.
+    This is a backup context source when no local subtitle files are found.
+
+    Parameters
+    ----------
+    url : str
+        Video URL.
+    output_dir : str
+        Directory to save downloaded subtitle files.
+    languages : list[str] | None
+        Preferred subtitle languages (e.g., ["id", "en"]).
+        If None, tries Indonesian then English.
+
+    Returns
+    -------
+    str or None
+        Path to the downloaded subtitle file (.srt), or None if unavailable.
+    """
+    if languages is None:
+        languages = ["id", "en"]
+
+    lang_str = ",".join(languages)
+
+    # Try manual subtitles first, then auto-generated
+    for sub_type, opts_extra in [
+        ("manual", {}),
+        ("auto", {"writeautomaticsub": True}),
+    ]:
+        label = "manual" if sub_type == "manual" else "auto-generated"
+        print(f"      🔍 Checking {label} subtitles ({lang_str})...")
+
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "writesubtitles": True,
+            "subtitleslangs": languages,
+            "subtitlesformat": "srt",
+            "outtmpl": os.path.join(output_dir, "yt_subs"),
+            **opts_extra,
+        }
+
+        try:
+            with YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+
+                # Check which subs are available
+                available_subs = info.get("subtitles", {}) if sub_type == "manual" else {}
+                available_auto = info.get("automatic_captions", {}) if sub_type == "auto" else {}
+
+                subs_pool = available_subs if sub_type == "manual" else available_auto
+
+                # Find first matching language
+                for lang in languages:
+                    if lang in subs_pool:
+                        print(f"      ✅ Found {label} subs: {lang}")
+
+                        # Actually download the subtitle
+                        dl_opts = {
+                            "quiet": True,
+                            "no_warnings": True,
+                            "skip_download": True,
+                            "writesubtitles": sub_type == "manual",
+                            "writeautomaticsub": sub_type == "auto",
+                            "subtitleslangs": [lang],
+                            "subtitlesformat": "srt",
+                            "outtmpl": os.path.join(output_dir, "yt_subs"),
+                        }
+                        with YoutubeDL(dl_opts) as ydl2:
+                            ydl2.download([url])
+
+                        # Find the downloaded subtitle file
+                        import glob
+                        srt_patterns = [
+                            os.path.join(output_dir, f"yt_subs.{lang}.srt"),
+                            os.path.join(output_dir, f"yt_subs.{lang}.vtt"),
+                        ]
+                        for pattern in srt_patterns:
+                            if os.path.exists(pattern):
+                                print(f"      📄 Subtitle saved: {os.path.basename(pattern)}")
+                                return pattern
+
+                        # Glob fallback
+                        for match in glob.glob(os.path.join(output_dir, "yt_subs.*")):
+                            if match.endswith((".srt", ".vtt")):
+                                print(f"      📄 Subtitle saved: {os.path.basename(match)}")
+                                return match
+
+        except Exception as e:
+            print(f"      ⚠️ {label} subtitle check failed: {e}")
+            continue
+
+    print(f"      ❌ No subtitles available for this video")
+    return None

@@ -13,6 +13,9 @@ uvicorn
 python-multipart
 jinja2
 
+# TTS (Text-to-Speech)
+edge-tts
+
 # Optional / advanced
 torch
 torchaudio

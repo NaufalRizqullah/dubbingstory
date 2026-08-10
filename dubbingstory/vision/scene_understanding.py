@@ -15,12 +15,20 @@ def _get_subtitle_for_scene(
     subtitle_entries: list[dict] | None,
     start_time: float,
     end_time: float,
-) -> str:
-    """Extract subtitle text that falls within a scene's time range."""
+) -> tuple[str, list[dict]]:
+    """Extract subtitle text and word-level data that falls within a scene's time range.
+
+    Returns
+    -------
+    tuple[str, list[dict]]
+        (subtitle_text, words_in_scene) — the joined text lines and any
+        word-level timing data from ASR.
+    """
     if not subtitle_entries:
-        return ""
+        return "", []
 
     lines = []
+    words_in_scene = []
     for entry in subtitle_entries:
         # Check if subtitle overlaps with scene time range
         sub_start = entry.get("start_seconds", 0)
@@ -29,7 +37,13 @@ def _get_subtitle_for_scene(
         if sub_start < end_time and sub_end > start_time:
             lines.append(entry["text"])
 
-    return "\n".join(lines) if lines else ""
+            # Collect word-level data if available (from ASR)
+            for w in entry.get("words", []):
+                if w["start"] < end_time and w["end"] > start_time:
+                    words_in_scene.append(w)
+
+    text = "\n".join(lines) if lines else ""
+    return text, words_in_scene
 
 
 def run_analysis(
@@ -133,8 +147,8 @@ def run_analysis(
 
         time_range = f"{scene['start_time']:.1f}s - {scene['end_time']:.1f}s"
 
-        # Get subtitle text for this scene
-        scene_subtitle = _get_subtitle_for_scene(
+        # Get subtitle text and word-level data for this scene
+        scene_subtitle, scene_words = _get_subtitle_for_scene(
             subtitle_entries,
             scene["start_time"],
             scene["end_time"],
@@ -168,6 +182,10 @@ def run_analysis(
             analysis["start_time"] = scene["start_time"]
             analysis["end_time"] = scene["end_time"]
             analysis["duration"] = scene["duration"]
+
+            # Add word-level ASR data if available
+            if scene_words:
+                analysis["words"] = scene_words
 
             # Cache result
             with open(cache_path, "w", encoding="utf-8") as f:

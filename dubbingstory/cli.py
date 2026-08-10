@@ -87,17 +87,46 @@ def cmd_ingest(args, cfg):
         print("❌ Harus menyediakan --input atau --url")
         sys.exit(1)
 
-    # Read subtitles if available
+    # ── Context acquisition fallback chain ──
+    # Priority: 1) Local subtitle files → 2) YouTube auto-subs → 3) Whisper ASR
     subtitle_data = None
+    context_source = "none"
+    asr_used = False
+
+    # Step 1: Look for local subtitle files (SRT/ASS/VTT alongside video)
     if getattr(cfg, "ingest_read_subtitles", True):
         subtitle_data = subtitle_reader.find_and_read_subtitles(
             video_path, project_dir
         )
+        if subtitle_data:
+            context_source = subtitle_data.get("source", "manual")
 
-    # ASR fallback: if no subtitles were found, try to generate a transcript
-    # from the video's audio track. This ensures downstream stages always have
-    # audio context to work with.
-    asr_used = False
+    # Step 2: If no local subs and source is YouTube, try downloading subs
+    if subtitle_data is None and args.url:
+        print("   🌐 No local subtitles — trying YouTube subtitle download...")
+        yt_sub_path = youtube.download_subtitles(
+            url=args.url,
+            output_dir=project_dir,
+            languages=getattr(cfg, "narration_languages", ["id", "en"]),
+        )
+        if yt_sub_path:
+            # Read the downloaded subtitle file
+            from dubbingstory.ingest.subtitle_reader import read_subtitles, subtitles_to_context_string
+            entries = read_subtitles(yt_sub_path)
+            if entries:
+                context_string = subtitles_to_context_string(entries)
+                subtitle_data = {
+                    "source_files": [yt_sub_path],
+                    "primary_file": yt_sub_path,
+                    "entries": entries,
+                    "context_string": context_string,
+                    "total_lines": len(entries),
+                    "source": "youtube_auto",
+                }
+                context_source = "youtube_auto"
+                print(f"   ✅ YouTube subs: {len(entries)} lines")
+
+    # Step 3: If still no context, use Whisper ASR as final fallback
     if (
         subtitle_data is None
         and getattr(cfg, "ingest_use_asr_fallback", True)
@@ -109,13 +138,15 @@ def cmd_ingest(args, cfg):
         asr_result = transcribe_video(
             video_path=video_path,
             project_dir=project_dir,
-            model_name=getattr(cfg, "asr_model_name", "base"),
-            language=getattr(cfg, "asr_language", None),
-            device=getattr(cfg, "asr_device", "cpu"),
+            model_name=getattr(cfg, "whisper_model", "base"),
+            language=getattr(cfg, "whisper_language", None),
+            device=getattr(cfg, "whisper_device", "cpu"),
+            compute_type=getattr(cfg, "whisper_compute_type", "int8"),
         )
         if asr_result:
             subtitle_data = asr_result
             asr_used = True
+            context_source = "asr"
             print(f"   ✅ ASR fallback produced {asr_result['total_lines']} entries")
         else:
             print("   ⚠️  ASR fallback failed or unavailable; continuing without transcript.")
@@ -125,6 +156,7 @@ def cmd_ingest(args, cfg):
         "project_name": project_name,
         "video_path": video_path,
         "subtitle_data": subtitle_data,
+        "context_source": context_source,
         "asr_used": asr_used,
         "status": "ingested",
     }
@@ -135,10 +167,9 @@ def cmd_ingest(args, cfg):
     print(f"\n✅ Ingest selesai!")
     print(f"   Video: {video_path}")
     if subtitle_data:
-        src = subtitle_data.get("source", "manual")
-        print(f"   Subtitles: Found ({src}, {subtitle_data.get('total_lines', 0)} lines)")
+        print(f"   Context: {context_source} ({subtitle_data.get('total_lines', 0)} lines)")
     else:
-        print(f"   Subtitles: None")
+        print(f"   Context: None (vision-only mode)")
     print(f"   Manifest: {manifest_path}")
 
     return manifest
@@ -433,7 +464,7 @@ def main():
     p_run.add_argument("--style", type=str, default=None,
                         choices=["viral_fb", "documentary", "technical", "calm_educational"])
     p_run.add_argument("--lang", nargs="+", default=None, help="Languages (e.g., id en)")
-    p_run.add_argument("--engine", type=str, default=None, choices=["piper", "voxcpm2"])
+    p_run.add_argument("--engine", type=str, default=None, choices=["edge", "piper", "voxcpm2"])
     p_run.add_argument("--ratio", nargs="+", default=None, help="Output ratios (16:9, 9:16)")
     p_run.add_argument(
         "--use-asr",
@@ -512,7 +543,7 @@ def main():
     # ── dub ───────────────────────────────────────────────────────────────
     p_dub = subparsers.add_parser("dub", help="Generate TTS audio")
     p_dub.add_argument("--project", "-p", type=str, required=True)
-    p_dub.add_argument("--engine", type=str, default=None, choices=["piper", "voxcpm2"])
+    p_dub.add_argument("--engine", type=str, default=None, choices=["edge", "piper", "voxcpm2"])
 
     # ── render ────────────────────────────────────────────────────────────
     p_render = subparsers.add_parser("render", help="Render final video")
