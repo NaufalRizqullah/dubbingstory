@@ -26,6 +26,13 @@ advanced = [
     "torch",
     "torchaudio",
 ]
+openai-vision = [
+    "openai>=1.0.0",
+]
+colab = [
+    "openai>=1.0.0",
+    "vllm",
+]
 
 [project.scripts]
 dubbingstory = "dubbingstory.cli:main"

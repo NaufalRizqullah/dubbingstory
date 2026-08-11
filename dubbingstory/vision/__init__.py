@@ -1,1 +1,1 @@
-"""dubbingstory.vision — Visual understanding using Gemini API."""
+"""dubbingstory.vision — Visual understanding (Gemini API + OpenAI-compatible)."""

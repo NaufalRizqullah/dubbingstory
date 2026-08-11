@@ -468,6 +468,19 @@ def main():
     p_run.add_argument("--engine", type=str, default=None, choices=["edge", "piper", "voxcpm2"])
     p_run.add_argument("--ratio", nargs="+", default=None, help="Output ratios (16:9, 9:16)")
     p_run.add_argument(
+        "--vision-provider", type=str, default=None,
+        choices=["gemini", "openai"],
+        help="Vision provider: 'gemini' (default) or 'openai' (Qwen3-VL via vLLM)"
+    )
+    p_run.add_argument(
+        "--vision-model", type=str, default=None,
+        help="Vision model name override (e.g. 'Qwen/Qwen3-VL-4B-Instruct')"
+    )
+    p_run.add_argument(
+        "--vision-base-url", type=str, default=None,
+        help="Vision API base URL (e.g. 'http://127.0.0.1:8000/v1')"
+    )
+    p_run.add_argument(
         "--quality", "-q", type=str, default=None,
         choices=["720", "1080", "2k", "4k", "max"],
         help="Download quality (default: 1080). Options: 720, 1080, 2k, 4k, max"
@@ -543,6 +556,19 @@ def main():
     p_analyze.add_argument("--project", "-p", type=str, required=True)
     p_analyze.add_argument("--domain", type=str, default="",
                             help="Domain hint (workshop, cooking, etc.)")
+    p_analyze.add_argument(
+        "--vision-provider", type=str, default=None,
+        choices=["gemini", "openai"],
+        help="Vision provider: 'gemini' (default) or 'openai' (Qwen3-VL via vLLM)"
+    )
+    p_analyze.add_argument(
+        "--vision-model", type=str, default=None,
+        help="Vision model name override (e.g. 'Qwen/Qwen3-VL-4B-Instruct')"
+    )
+    p_analyze.add_argument(
+        "--vision-base-url", type=str, default=None,
+        help="Vision API base URL (e.g. 'http://127.0.0.1:8000/v1')"
+    )
 
     # ── narrate ───────────────────────────────────────────────────────────
     p_narrate = subparsers.add_parser("narrate", help="Generate narration scripts")
@@ -575,6 +601,12 @@ def main():
         cfg.render_ratios = args.ratio
     if hasattr(args, "asr_model") and args.asr_model:
         cfg.asr_model_name = args.asr_model
+    if hasattr(args, "vision_provider") and args.vision_provider:
+        cfg.vision_provider = args.vision_provider
+    if hasattr(args, "vision_model") and args.vision_model:
+        cfg.vision_openai_model = args.vision_model
+    if hasattr(args, "vision_base_url") and args.vision_base_url:
+        cfg.vision_openai_base_url = args.vision_base_url
 
     # Dispatch
     commands = {

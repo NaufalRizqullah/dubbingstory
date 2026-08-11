@@ -8,6 +8,7 @@ import json
 import os
 
 from dubbingstory.vision.gemini_analyzer import GeminiVideoAnalyzer
+from dubbingstory.vision.openai_vision import OpenAIVisionAnalyzer
 from dubbingstory.vision.prompts import build_scene_prompt, build_temporal_prompt
 
 
@@ -46,6 +47,60 @@ def _get_subtitle_for_scene(
     return text, words_in_scene
 
 
+def _create_analyzer(cfg):
+    """Create the appropriate vision analyzer based on config.
+
+    Supports:
+    - "gemini": Google Gemini API (default)
+    - "openai": OpenAI-compatible API (for Qwen3-VL via vLLM, HuggingFace, etc.)
+
+    For model discovery, browse:
+        https://huggingface.co/models?pipeline_tag=image-text-to-text&sort=trending
+    """
+    provider = getattr(cfg, "vision_provider", "gemini")
+
+    if provider == "openai":
+        api_key = (
+            getattr(cfg, "api_key_openai_vision", "")
+            or getattr(cfg, "api_key_hf", "")
+            or "local"
+        )
+        base_url = getattr(cfg, "vision_openai_base_url", "http://127.0.0.1:8000/v1")
+        model = getattr(cfg, "vision_openai_model", "Qwen/Qwen3-VL-2B-Instruct")
+        temperature = getattr(cfg, "vision_openai_temperature", 0.2)
+        max_tokens = getattr(cfg, "vision_openai_max_tokens", 2048)
+
+        return OpenAIVisionAnalyzer(
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
+    elif provider == "gemini":
+        api_key = getattr(cfg, "api_key_gemini", "")
+        if not api_key:
+            raise ValueError(
+                "❌ GOOGLE_API_KEY not found.\n"
+                "   Set via .env file or environment variable."
+            )
+        model = getattr(cfg, "vision_gemini_model", "gemini-2.5-flash")
+        fallback = getattr(cfg, "vision_gemini_fallback_model", "gemini-2.0-flash")
+
+        return GeminiVideoAnalyzer(
+            api_key=api_key,
+            model=model,
+            fallback_model=fallback,
+        )
+
+    else:
+        raise ValueError(
+            f"❌ Unknown vision provider: '{provider}'\n"
+            f"   Supported: 'gemini', 'openai'"
+        )
+
+
 def run_analysis(
     segment_data: dict,
     project_dir: str,
@@ -79,22 +134,10 @@ def run_analysis(
     dict
         Complete storyboard with scene analyses and narrative context.
     """
-    api_key = getattr(cfg, "api_key_gemini", "")
-    if not api_key:
-        raise ValueError(
-            "❌ GOOGLE_API_KEY not found.\n"
-            "   Set via .env file or environment variable."
-        )
-
-    model = getattr(cfg, "vision_gemini_model", "gemini-2.5-flash")
-    fallback = getattr(cfg, "vision_gemini_fallback_model", "gemini-2.0-flash")
+    provider = getattr(cfg, "vision_provider", "gemini")
     analysis_mode = getattr(cfg, "vision_analysis_mode", "keyframes")
 
-    analyzer = GeminiVideoAnalyzer(
-        api_key=api_key,
-        model=model,
-        fallback_model=fallback,
-    )
+    analyzer = _create_analyzer(cfg)
 
     scenes = segment_data.get("scenes", [])
     keyframes_data = segment_data.get("keyframes", {})
@@ -122,7 +165,7 @@ def run_analysis(
         desc = video_meta["description"][:500]
         context_hint += f"\nVideo description: {desc}"
 
-    print(f"\n   👁️ Analyzing {len(scenes)} scenes (mode: {analysis_mode})...")
+    print(f"\n   👁️ Analyzing {len(scenes)} scenes (provider: {provider}, mode: {analysis_mode})...")
     if domain_hint:
         print(f"   🏷️ Domain hint: {domain_hint}")
     if subtitle_entries:
