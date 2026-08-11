@@ -13,9 +13,11 @@ Terinspirasi dari video repair Pakistan di Facebook yang di-dubbing dan dinarasi
 - 🎥 **Video Ingest** — Mendukung file lokal, URL YouTube, dan film bersubtitle.
 - ✂️ **Auto Scene Detection** — Split video per scene otomatis menggunakan PySceneDetect.
 - 🖼️ **Keyframe Extraction** — Ekstrak frame representatif per scene.
-- 👁️ **Visual Understanding** — AI memahami konteks visual tanpa subtitle menggunakan Gemini API.
+- 🧠 **Dual LLM Architecture** — Memisahkan tugas *Vision* (melihat adegan) dan *Text* (menulis narasi) demi keseimbangan kualitas dan biaya.
+- 👁️ **Visual Understanding (Cloud & Local)** — Pahami konteks visual menggunakan **Gemini API** (default) atau model HuggingFace open-source (seperti **Qwen3-VL**) via integrasi OpenAI-compatible endpoint. Bebas biaya API Vision!
+- ☁️ **Kaggle / Colab Ready** — Disediakan skrip terintegrasi (`dubbingstory_colab.py`) untuk menjalankan model vision lokal secara gratis di cloud GPU T4.
 - 📝 **Bilingual Narration** — Membuat script narasi dalam bahasa Indonesia & Inggris.
-- 🎙️ **TTS Dubbing** — Dukungan Text-to-Speech dubbing (Piper TTS untuk CPU, VoxCPM2 untuk GPU).
+- 🎙️ **TTS Dubbing** — Dukungan Text-to-Speech offline (Piper TTS untuk CPU) dan advanced (VoxCPM2 untuk GPU).
 - 🎬 **Video Render** — Render video final dengan mix audio dan subtitle (opsional) untuk format 16:9 & 9:16.
 
 ---
@@ -46,13 +48,16 @@ python main.py run --input video.mp4
 # Pipa lengkap — video lokal
 dubbingstory run --input video.mp4
 
+# Pipa lengkap — menggunakan Qwen3-VL lokal via vLLM
+dubbingstory run --input video.mp4 --vision-provider openai --engine piper
+
 # Pipa lengkap — YouTube (dengan pernyataan hak cipta)
 dubbingstory run --url "https://youtube.com/..." --i-have-rights
 
 # Langkah demi langkah
 dubbingstory ingest --input video.mp4
 dubbingstory segment --project video
-dubbingstory analyze --project video --domain workshop
+dubbingstory analyze --project video --vision-provider openai
 dubbingstory narrate --project video --style viral_fb --lang id en
 dubbingstory dub --project video --engine piper
 dubbingstory render --project video --ratio 16:9 9:16
@@ -75,6 +80,8 @@ Jalankan seluruh proses dari awal sampai akhir.
 | `--lang` | `id en` | Bahasa target narasi. |
 | `--engine` | `piper` | Mesin TTS yang digunakan (`piper`, `voxcpm2`). |
 | `--ratio` | `16:9` | Rasio aspek keluaran video (misal: `16:9 9:16`). |
+| `--vision-provider` | `gemini` | Pilihan API Vision (`gemini` atau `openai` untuk vLLM/Qwen lokal). |
+| `--vision-model` | - | Override nama model jika menggunakan `--vision-provider openai`. |
 
 **Contoh:**
 ```bash
@@ -121,6 +128,7 @@ Gunakan AI untuk memahami tiap scene secara visual.
 |---------|---------|-----------|
 | `--project`, `-p` | **(Wajib)** | Nama proyek. |
 | `--domain` | `""` | Petunjuk domain untuk membantu AI (misal: `workshop`, `cooking`, `repair`). |
+| `--vision-provider` | `gemini` | Pilihan API Vision (`gemini` atau `openai` untuk vLLM/Qwen lokal). |
 
 **Contoh:**
 ```bash
@@ -237,6 +245,7 @@ dubbingstory run --input movie.mp4
 - Python 3.10+
 - FFmpeg (terdaftar di PATH)
 - Google API Key (Gemini, free tier bisa digunakan)
+- GPU dengan vLLM (Hanya jika Anda ingin menjalankan model vision secara lokal via `--vision-provider openai`)
 
 ## 🤝 Proyek Terkait
 

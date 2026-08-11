@@ -13,9 +13,11 @@ Inspired by the accurately narrated and dubbed Pakistani repair videos on Facebo
 - 🎥 **Video Ingest** — Supports local files, YouTube URLs, and films with subtitles.
 - ✂️ **Auto Scene Detection** — Automatically split videos into scenes using PySceneDetect.
 - 🖼️ **Keyframe Extraction** — Extract representative frames per scene.
-- 👁️ **Visual Understanding** — AI understands visual context without subtitles using Gemini API.
+- 🧠 **Dual LLM Architecture** — Separates the *Vision* (seeing scenes) and *Text* (writing narration) tasks for optimal quality-to-cost balance.
+- 👁️ **Visual Understanding (Cloud & Local)** — Understand visual context using **Gemini API** (default) or open-source HuggingFace models (like **Qwen3-VL**) via OpenAI-compatible endpoints. Zero API cost for Vision!
+- ☁️ **Kaggle / Colab Ready** — Includes a unified script (`dubbingstory_colab.py`) to run the local vision model for free on T4 cloud GPUs.
 - 📝 **Bilingual Narration** — Generate narration scripts in Indonesian & English.
-- 🎙️ **TTS Dubbing** — Text-to-Speech dubbing support (Piper TTS for CPU, VoxCPM2 for GPU).
+- 🎙️ **TTS Dubbing** — Text-to-Speech support with offline (Piper TTS for CPU) and advanced (VoxCPM2 for GPU) engines.
 - 🎬 **Video Render** — Final video render with audio mix and optional subtitles for 16:9 & 9:16 aspect ratios.
 
 ---
@@ -46,13 +48,16 @@ python main.py run --input video.mp4
 # Full pipeline — local video
 dubbingstory run --input video.mp4
 
+# Full pipeline — using local Qwen3-VL via vLLM
+dubbingstory run --input video.mp4 --vision-provider openai --engine piper
+
 # Full pipeline — YouTube (with rights)
 dubbingstory run --url "https://youtube.com/..." --i-have-rights
 
 # Step by step
 dubbingstory ingest --input video.mp4
 dubbingstory segment --project video
-dubbingstory analyze --project video --domain workshop
+dubbingstory analyze --project video --vision-provider openai
 dubbingstory narrate --project video --style viral_fb --lang id en
 dubbingstory dub --project video --engine piper
 dubbingstory render --project video --ratio 16:9 9:16
@@ -75,6 +80,8 @@ Run the entire process from start to finish.
 | `--lang` | `id en` | Target languages for narration. |
 | `--engine` | `piper` | TTS Engine to use (`piper`, `voxcpm2`). |
 | `--ratio` | `16:9` | Output video aspect ratios (e.g., `16:9 9:16`). |
+| `--vision-provider` | `gemini` | Vision API choice (`gemini` or `openai` for local vLLM/Qwen). |
+| `--vision-model` | - | Override model name if using `--vision-provider openai`. |
 
 **Example:**
 ```bash
@@ -121,6 +128,7 @@ Use AI to visually understand each scene.
 |----------|---------|-------------|
 | `--project`, `-p` | **(Required)** | Project name. |
 | `--domain` | `""` | Domain hint to help AI (e.g., `workshop`, `cooking`, `repair`). |
+| `--vision-provider` | `gemini` | Vision API choice (`gemini` or `openai` for local vLLM/Qwen). |
 
 **Example:**
 ```bash
@@ -237,6 +245,7 @@ dubbingstory run --input movie.mp4
 - Python 3.10+
 - FFmpeg (in PATH)
 - Google API Key (Gemini, free tier OK)
+- GPU with vLLM (Only if you wish to run the vision model locally via `--vision-provider openai`)
 
 ## 🤝 Related Project
 
