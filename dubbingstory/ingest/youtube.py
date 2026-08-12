@@ -34,24 +34,33 @@ def _build_format_selector(download_height: str | int = "1080") -> str:
     Skips AV1 codec (lacks HW acceleration on many platforms).
     Accepts labels: "720", "1080", "2k", "4k", "max".
     """
-    codec_filter = "[vcodec!^=av01]"
+    # Skip AV1 codec as it lacks HW acceleration on many platforms (e.g., Colab T4)
+    # and causes decoding failures in OpenCV/FFmpeg software fallbacks.
+    # Note: Using [vcodec!*=av01] to safely ensure it does not contain 'av01' anywhere.
+    codec_filter = "[vcodec!*=av01]"
 
     h_val = _resolve_height(download_height)
 
     if h_val == "max":
-        return f"bestvideo{codec_filter}+bestaudio/best{codec_filter}/best"
+        return f"bestvideo{codec_filter}+bestaudio/best{codec_filter}"
 
     try:
         h_val = int(h_val)
     except (ValueError, TypeError):
         h_val = 1080  # fallback to 1080p if invalid
 
+    if 0 < h_val <= 1080:
+        # For standard resolutions, strictly prefer native MP4 (H.264/AAC), ensuring no AV1 in mp4
+        return (
+            f"bestvideo[height<=?{h_val}][ext=mp4]{codec_filter}+bestaudio[ext=m4a]/"
+            f"bestvideo[height<=?{h_val}]{codec_filter}+bestaudio/"
+            f"best[height<=?{h_val}][ext=mp4]{codec_filter}/"
+            f"best[height<=?{h_val}]{codec_filter}"
+        )
+
     return (
-        f"bestvideo[height<=?{h_val}][ext=mp4]+bestaudio[ext=m4a]/"
         f"bestvideo[height<=?{h_val}]{codec_filter}+bestaudio/"
-        f"best[height<=?{h_val}][ext=mp4]/"
-        f"best[height<=?{h_val}]{codec_filter}/"
-        f"best"
+        f"best[height<=?{h_val}]{codec_filter}"
     )
 
 
