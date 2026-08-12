@@ -8,7 +8,7 @@ Supports multiple languages and narration styles.
 import json
 
 from dubbingstory.vision.gemini_analyzer import GeminiVideoAnalyzer
-from dubbingstory.story.prompt_templates import build_narration_prompt
+from dubbingstory.story.prompt_templates import build_narration_prompt, build_summary_narration_prompt
 
 
 def generate_narration(
@@ -179,3 +179,120 @@ def _generate_fallback_narration(
         })
 
     return segments
+
+
+def generate_summary_narration(
+    storyboard: dict,
+    selected_scenes: list[dict],
+    languages: list[str] = None,
+    style: str = "viral_fb",
+    cfg=None,
+) -> dict[str, list[dict]]:
+    """
+    Generate narration scripts for SUMMARY mode (highlight recap).
+
+    Similar to generate_narration() but uses the summary prompt and
+    only generates narration for the selected (important) scenes.
+
+    Parameters
+    ----------
+    storyboard : dict
+        Full storyboard data (for context).
+    selected_scenes : list[dict]
+        Selected scenes from scene_selector.
+    languages : list[str]
+        Languages to generate.
+    style : str
+        Narration style key.
+    cfg : SimpleNamespace
+        Config object.
+
+    Returns
+    -------
+    dict[str, list[dict]]
+        Mapping of language → list of narration segments.
+    """
+    if languages is None:
+        languages = ["id", "en"]
+
+    api_key = getattr(cfg, "api_key_gemini", "")
+    if not api_key:
+        raise ValueError("❌ GOOGLE_API_KEY not found for narration generation.")
+
+    model = getattr(cfg, "vision_gemini_model", "gemini-2.5-flash")
+    fallback = getattr(cfg, "vision_gemini_fallback_model", "gemini-2.0-flash")
+    hedging_threshold = getattr(cfg, "narration_hedging_threshold", 0.5)
+
+    styles = getattr(cfg, "narration_styles", {})
+    style_config = styles.get(style, {})
+
+    if not style_config:
+        print(f"   ⚠️ Style '{style}' not found in config, using minimal defaults.")
+        style_config = {
+            "name": style,
+            "tone": "neutral",
+            "rules": ["Write naturally"],
+            "examples": {"id": [], "en": []},
+        }
+
+    analyzer = GeminiVideoAnalyzer(
+        api_key=api_key,
+        model=model,
+        fallback_model=fallback,
+    )
+
+    all_narrations: dict[str, list[dict]] = {}
+
+    for lang in languages:
+        print(f"\n   ✍️ Generating {lang.upper()} SUMMARY narration (style: {style})...")
+
+        prompt = build_summary_narration_prompt(
+            storyboard=storyboard,
+            selected_scenes=selected_scenes,
+            language=lang,
+            style=style,
+            style_config=style_config,
+            hedging_threshold=hedging_threshold,
+        )
+
+        try:
+            from google.genai import types
+
+            config = types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.6,
+            )
+
+            response = analyzer.client.models.generate_content(
+                model=model,
+                contents=[prompt],
+                config=config,
+            )
+
+            text = getattr(response, "text", None)
+            if not text:
+                raise ValueError("Empty response from Gemini.")
+
+            segments = json.loads(text)
+
+            # Build a temporary storyboard with only selected scenes for validation
+            summary_storyboard = {
+                **storyboard,
+                "scenes": selected_scenes,
+            }
+            narration = _validate_narration(segments, summary_storyboard)
+            all_narrations[lang] = narration
+
+            total_words = sum(s.get("word_count", 0) for s in narration)
+            print(f"   ✅ {lang.upper()}: {len(narration)} segments, ~{total_words} words (summary)")
+
+        except Exception as e:
+            print(f"   ❌ {lang.upper()} summary narration failed: {e}")
+            summary_storyboard = {
+                **storyboard,
+                "scenes": selected_scenes,
+            }
+            all_narrations[lang] = _generate_fallback_narration(summary_storyboard, lang)
+
+    return all_narrations
+

@@ -57,11 +57,13 @@ def generate_all_audio(
     audio_dir: str,
     engine_name: str = "piper",
     cfg=None,
+    script_prefix: str = "script_",
+    audio_prefix: str = "audio_",
 ) -> dict[str, str]:
     """
     Generate TTS audio for all narration scripts in the scripts directory.
 
-    Looks for script_*.txt files and generates corresponding audio files.
+    Looks for {script_prefix}*.txt files and generates corresponding audio files.
 
     Parameters
     ----------
@@ -73,6 +75,10 @@ def generate_all_audio(
         TTS engine to use.
     cfg : SimpleNamespace | None
         Config object.
+    script_prefix : str
+        Prefix for script filenames (default: "script_").
+    audio_prefix : str
+        Prefix for output audio filenames (default: "audio_").
 
     Returns
     -------
@@ -88,16 +94,16 @@ def generate_all_audio(
 
     # Find all script files
     import glob
-    script_files = sorted(glob.glob(os.path.join(scripts_dir, "script_*.txt")))
+    script_files = sorted(glob.glob(os.path.join(scripts_dir, f"{script_prefix}*.txt")))
 
     if not script_files:
-        print("   ⚠️ No script files found in scripts directory.")
+        print(f"   ⚠️ No script files found matching '{script_prefix}*.txt' in scripts directory.")
         return results
 
     for script_path in script_files:
         # Extract language from filename: script_id.txt → id
         basename = os.path.basename(script_path)
-        lang = basename.replace("script_", "").replace(".txt", "")
+        lang = basename.replace(script_prefix, "").replace(".txt", "")
 
         print(f"\n   🎙️ Generating {lang.upper()} audio with {engine.get_engine_name()}...")
 
@@ -149,7 +155,7 @@ def generate_all_audio(
 
         # Concatenate all segments into one audio file
         if segment_paths:
-            concat_path = os.path.join(audio_dir, f"audio_{lang}.wav")
+            concat_path = os.path.join(audio_dir, f"{audio_prefix}{lang}.wav")
             _concatenate_audio(segment_paths, concat_path)
             results[lang] = concat_path
             print(f"   ✅ {lang.upper()} audio: {concat_path}")

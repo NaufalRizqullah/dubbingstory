@@ -426,20 +426,173 @@ def cmd_render(args, cfg):
 
 def cmd_run(args, cfg):
     """Run the full pipeline end-to-end."""
+    mode = getattr(args, "mode", "full")
+
     print("=" * 70)
-    print(f"🚀 DubbingStory v{__version__} — Full Pipeline")
+    print(f"🚀 DubbingStory v{__version__} — Full Pipeline (mode: {mode})")
     print("=" * 70)
 
     cmd_ingest(args, cfg)
     cmd_segment(args, cfg)
     cmd_analyze(args, cfg)
-    cmd_narrate(args, cfg)
-    cmd_dub(args, cfg)
-    cmd_render(args, cfg)
+
+    if mode == "summary":
+        cmd_summary(args, cfg)
+    else:
+        cmd_narrate(args, cfg)
+        cmd_dub(args, cfg)
+        cmd_render(args, cfg)
 
     print("\n" + "=" * 70)
-    print("✅ Pipeline selesai! Video final sudah di-render.")
+    print(f"✅ Pipeline selesai! (mode: {mode})")
     print("=" * 70)
+
+
+# ==============================================================================
+# SUBCOMMAND: summary (highlight recap pipeline)
+# ==============================================================================
+
+def cmd_summary(args, cfg):
+    """Generate a highlight recap video from the most important scenes."""
+    from dubbingstory.story import script_writer, subtitle_gen, scene_selector
+    from dubbingstory.render import video_cutter, video_render
+    from dubbingstory.tts import voice_manager
+
+    project_name = _resolve_project_name(args)
+    project_dir = _setup_project_dir(cfg, project_name)
+
+    print("=" * 70)
+    print(f"📋 DubbingStory v{__version__} — Summary Mode (Highlight Recap)")
+    print("=" * 70)
+
+    # ── Step 1: Load storyboard ──────────────────────────────────────────
+    storyboard_path = os.path.join(project_dir, "storyboard.json")
+    if not os.path.exists(storyboard_path):
+        print(f"❌ Storyboard not found. Jalankan 'dubbingstory analyze' dulu.")
+        sys.exit(1)
+
+    with open(storyboard_path, "r", encoding="utf-8") as f:
+        storyboard = json.load(f)
+
+    # ── Step 2: Select best scenes ───────────────────────────────────────
+    target_duration = getattr(cfg, "summary_target_duration", None)
+    max_scenes = getattr(cfg, "summary_max_scenes", None)
+    min_score = getattr(cfg, "summary_min_scene_score", 0.3)
+
+    selected = scene_selector.select_scenes(
+        storyboard=storyboard,
+        target_duration=target_duration,
+        max_scenes=max_scenes,
+        min_score=min_score,
+    )
+
+    if not selected:
+        print("❌ Tidak ada scene yang terpilih. Pipeline dihentikan.")
+        sys.exit(1)
+
+    manifest_path = scene_selector.save_summary_manifest(
+        selected_scenes=selected,
+        storyboard=storyboard,
+        project_dir=project_dir,
+        target_duration=target_duration,
+    )
+    print(f"   📄 Summary manifest: {manifest_path}")
+
+    # ── Step 3: Cut & concat video ───────────────────────────────────────
+    source_video = os.path.join(project_dir, "source.mp4")
+    if not os.path.exists(source_video):
+        print(f"❌ Source video not found: {source_video}")
+        sys.exit(1)
+
+    summary_video = os.path.join(project_dir, "summary_source.mp4")
+    video_cutter.cut_and_concat(
+        source_video=source_video,
+        selected_scenes=selected,
+        output_path=summary_video,
+    )
+
+    # ── Step 4: Generate summary narration ────────────────────────────────
+    languages = args.lang if hasattr(args, "lang") and args.lang else \
+        getattr(cfg, "narration_languages", ["id", "en"])
+    style = args.style if hasattr(args, "style") and args.style else \
+        getattr(cfg, "narration_style", "viral_fb")
+
+    narration = script_writer.generate_summary_narration(
+        storyboard=storyboard,
+        selected_scenes=selected,
+        languages=languages,
+        style=style,
+        cfg=cfg,
+    )
+
+    # Save scripts
+    scripts_dir = os.path.join(project_dir, "scripts")
+    os.makedirs(scripts_dir, exist_ok=True)
+
+    for lang, segments in narration.items():
+        script_path = os.path.join(scripts_dir, f"summary_script_{lang}.txt")
+        with open(script_path, "w", encoding="utf-8") as f:
+            for seg in segments:
+                f.write(f"[{seg['scene_id']}] {seg['text']}\n\n")
+
+        srt_path = os.path.join(scripts_dir, f"summary_script_{lang}.srt")
+        subtitle_gen.generate_srt(segments, srt_path)
+        print(f"   📄 {script_path}")
+        print(f"   📄 {srt_path}")
+
+    # ── Step 5: TTS dubbing ──────────────────────────────────────────────
+    engine_name = args.engine if hasattr(args, "engine") and args.engine else \
+        getattr(cfg, "tts_engine", "piper")
+
+    audio_dir = os.path.join(project_dir, "audio")
+    os.makedirs(audio_dir, exist_ok=True)
+
+    # Generate audio from summary scripts
+    voice_manager.generate_all_audio(
+        scripts_dir=scripts_dir,
+        audio_dir=audio_dir,
+        engine_name=engine_name,
+        cfg=cfg,
+        script_prefix="summary_script_",
+        audio_prefix="summary_audio_",
+    )
+
+    # ── Step 6: Render final summary video ───────────────────────────────
+    ratios = getattr(cfg, "render_ratios", ["16:9"])
+    audio_strategy = getattr(cfg, "render_audio_strategy", "replace")
+    burn_subs = getattr(cfg, "render_burn_subtitles", False)
+
+    import glob
+    summary_audio_files = glob.glob(os.path.join(audio_dir, "summary_audio_*.wav"))
+
+    for audio_path in summary_audio_files:
+        basename = os.path.basename(audio_path)
+        lang = basename.replace("summary_audio_", "").replace(".wav", "")
+
+        srt_path = os.path.join(scripts_dir, f"summary_script_{lang}.srt")
+
+        for ratio in ratios:
+            ratio_label = ratio.replace(":", "x")
+            output_path = os.path.join(project_dir, f"final_summary_{lang}_{ratio_label}.mp4")
+
+            print(f"\n   🎬 Rendering Summary: {lang.upper()} ({ratio})...")
+
+            try:
+                video_render.render_final(
+                    source_video=summary_video,
+                    narration_audio=audio_path,
+                    output_path=output_path,
+                    subtitle_path=srt_path if os.path.exists(srt_path) else None,
+                    audio_strategy=audio_strategy,
+                    original_volume=0.1,
+                    burn_subs=burn_subs,
+                    target_ratio=ratio if ratio != "16:9" else None,
+                )
+                print(f"   ✅ {output_path}")
+            except Exception as e:
+                print(f"   ❌ Summary render failed: {e}")
+
+    print(f"\n✅ Summary pipeline selesai!")
 
 
 # ==============================================================================
@@ -467,6 +620,19 @@ def main():
     p_run.add_argument("--lang", nargs="+", default=None, help="Languages (e.g., id en)")
     p_run.add_argument("--engine", type=str, default=None, choices=["edge", "piper", "voxcpm2"])
     p_run.add_argument("--ratio", nargs="+", default=None, help="Output ratios (16:9, 9:16)")
+    p_run.add_argument(
+        "--mode", type=str, default="full",
+        choices=["full", "summary"],
+        help="Pipeline mode: 'full' (dub entire video) or 'summary' (highlight recap)"
+    )
+    p_run.add_argument(
+        "--summary-duration", type=int, default=None,
+        help="Target duration for summary mode in seconds (default: auto ~60-120s)"
+    )
+    p_run.add_argument(
+        "--summary-max-scenes", type=int, default=None,
+        help="Maximum number of scenes to include in summary (default: auto)"
+    )
     p_run.add_argument(
         "--vision-provider", type=str, default=None,
         choices=["gemini", "openai"],
@@ -608,6 +774,12 @@ def main():
     if hasattr(args, "vision_base_url") and args.vision_base_url:
         cfg.vision_openai_base_url = args.vision_base_url
 
+    # Summary mode overrides
+    if hasattr(args, "summary_duration") and args.summary_duration is not None:
+        cfg.summary_target_duration = args.summary_duration
+    if hasattr(args, "summary_max_scenes") and args.summary_max_scenes is not None:
+        cfg.summary_max_scenes = args.summary_max_scenes
+
     # Dispatch
     commands = {
         "run": cmd_run,
@@ -617,6 +789,7 @@ def main():
         "narrate": cmd_narrate,
         "dub": cmd_dub,
         "render": cmd_render,
+        "summary": cmd_summary,
     }
 
     handler = commands.get(args.command)
