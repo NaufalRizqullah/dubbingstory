@@ -13,6 +13,14 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
 
+## [1.0.0] - 2026-08-12
+
+### Added
+- **Summary Mode (Highlight Recap)**: A major new pipeline mode (`--mode summary`) that intelligently selects the most important scenes from a long video, cuts and concatenates them, and generates a condensed highlight recap narration.
+- New CLI arguments for summary mode: `--mode`, `--summary-duration`, and `--summary-max-scenes`.
+- Extracted and enhanced `video_cutter.py` and `scene_selector.py` to support the new FFmpeg-based video slicing and ranking algorithm.
+- Added support for custom script and audio prefixes in `voice_manager.py` to prevent overwriting full pipeline assets when running summary mode.
+
 ## [0.1.1] - 2026-06-24
 
 ### Added

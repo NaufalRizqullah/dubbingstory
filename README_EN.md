@@ -19,6 +19,7 @@ Inspired by the accurately narrated and dubbed Pakistani repair videos on Facebo
 - 📝 **Bilingual Narration** — Generate narration scripts in Indonesian & English.
 - 🎙️ **TTS Dubbing** — Text-to-Speech support with offline (Piper TTS for CPU) and advanced (VoxCPM2 for GPU) engines.
 - 🎬 **Video Render** — Final video render with audio mix and optional subtitles for 16:9 & 9:16 aspect ratios.
+- ✂️ **Highlight Recap Mode** — Automatically cut and condense long videos into short highlight reels using the `--mode summary` option.
 
 ---
 
@@ -54,6 +55,9 @@ dubbingstory run --input video.mp4 --vision-provider openai --engine piper
 # Full pipeline — YouTube (with rights)
 dubbingstory run --url "https://youtube.com/..." --i-have-rights
 
+# Full pipeline — Summary Mode (Highlight Recap ~60 seconds)
+dubbingstory run --url "https://youtube.com/..." --mode summary --summary-duration 60 --i-have-rights
+
 # Step by step
 dubbingstory ingest --input video.mp4
 dubbingstory segment --project video
@@ -76,6 +80,9 @@ Run the entire process from start to finish.
 | `--url`, `-u` | `None` | YouTube or other video URL. |
 | `--i-have-rights` | `False` | Confirm video rights (required for URL). |
 | `--project`, `-p` | `auto` | Project name (defaults to filename). |
+| `--mode` | `full` | Pipeline mode: `full` (entire video) or `summary` (highlight recap). |
+| `--summary-duration`| `auto` | Target duration in seconds for summary mode (e.g., 60). |
+| `--summary-max-scenes`| `auto` | Max number of scenes for summary mode. |
 | `--style` | `viral_fb` | Narration style (`viral_fb`, `documentary`, `technical`, `calm_educational`). |
 | `--lang` | `id en` | Target languages for narration. |
 | `--engine` | `piper` | TTS Engine to use (`piper`, `voxcpm2`). |

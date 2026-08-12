@@ -19,6 +19,7 @@ Terinspirasi dari video repair Pakistan di Facebook yang di-dubbing dan dinarasi
 - 📝 **Bilingual Narration** — Membuat script narasi dalam bahasa Indonesia & Inggris.
 - 🎙️ **TTS Dubbing** — Dukungan Text-to-Speech offline (Piper TTS untuk CPU) dan advanced (VoxCPM2 untuk GPU).
 - 🎬 **Video Render** — Render video final dengan mix audio dan subtitle (opsional) untuk format 16:9 & 9:16.
+- ✂️ **Highlight Recap Mode** — Fitur untuk merangkum video panjang menjadi video pendek berisi momen-momen terpenting (gunakan `--mode summary`).
 
 ---
 
@@ -54,6 +55,9 @@ dubbingstory run --input video.mp4 --vision-provider openai --engine piper
 # Pipa lengkap — YouTube (dengan pernyataan hak cipta)
 dubbingstory run --url "https://youtube.com/..." --i-have-rights
 
+# Pipa lengkap — Mode Summary (Highlight Recap ~60 detik)
+dubbingstory run --url "https://youtube.com/..." --mode summary --summary-duration 60 --i-have-rights
+
 # Langkah demi langkah
 dubbingstory ingest --input video.mp4
 dubbingstory segment --project video
@@ -76,6 +80,9 @@ Jalankan seluruh proses dari awal sampai akhir.
 | `--url`, `-u` | `None` | Tautan YouTube atau video lainnya. |
 | `--i-have-rights` | `False` | Konfirmasi hak cipta video (wajib untuk URL). |
 | `--project`, `-p` | `auto` | Nama proyek (default: nama file). |
+| `--mode` | `full` | Mode pipeline: `full` (video utuh) atau `summary` (potongan ringkasan highlight). |
+| `--summary-duration`| `auto` | Target durasi (detik) untuk mode summary (misal: 60). |
+| `--summary-max-scenes`| `auto` | Maksimal scene yang diambil untuk mode summary. |
 | `--style` | `viral_fb` | Gaya narasi (`viral_fb`, `documentary`, `technical`, `calm_educational`). |
 | `--lang` | `id en` | Bahasa target narasi. |
 | `--engine` | `piper` | Mesin TTS yang digunakan (`piper`, `voxcpm2`). |
