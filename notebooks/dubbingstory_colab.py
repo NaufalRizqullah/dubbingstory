@@ -104,6 +104,9 @@ def main():
         sys.executable, "-m", "vllm.entrypoints.openai.api_server",
         "--model", MODEL_NAME,
         "--port", str(PORT),
+        # Catatan Pengaturan GPU:
+        # - Kaggle T4x2 (2 GPU): Gunakan max-model-len 16384 & tensor-parallel-size 2
+        # - Colab T4 1x (1 GPU): Turunkan max-model-len ke 4096 atau 8192, dan HAPUS baris tensor-parallel-size
         "--max-model-len", "16384", 
         "--tensor-parallel-size", "2",
         "--enforce-eager"
