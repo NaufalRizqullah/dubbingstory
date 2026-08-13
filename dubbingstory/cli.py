@@ -674,6 +674,22 @@ def main():
         default=None,
         help="Compute type for Faster-Whisper (float16, int8, etc.).",
     )
+    # ── Pipeline speed optimization flags ──
+    p_run.add_argument(
+        "--max-keyframes", type=int, default=None,
+        help="Max keyframes per scene for vision analysis (default: 7). "
+             "Lower = faster but less accurate. Recommended: 3-5 for speed."
+    )
+    p_run.add_argument(
+        "--min-scene-duration", type=float, default=None,
+        help="Minimum scene duration in seconds (default: 2.0). "
+             "Higher = fewer scenes = faster. Recommended: 4-6 for speed."
+    )
+    p_run.add_argument(
+        "--scene-threshold", type=float, default=None,
+        help="Scene detection sensitivity (default: 3.0). "
+             "Higher = fewer scenes detected = faster. Recommended: 4-6 for speed."
+    )
 
     # ── ingest ────────────────────────────────────────────────────────────
     p_ingest = subparsers.add_parser("ingest", help="Download/validate video")
@@ -716,6 +732,18 @@ def main():
     # ── segment ───────────────────────────────────────────────────────────
     p_segment = subparsers.add_parser("segment", help="Detect scenes + keyframes")
     p_segment.add_argument("--project", "-p", type=str, required=True)
+    p_segment.add_argument(
+        "--max-keyframes", type=int, default=None,
+        help="Max keyframes per scene (default: 7). Lower = faster."
+    )
+    p_segment.add_argument(
+        "--min-scene-duration", type=float, default=None,
+        help="Minimum scene duration in seconds (default: 2.0). Higher = fewer scenes."
+    )
+    p_segment.add_argument(
+        "--scene-threshold", type=float, default=None,
+        help="Scene detection sensitivity (default: 3.0). Higher = fewer scenes."
+    )
 
     # ── analyze ───────────────────────────────────────────────────────────
     p_analyze = subparsers.add_parser("analyze", help="Visual understanding")
@@ -779,6 +807,14 @@ def main():
         cfg.summary_target_duration = args.summary_duration
     if hasattr(args, "summary_max_scenes") and args.summary_max_scenes is not None:
         cfg.summary_max_scenes = args.summary_max_scenes
+
+    # Pipeline speed optimization overrides
+    if hasattr(args, "max_keyframes") and args.max_keyframes is not None:
+        cfg.keyframes_max_per_scene = args.max_keyframes
+    if hasattr(args, "min_scene_duration") and args.min_scene_duration is not None:
+        cfg.segment_min_scene_duration = args.min_scene_duration
+    if hasattr(args, "scene_threshold") and args.scene_threshold is not None:
+        cfg.segment_adaptive_threshold = args.scene_threshold
 
     # Dispatch
     commands = {

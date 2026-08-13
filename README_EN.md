@@ -89,6 +89,9 @@ Run the entire process from start to finish.
 | `--ratio` | `16:9` | Output video aspect ratios (e.g., `16:9 9:16`). |
 | `--vision-provider` | `gemini` | Vision API choice (`gemini` or `openai` for local vLLM/Qwen). |
 | `--vision-model` | - | Override model name if using `--vision-provider openai`. |
+| `--max-keyframes` | `7` | Max keyframes per scene for vision analysis. Lower (3-5) = faster. |
+| `--min-scene-duration`| `2.0` | Minimum scene duration in seconds. Higher (4-6) = fewer scenes = faster. |
+| `--scene-threshold` | `3.0` | Scene detection sensitivity. Higher (4-6) = fewer scenes = faster. |
 
 **Example:**
 ```bash

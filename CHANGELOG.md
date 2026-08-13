@@ -13,7 +13,21 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
 
-## [1.0.0] - 2026-08-12
+## [0.2.1] - 2026-08-14
+
+### Added
+
+- **Dual-Language Dubbing**: Support for both Indonesian and English subtitles/scripts in the same pipeline run.
+- Added `language` argument to CLI to specify language for subtitle/script.
+- Added `verbose` argument to CLI to enable verbose output.
+- Added `help` command to CLI to display help message.
+
+### Changed
+
+- Removed local subtitle file requirement and fallback to YouTube automatic subtitle download and ASR fallback.
+- Refactored `dubbingstory.ingest.cli_ingest` to `dubbingstory.cli.cmd_ingest` and updated the ingest manifest structure.
+
+## [0.2.0] - 2026-08-13
 
 ### Added
 - **Summary Mode (Highlight Recap)**: A major new pipeline mode (`--mode summary`) that intelligently selects the most important scenes from a long video, cuts and concatenates them, and generates a condensed highlight recap narration.

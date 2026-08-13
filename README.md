@@ -89,6 +89,9 @@ Jalankan seluruh proses dari awal sampai akhir.
 | `--ratio` | `16:9` | Rasio aspek keluaran video (misal: `16:9 9:16`). |
 | `--vision-provider` | `gemini` | Pilihan API Vision (`gemini` atau `openai` untuk vLLM/Qwen lokal). |
 | `--vision-model` | - | Override nama model jika menggunakan `--vision-provider openai`. |
+| `--max-keyframes` | `7` | Maks keyframe per scene untuk analisis vision. Turunkan (3-5) untuk lebih cepat. |
+| `--min-scene-duration`| `2.0` | Durasi minimum scene (detik). Naikkan (4-6) agar scene lebih sedikit/cepat. |
+| `--scene-threshold` | `3.0` | Sensitivitas deteksi scene. Naikkan (4-6) agar scene lebih sedikit/cepat. |
 
 **Contoh:**
 ```bash
