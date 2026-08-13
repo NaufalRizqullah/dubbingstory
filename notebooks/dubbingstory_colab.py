@@ -104,7 +104,7 @@ def main():
         sys.executable, "-m", "vllm.entrypoints.openai.api_server",
         "--model", MODEL_NAME,
         "--port", str(PORT),
-        "--max-model-len", "4096", 
+        "--max-model-len", "16384", 
         "--tensor-parallel-size", "2",
         "--enforce-eager"
     ]
