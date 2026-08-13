@@ -68,13 +68,16 @@ def run_pipeline(video_input, project_name="my_project"):
     
     # Make sure we use the local vision provider and piper TTS
     cmd = [
-        sys.executable, "-m", "dubbingstory.cli", "run",
+        sys.executable, "-u", "-m", "dubbingstory.cli", "run",
         "--input", video_input,
         "--project", project_name,
         "--vision-provider", "openai",
         "--vision-model", MODEL_NAME,
         "--vision-base-url", BASE_URL,
-        "--engine", "piper" # Use Piper for local TTS (no API cost)
+        "--engine", "piper", # Use Piper for local TTS (no API cost)
+        "--max-keyframes", "3",
+        "--min-scene-duration", "5.0",
+        "--scene-threshold", "5.0"
     ]
     
     print(f"Executing: {' '.join(cmd)}")
@@ -102,6 +105,7 @@ def main():
         "--model", MODEL_NAME,
         "--port", str(PORT),
         "--max-model-len", "4096", 
+        "--tensor-parallel-size", "2",
         "--enforce-eager"
     ]
     
