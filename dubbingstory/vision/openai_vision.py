@@ -54,14 +54,8 @@ def _is_retryable(exc: Exception) -> bool:
 
 
 def _extract_json_from_text(text: str) -> dict | list:
-    """Extract JSON from text that might contain markdown code fences or extra text.
-
-    Tries in order:
-    1. Direct JSON parse
-    2. Extract from ```json ... ``` code fence
-    3. Find first { ... } or [ ... ] block
-    """
-    text = text.strip()
+    """Extract JSON from text using robust fallback parser."""
+    text = (text or "").strip()
 
     # Try direct parse
     try:
@@ -70,26 +64,23 @@ def _extract_json_from_text(text: str) -> dict | list:
         pass
 
     # Try code fence extraction
-    fence_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, re.DOTALL)
-    if fence_match:
-        try:
-            return json.loads(fence_match.group(1).strip())
-        except json.JSONDecodeError:
-            pass
+    text_clean = re.sub(r"^\s*```(?:json)?\s*", "", text, flags=re.I)
+    text_clean = re.sub(r"\s*```\s*$", "", text_clean)
 
-    # Try finding JSON object or array
-    for pattern in [r"\{.*\}", r"\[.*\]"]:
-        match = re.search(pattern, text, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(0))
-            except json.JSONDecodeError:
-                pass
+    starts = [i for i in (text_clean.find("{"), text_clean.find("[")) if i >= 0]
+    if not starts:
+        raise json.JSONDecodeError("No JSON start found", text, 0)
 
-    raise json.JSONDecodeError(
-        f"Could not extract JSON from response: {text[:200]}...",
-        text, 0,
-    )
+    start = min(starts)
+    decoder = json.JSONDecoder()
+    try:
+        obj, _end = decoder.raw_decode(text_clean[start:])
+        return obj
+    except json.JSONDecodeError:
+        raise json.JSONDecodeError(
+            f"Could not extract JSON from response.",
+            text_clean, start,
+        )
 
 
 def _image_to_base64_url(image_path: str) -> str:
@@ -183,47 +174,65 @@ class OpenAIVisionAnalyzer:
         messages: list[dict],
     ) -> dict | list:
         """
-        Call the OpenAI-compatible API with retry logic.
-
-        Returns parsed JSON from the response.
+        Call the OpenAI-compatible API with smart retry logic.
         """
         last_exc = None
+        format_retries_left = 1
+        network_retries_left = 3
 
-        for attempt in range(1, MAX_ATTEMPTS + 1):
+        while format_retries_left >= 0 and network_retries_left >= 0:
             try:
-                print(f"      [Vision] Attempt {attempt}/{MAX_ATTEMPTS} ({self.model})...")
-
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
+                    response_format={"type": "json_object"},
                 )
 
-                text = response.choices[0].message.content
-                if not text or not text.strip():
-                    raise ValueError("Vision model returned empty response.")
+                choice = response.choices[0]
+                text = choice.message.content or ""
+                finish_reason = choice.finish_reason
 
-                return _extract_json_from_text(text)
+                print(f"      [Vision] finish_reason={finish_reason} chars={len(text)}")
 
+                if finish_reason == "length":
+                    raise RuntimeError("finish_reason=length")
+
+                try:
+                    return _extract_json_from_text(text)
+                except json.JSONDecodeError as e:
+                    print("      [Vision] RAW HEAD:", repr(text[:400]))
+                    print("      [Vision] RAW TAIL:", repr(text[-800:]))
+                    raise e
+
+            except json.JSONDecodeError as exc:
+                last_exc = exc
+                format_retries_left -= 1
+                if format_retries_left < 0:
+                    break
+                print(f"      [Vision] Format error, retrying... ({format_retries_left} left)")
             except Exception as exc:
                 last_exc = exc
-                print(
-                    f"      [Vision] Attempt {attempt} failed | "
-                    f"error={str(exc)[:120]}"
-                )
-
-                if (not _is_retryable(exc)) or attempt == MAX_ATTEMPTS:
+                if str(exc) == "finish_reason=length":
+                    print("      [Vision] Output truncated (finish_reason=length), not retrying.")
                     break
-
-                wait = INITIAL_WAIT_SECONDS + ((attempt - 1) * WAIT_INCREMENT_SECONDS)
-                print(f"      [Vision] Retrying in {wait}s...")
+                if getattr(exc, "status_code", None) == 400:
+                    print(f"      [Vision] HTTP 400 Context Length error, not retrying: {exc}")
+                    break
+                
+                if not _is_retryable(exc):
+                    break
+                
+                network_retries_left -= 1
+                if network_retries_left < 0:
+                    break
+                
+                wait = INITIAL_WAIT_SECONDS
+                print(f"      [Vision] Network error {str(exc)[:120]} | Retrying in {wait}s...")
                 time.sleep(wait)
 
-        raise RuntimeError(
-            f"Vision analysis failed after {MAX_ATTEMPTS} attempts. "
-            f"Last error: {last_exc}"
-        ) from last_exc
+        raise RuntimeError(f"Vision analysis failed. Last error: {last_exc}") from last_exc
 
     def analyze_scene_from_frames(
         self,

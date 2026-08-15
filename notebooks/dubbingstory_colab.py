@@ -105,11 +105,13 @@ def main():
         "--model", MODEL_NAME,
         "--port", str(PORT),
         # Catatan Pengaturan GPU:
-        # - Kaggle T4x2 (2 GPU): Gunakan max-model-len 16384 & tensor-parallel-size 2
-        # - Colab T4 1x (1 GPU): Turunkan max-model-len ke 4096 atau 8192, dan HAPUS baris tensor-parallel-size
-        "--max-model-len", "16384", 
-        "--tensor-parallel-size", "2",
-        "--enforce-eager"
+        # - Secara default diset untuk Colab/Kaggle T4 dengan TP=1
+        # - Hapus --enforce-eager untuk throughput yang lebih baik
+        "--max-model-len", "8192", 
+        "--tensor-parallel-size", "1",
+        "--gpu-memory-utilization", "0.85",
+        # Jika Anda sering mengalami OOM, tambahkan flag berikut:
+        # "--enforce-eager"
     ]
     
     # Open a subprocess, redirecting output so it doesn't clutter the main console

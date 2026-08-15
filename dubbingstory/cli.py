@@ -204,25 +204,38 @@ def cmd_segment(args, cfg):
     print("=" * 70)
     print(f"   Video: {video_path}")
 
-    # Scene detection
-    scenes_dir = os.path.join(project_dir, "scenes")
-    scene_list = scene_detect.detect_and_split(
-        video_path=video_path,
-        output_dir=scenes_dir,
-        detector=getattr(cfg, "segment_detector", "adaptive"),
-        threshold=getattr(cfg, "segment_adaptive_threshold", 3.0),
-        min_duration=getattr(cfg, "segment_min_scene_duration", 2.0),
-        merge_short=getattr(cfg, "segment_merge_short_scenes", True),
-    )
+    analysis_mode = getattr(cfg, "vision_analysis_mode", "keyframes")
+    
+    if analysis_mode == "keyframes":
+        # Don't split the video physically, just detect boundaries
+        scene_list = scene_detect.detect_scenes(
+            video_path=video_path,
+            detector=getattr(cfg, "segment_detector", "adaptive"),
+            threshold=getattr(cfg, "segment_adaptive_threshold", 3.0),
+            min_duration=getattr(cfg, "segment_min_scene_duration", 2.0),
+            merge_short=getattr(cfg, "segment_merge_short_scenes", True),
+        )
+    else:
+        # Scene detection + split
+        scenes_dir = os.path.join(project_dir, "scenes")
+        scene_list = scene_detect.detect_and_split(
+            video_path=video_path,
+            output_dir=scenes_dir,
+            detector=getattr(cfg, "segment_detector", "adaptive"),
+            threshold=getattr(cfg, "segment_adaptive_threshold", 3.0),
+            min_duration=getattr(cfg, "segment_min_scene_duration", 2.0),
+            merge_short=getattr(cfg, "segment_merge_short_scenes", True),
+        )
 
     # Keyframe extraction
     keyframes_dir = os.path.join(project_dir, "keyframes")
     all_keyframes = keyframes.extract_all_scenes(
         scenes=scene_list,
-        scenes_dir=scenes_dir,
+        scenes_dir=os.path.join(project_dir, "scenes"),
         output_dir=keyframes_dir,
         strategy=getattr(cfg, "keyframes_strategy", "distributed"),
         max_per_scene=getattr(cfg, "keyframes_max_per_scene", 7),
+        source_video=video_path,
     )
 
     # Save segment manifest

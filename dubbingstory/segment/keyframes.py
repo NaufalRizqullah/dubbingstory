@@ -134,6 +134,67 @@ def _get_interval_positions(
     return positions
 
 
+def extract_keyframes_from_source(
+    video_path: str,
+    scenes: list[dict],
+    output_dir: str,
+    strategy: str = "distributed",
+    max_per_scene: int = 7,
+    max_edge: int = 640,
+) -> dict[str, list[str]]:
+    """Extract keyframes directly from the source video using timestamps."""
+    import numpy as np
+    
+    os.makedirs(output_dir, exist_ok=True)
+    print(f"   🖼️ Extracting keyframes directly from source ({strategy})...")
+    
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        print(f"      ⚠️ Could not open video: {video_path}")
+        return {}
+        
+    all_keyframes = {}
+    
+    for scene in scenes:
+        sid = scene["scene_id"]
+        start = scene["start_time"]
+        end = scene["end_time"]
+        
+        # Avoid exact boundaries
+        margin = min(0.25, max(0.0, (end - start) * 0.05))
+        a = start + margin
+        b = max(a, end - margin)
+        
+        count = max_per_scene
+        timestamps = np.linspace(a, b, count)
+        
+        paths = []
+        for i, ts in enumerate(timestamps):
+            cap.set(cv2.CAP_PROP_POS_MSEC, float(ts) * 1000.0)
+            ok, frame = cap.read()
+            if not ok:
+                continue
+                
+            # Resize
+            h, w = frame.shape[:2]
+            scale = min(1.0, max_edge / max(h, w))
+            if scale < 1.0:
+                nw = max(32, int(round((w * scale) / 32) * 32))
+                nh = max(32, int(round((h * scale) / 32) * 32))
+                frame = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_AREA)
+
+            path = os.path.join(output_dir, sid, f"{sid}_kf{i:02d}.jpg")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            cv2.imwrite(path, frame, [cv2.IMWRITE_JPEG_QUALITY, 82])
+            paths.append(path)
+            
+        all_keyframes[sid] = paths
+        print(f"      ✅ {sid}: {len(paths)} keyframes")
+        
+    cap.release()
+    return all_keyframes
+
+
 def extract_all_scenes(
     scenes: list[dict],
     scenes_dir: str,
@@ -141,9 +202,13 @@ def extract_all_scenes(
     strategy: str = "distributed",
     interval_seconds: float = 2.0,
     max_per_scene: int = 7,
+    source_video: str = "",
 ) -> dict[str, list[str]]:
     """
     Extract keyframes for all scenes.
+    
+    If source_video is provided, it extracts directly from it.
+    """
 
     Parameters
     ----------
@@ -163,6 +228,15 @@ def extract_all_scenes(
     dict[str, list[str]]
         Mapping of scene_id → list of keyframe paths.
     """
+    if source_video and os.path.exists(source_video):
+        return extract_keyframes_from_source(
+            video_path=source_video,
+            scenes=scenes,
+            output_dir=output_dir,
+            strategy=strategy,
+            max_per_scene=max_per_scene,
+        )
+
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"   🖼️ Extracting keyframes (strategy: {strategy})...")

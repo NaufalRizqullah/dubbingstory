@@ -6,6 +6,7 @@ Coordinates per-scene visual analysis and builds the final storyboard.
 
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 from dubbingstory.vision.gemini_analyzer import GeminiVideoAnalyzer
 from dubbingstory.vision.openai_vision import OpenAIVisionAnalyzer
@@ -176,7 +177,7 @@ def run_analysis(
     cache_dir = os.path.join(project_dir, "vision_cache")
     os.makedirs(cache_dir, exist_ok=True)
 
-    for scene in scenes:
+    def analyze_scene(scene):
         scene_id = scene["scene_id"]
         cache_path = os.path.join(cache_dir, f"{scene_id}_analysis.json")
 
@@ -184,20 +185,15 @@ def run_analysis(
         if os.path.exists(cache_path):
             print(f"   ⏩ {scene_id}: cached, skip.")
             with open(cache_path, "r", encoding="utf-8") as f:
-                analysis = json.load(f)
-            scene_analyses.append(analysis)
-            continue
+                return json.load(f)
 
         time_range = f"{scene['start_time']:.1f}s - {scene['end_time']:.1f}s"
-
-        # Get subtitle text and word-level data for this scene
         scene_subtitle, scene_words = _get_subtitle_for_scene(
             subtitle_entries,
             scene["start_time"],
             scene["end_time"],
         )
 
-        # Build prompt
         kf_paths = keyframes_data.get(scene_id, [])
         prompt = build_scene_prompt(
             scene_id=scene_id,
@@ -208,7 +204,6 @@ def run_analysis(
             subtitle_text=scene_subtitle,
         )
 
-        # Analyze
         try:
             if analysis_mode == "video_upload" and scene.get("file_path"):
                 analysis = analyzer.analyze_scene_from_video(
@@ -221,27 +216,22 @@ def run_analysis(
                     prompt=prompt,
                 )
 
-            # Add scene timing info
             analysis["start_time"] = scene["start_time"]
             analysis["end_time"] = scene["end_time"]
             analysis["duration"] = scene["duration"]
-
-            # Add word-level ASR data if available
             if scene_words:
                 analysis["words"] = scene_words
 
-            # Cache result
             with open(cache_path, "w", encoding="utf-8") as f:
                 json.dump(analysis, f, ensure_ascii=False, indent=2)
 
-            scene_analyses.append(analysis)
             conf = analysis.get("confidence", 0)
             print(f"   ✅ {scene_id}: analyzed (confidence: {conf:.2f})")
+            return analysis
 
         except Exception as e:
             print(f"   ❌ {scene_id}: analysis failed — {e}")
-            # Create a minimal fallback analysis
-            fallback_analysis = {
+            return {
                 "scene_id": scene_id,
                 "time_range": time_range,
                 "start_time": scene["start_time"],
@@ -257,7 +247,10 @@ def run_analysis(
                 "confidence": 0.0,
                 "error": str(e),
             }
-            scene_analyses.append(fallback_analysis)
+
+    workers = getattr(cfg, "vision_concurrency", 2)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        scene_analyses = list(pool.map(analyze_scene, scenes))
 
     # ── Step 2: Temporal flow analysis ──────────────────────────────────
     print(f"\n   🔄 Building temporal flow understanding...")

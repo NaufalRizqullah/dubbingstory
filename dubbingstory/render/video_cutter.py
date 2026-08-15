@@ -43,7 +43,7 @@ def _extract_clip(
         )
         return True
     except subprocess.CalledProcessError as e:
-        stderr = e.stderr.decode("utf-8", errors="replace")[:300] if e.stderr else ""
+        stderr = (e.stderr.decode("utf-8", errors="replace") if e.stderr else "")
         print(f"      ❌ FFmpeg clip extraction failed: {stderr}")
         return False
 
@@ -109,17 +109,15 @@ def cut_and_concat(
     concat_list_path = os.path.join(clips_dir, "concat_list.txt")
     with open(concat_list_path, "w", encoding="utf-8") as f:
         for clip_path in clip_paths:
-            # FFmpeg concat demuxer requires escaped paths
-            safe_path = clip_path.replace("\\", "/").replace("'", "'\\''")
-            f.write(f"file '{safe_path}'\n")
+            # Files are in the same directory as concat_list.txt
+            f.write(f"file '{os.path.basename(clip_path)}'\n")
 
     concat_cmd = [
         "ffmpeg", "-y",
         "-f", "concat",
         "-safe", "0",
         "-i", concat_list_path,
-        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-        "-c:a", "aac", "-b:a", "192k",
+        "-c", "copy",
         "-movflags", "+faststart",
         output_path,
     ]
@@ -132,8 +130,8 @@ def cut_and_concat(
             check=True,
         )
     except subprocess.CalledProcessError as e:
-        stderr = e.stderr.decode("utf-8", errors="replace")[:500] if e.stderr else ""
-        raise RuntimeError(f"FFmpeg concat failed: {stderr}") from e
+        stderr = (e.stderr.decode("utf-8", errors="replace") if e.stderr else "")
+        raise RuntimeError(f"FFmpeg concat failed:\n{stderr[-5000:]}") from e
 
     # Cleanup temp clips
     for clip_path in clip_paths:

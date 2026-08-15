@@ -12,6 +12,18 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Minor (x.Y.z)**: Incremented for new functionality introduced in a backward-compatible manner.
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.3.0] - 2026-08-15
+
+### Added
+
+- **Vision Concurrency**: Scene vision analyses are now processed concurrently using `ThreadPoolExecutor`, drastically speeding up the pipeline.
+- Unified Kaggle and Colab notebook experience with improved auto-detect logic for T4 GPUs.
+
+### Changed
+
+- **Pipeline Optimization**: Skipped physical splitting of scenes in `keyframes` mode. Keyframes are now extracted directly from the source video with automatic resizing, eliminating hundreds of unnecessary video renders.
+- **FFmpeg Concat Optimization**: Replaced relative paths with basenames and used `-c copy` in `video_cutter.py` to prevent redundant re-encoding and path resolution errors.
+- **Vision Parsing & Stability**: Enforced structured JSON output in Qwen/vLLM integration and implemented a robust regex-based fallback decoder. Separated retry logic for network vs. format errors.
 
 ## [0.2.1] - 2026-08-14
 
