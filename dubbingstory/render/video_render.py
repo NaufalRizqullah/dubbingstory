@@ -60,7 +60,7 @@ def render_final(
     narration_audio: str,
     output_path: str,
     subtitle_path: str | None = None,
-    audio_strategy: str = "duck",
+    audio_strategy: str = "mute_original",
     original_volume: float = 0.15,
     burn_subs: bool = False,
     target_ratio: str | None = None,
@@ -172,7 +172,7 @@ def render_project(
     if ratios is None:
         ratios = getattr(cfg, "render_ratios", ["16:9"])
 
-    audio_strategy = getattr(cfg, "render_audio_strategy", "duck")
+    audio_strategy = getattr(cfg, "render_audio_strategy", "mute_original")
     original_volume = getattr(cfg, "render_original_volume", 0.15)
     burn_subs = getattr(cfg, "render_burn_subtitles", False)
 

@@ -10,6 +10,7 @@ NARRATION_PROMPT = """You are a professional video narrator creating a {style_na
 
 VIDEO CONTEXT:
 Title: {video_title}
+Description: {video_description}
 Summary: {video_summary}
 Narrative arc: {narrative_arc}
 Domain: {domain}
@@ -28,17 +29,18 @@ SCENES TO NARRATE:
 {scenes_json}
 
 CRITICAL RULES:
-1. Write narration text for EACH scene based on its visual analysis and narrative cue
-2. Narration must match the scene duration — roughly 2-3 words per second
-3. Scene duration is provided; keep narration proportional
-4. Use hedging language for low-confidence scenes (confidence < {hedging_threshold}):
+1. Write narration text for EACH scene based on its visual analysis and narrative cue.
+2. Narration MUST tell a coherent STORY that flows naturally based on the Video Title and Description. DO NOT just react to individual scenes. Avoid repetitive reactive phrases like "Look at this!", "Wow!", "See here!". Instead, explain WHAT is happening in the overarching story (e.g., "The mechanic carefully dismantles the transmission...").
+3. Narration must match the scene duration — roughly 2-3 words per second.
+4. Scene duration is provided; keep narration proportional.
+5. Use hedging language for low-confidence scenes (confidence < {hedging_threshold}):
    - Indonesian: "terlihat...", "kemungkinan...", "tampaknya..."
    - English: "appears to...", "what seems to be...", "likely..."
-5. Narration should FLOW naturally from one scene to the next
-6. Do NOT describe UI elements, watermarks, or video metadata
-7. Focus on the STORY, not frame-by-frame description
-8. For scenes with very low importance (< 0.3), keep narration brief or skip
-9. Every narration segment must be standalone meaningful
+6. Narration should FLOW naturally from one scene to the next, maintaining story continuity.
+7. Do NOT describe UI elements, watermarks, or video metadata.
+8. Focus on the STORY, not frame-by-frame description.
+9. For scenes with very low importance (< 0.3), keep narration brief or skip.
+10. Every narration segment must be standalone meaningful but part of the larger story.
 
 Return ONLY a valid JSON array:
 [
@@ -111,6 +113,7 @@ def build_narration_prompt(
     return NARRATION_PROMPT.format(
         style_name=style_config.get("name", style),
         video_title=storyboard.get("video_title", ""),
+        video_description=storyboard.get("video_description", ""),
         video_summary=storyboard.get("video_summary", ""),
         narrative_arc=storyboard.get("narrative_arc", ""),
         domain=storyboard.get("domain", ""),
@@ -136,6 +139,7 @@ but only {selected_scenes} key scenes ({summary_duration}s) will appear in the f
 
 VIDEO CONTEXT (FULL):
 Title: {video_title}
+Description: {video_description}
 Summary: {video_summary}
 Narrative arc: {narrative_arc}
 Domain: {domain}
@@ -153,17 +157,17 @@ SELECTED SCENES TO NARRATE (in chronological order):
 {scenes_json}
 
 CRITICAL RULES FOR SUMMARY MODE:
-1. Write narration ONLY for the selected scenes listed above
-2. This is a HIGHLIGHT RECAP — narration must tell a coherent condensed STORY
-3. Opening scene: start with a strong hook that introduces the topic
-4. Between scenes: use brief connecting phrases because viewers will see jump-cuts
-   - Indonesian examples: "Selanjutnya...", "Dan yang paling menarik...", "Lalu..."
-   - English examples: "Next up...", "The key moment...", "And then..."
-5. Closing scene: wrap up with a satisfying conclusion or takeaway
-6. Keep narration TIGHT — roughly 2-3 words per second
-7. Each segment must make sense even without seeing the skipped scenes
-8. Focus on the HIGHLIGHTS and most interesting moments
-9. For low-confidence scenes (< {hedging_threshold}), use hedging language
+1. Write narration ONLY for the selected scenes listed above.
+2. This is a HIGHLIGHT RECAP — narration MUST tell a coherent condensed STORY based on the Video Title and Description. DO NOT just react to individual scenes. Avoid repetitive reactive phrases like "Look at this!", "Wow!", "See here!". Tell the audience what is actually happening (e.g., "They began by stripping down the broken engine...").
+3. Opening scene: start with a strong hook that introduces the core topic from the Video Title.
+4. Between scenes: use brief connecting phrases because viewers will see jump-cuts.
+   - Indonesian examples: "Lalu mereka melanjutkan...", "Dan yang paling krusial...", "Setelah itu..."
+   - English examples: "Next they proceed to...", "The crucial part...", "Afterwards..."
+5. Closing scene: wrap up with a satisfying conclusion or takeaway.
+6. Keep narration TIGHT — roughly 2-3 words per second.
+7. Each segment must make sense even without seeing the skipped scenes, but still flow as one complete story.
+8. Focus on the HIGHLIGHTS and most interesting moments.
+9. For low-confidence scenes (< {hedging_threshold}), use hedging language.
 
 Return ONLY a valid JSON array:
 [
@@ -246,6 +250,7 @@ def build_summary_narration_prompt(
         selected_scenes=len(selected_scenes),
         summary_duration=round(summary_duration),
         video_title=storyboard.get("video_title", ""),
+        video_description=storyboard.get("video_description", ""),
         video_summary=storyboard.get("video_summary", ""),
         narrative_arc=storyboard.get("narrative_arc", ""),
         domain=storyboard.get("domain", ""),

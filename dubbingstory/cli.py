@@ -405,6 +405,17 @@ def cmd_dub(args, cfg):
         cfg=cfg,
     )
 
+    # Backup TTS audio to project dir
+    import glob
+    import shutil
+    audio_files = glob.glob(os.path.join(audio_dir, "audio_*.wav"))
+    for audio_path in audio_files:
+        basename = os.path.basename(audio_path)
+        lang = basename.replace("audio_", "").replace(".wav", "")
+        backup_path = os.path.join(project_dir, f"backup_tts_full_{lang}.wav")
+        shutil.copy2(audio_path, backup_path)
+        print(f"   💾 TTS Backup saved to: {backup_path}")
+
     print(f"\n✅ TTS dubbing selesai!")
     print(f"   Audio: {audio_dir}")
 
@@ -572,9 +583,20 @@ def cmd_summary(args, cfg):
         audio_prefix="summary_audio_",
     )
 
+    # Backup summary TTS audio
+    import glob
+    import shutil
+    summary_audio_files = glob.glob(os.path.join(audio_dir, "summary_audio_*.wav"))
+    for audio_path in summary_audio_files:
+        basename = os.path.basename(audio_path)
+        lang = basename.replace("summary_audio_", "").replace(".wav", "")
+        backup_path = os.path.join(project_dir, f"backup_tts_summary_{lang}.wav")
+        shutil.copy2(audio_path, backup_path)
+        print(f"   💾 Summary TTS Backup saved to: {backup_path}")
+
     # ── Step 6: Render final summary video ───────────────────────────────
     ratios = getattr(cfg, "render_ratios", ["16:9"])
-    audio_strategy = getattr(cfg, "render_audio_strategy", "replace")
+    audio_strategy = getattr(cfg, "render_audio_strategy", "mute_original")
     burn_subs = getattr(cfg, "render_burn_subtitles", False)
 
     import glob

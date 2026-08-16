@@ -69,7 +69,7 @@ def _create_analyzer(cfg):
         base_url = getattr(cfg, "vision_openai_base_url", "http://127.0.0.1:8000/v1")
         model = getattr(cfg, "vision_openai_model", "Qwen/Qwen3-VL-2B-Instruct")
         temperature = getattr(cfg, "vision_openai_temperature", 0.2)
-        max_tokens = getattr(cfg, "vision_openai_max_tokens", 2048)
+        max_tokens = getattr(cfg, "vision_openai_max_tokens", 1024)
 
         return OpenAIVisionAnalyzer(
             api_key=api_key,

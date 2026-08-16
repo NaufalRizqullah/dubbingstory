@@ -13,7 +13,7 @@ from dubbingstory.tts.base_engine import BaseTTSEngine
 from dubbingstory.tts.piper_engine import PiperTTSEngine
 
 
-def get_engine(name: str = "piper", cfg=None) -> BaseTTSEngine:
+def get_engine(name: str = "edge", cfg=None) -> BaseTTSEngine:
     """
     Get a TTS engine instance by name.
 
@@ -55,7 +55,7 @@ def get_engine(name: str = "piper", cfg=None) -> BaseTTSEngine:
 def generate_all_audio(
     scripts_dir: str,
     audio_dir: str,
-    engine_name: str = "piper",
+    engine_name: str = "edge",
     cfg=None,
     script_prefix: str = "script_",
     audio_prefix: str = "audio_",

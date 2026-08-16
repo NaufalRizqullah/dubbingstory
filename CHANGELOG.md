@@ -12,6 +12,19 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Minor (x.Y.z)**: Incremented for new functionality introduced in a backward-compatible manner.
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [1.0.1] - 2026-08-16
+
+### Added
+- **TTS Backup**: Automatically exports/backs up the generated TTS audio files (`backup_tts_full_xxx.wav` / `backup_tts_summary_xxx.wav`) to the project root directory.
+
+### Changed
+- **Default TTS Engine**: Changed the default TTS engine across the pipeline from Piper to Edge TTS for better quality and stability.
+- **Audio Mixing Strategy**: Changed the default audio strategy to `mute_original` to prevent the original video audio from interfering with the new voice-over.
+- **Script Generation Prompts**: Enhanced narration prompts to include video description context. Explicitly strictly forbade the model from generating disconnected reactive phrases (like "Look at this!"), ensuring it writes a cohesive, natural story based on the video's actual context.
+
+### Fixed
+- **Vision Context Length (HTTP 400)**: Reduced `vision_openai_max_tokens` from 2048 to 1024 to prevent vLLM from hitting the 8192 max context limit during temporal flow analysis, fixing the `finish_reason=length` and HTTP 400 errors.
+
 ## [0.3.2] - 2026-08-16
 
 ### Added

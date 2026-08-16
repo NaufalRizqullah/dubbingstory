@@ -74,7 +74,7 @@ def run_pipeline(video_input, project_name="my_project"):
         "--vision-provider", "openai",
         "--vision-model", MODEL_NAME,
         "--vision-base-url", BASE_URL,
-        "--engine", "piper", # Use Piper for local TTS (no API cost)
+        "--engine", "edge", # Gunakan Edge-TTS (gratis dan bagus)
         "--max-keyframes", "3",
         "--min-scene-duration", "5.0",
         "--scene-threshold", "5.0"
