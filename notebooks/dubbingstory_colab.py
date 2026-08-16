@@ -36,6 +36,7 @@ import json
 MODEL_NAME = "Qwen/Qwen3-VL-2B-Instruct" 
 PORT = 8000
 BASE_URL = f"http://127.0.0.1:{PORT}/v1"
+MAX_MODEL_LEN = 12288
 
 def wait_for_server(url, timeout=300):
     """Wait for the vLLM server to become healthy."""
@@ -74,6 +75,7 @@ def run_pipeline(video_input, project_name="my_project"):
         "--vision-provider", "openai",
         "--vision-model", MODEL_NAME,
         "--vision-base-url", BASE_URL,
+        "--vision-max-tokens", "2048",
         "--engine", "edge", # Gunakan Edge-TTS (gratis dan bagus)
         "--max-keyframes", "3",
         "--min-scene-duration", "5.0",
@@ -107,7 +109,7 @@ def main():
         # Catatan Pengaturan GPU:
         # - Secara default diset untuk Colab/Kaggle T4 dengan TP=1
         # - Hapus --enforce-eager untuk throughput yang lebih baik
-        "--max-model-len", "8192", 
+        "--max-model-len", str(MAX_MODEL_LEN), 
         "--tensor-parallel-size", "1",
         "--gpu-memory-utilization", "0.85",
         "--enforce-eager", # Diaktifkan kembali untuk stabilitas

@@ -655,7 +655,7 @@ def main():
     p_run.add_argument("--style", type=str, default=None,
                         choices=["viral_fb", "documentary", "technical", "calm_educational"])
     p_run.add_argument("--lang", nargs="+", default=None, help="Languages (e.g., id en)")
-    p_run.add_argument("--engine", type=str, default=None, choices=["edge", "piper", "voxcpm2"])
+    p_run.add_argument("--engine", type=str, default="edge", choices=["edge"], help="TTS engine (default: edge)")
     p_run.add_argument("--ratio", nargs="+", default=None, help="Output ratios (16:9, 9:16)")
     p_run.add_argument(
         "--mode", type=str, default="full",
@@ -682,6 +682,10 @@ def main():
     p_run.add_argument(
         "--vision-base-url", type=str, default=None,
         help="Vision API base URL (e.g. 'http://127.0.0.1:8000/v1')"
+    )
+    p_run.add_argument(
+        "--vision-max-tokens", type=int, default=None,
+        help="Vision max output tokens (default: 2048)"
     )
     p_run.add_argument(
         "--quality", "-q", type=str, default=None,
@@ -808,6 +812,10 @@ def main():
         "--vision-base-url", type=str, default=None,
         help="Vision API base URL (e.g. 'http://127.0.0.1:8000/v1')"
     )
+    p_analyze.add_argument(
+        "--vision-max-tokens", type=int, default=None,
+        help="Vision max output tokens (default: 2048)"
+    )
 
     # ── narrate ───────────────────────────────────────────────────────────
     p_narrate = subparsers.add_parser("narrate", help="Generate narration scripts")
@@ -819,7 +827,7 @@ def main():
     # ── dub ───────────────────────────────────────────────────────────────
     p_dub = subparsers.add_parser("dub", help="Generate TTS audio")
     p_dub.add_argument("--project", "-p", type=str, required=True)
-    p_dub.add_argument("--engine", type=str, default=None, choices=["edge", "piper", "voxcpm2"])
+    p_dub.add_argument("--engine", type=str, default="edge", choices=["edge"], help="TTS engine (default: edge)")
 
     # ── render ────────────────────────────────────────────────────────────
     p_render = subparsers.add_parser("render", help="Render final video")
@@ -846,6 +854,8 @@ def main():
         cfg.vision_openai_model = args.vision_model
     if hasattr(args, "vision_base_url") and args.vision_base_url:
         cfg.vision_openai_base_url = args.vision_base_url
+    if hasattr(args, "vision_max_tokens") and args.vision_max_tokens is not None:
+        cfg.vision_openai_max_tokens = args.vision_max_tokens
 
     # Summary mode overrides
     if hasattr(args, "summary_duration") and args.summary_duration is not None:

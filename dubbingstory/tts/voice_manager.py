@@ -10,7 +10,6 @@ import os
 import subprocess
 
 from dubbingstory.tts.base_engine import BaseTTSEngine
-from dubbingstory.tts.piper_engine import PiperTTSEngine
 
 
 def get_engine(name: str = "edge", cfg=None) -> BaseTTSEngine:
@@ -41,11 +40,6 @@ def get_engine(name: str = "edge", cfg=None) -> BaseTTSEngine:
             if edge_en:
                 custom_voices["en"] = edge_en
         return EdgeTTSEngine(custom_voices=custom_voices or None)
-    elif name == "piper":
-        return PiperTTSEngine()
-    elif name == "voxcpm2":
-        from dubbingstory.tts.voxcpm2_engine import VoxCPM2Engine
-        return VoxCPM2Engine()
     else:
         print(f"⚠️ Unknown TTS engine '{name}', falling back to Edge-TTS.")
         from dubbingstory.tts.edge_tts_engine import EdgeTTSEngine
