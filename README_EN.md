@@ -17,7 +17,7 @@ Inspired by the accurately narrated and dubbed Pakistani repair videos on Facebo
 - 👁️ **Visual Understanding (Cloud & Local)** — Understand visual context using **Gemini API** (default) or open-source HuggingFace models (like **Qwen3-VL**) via OpenAI-compatible endpoints. Zero API cost for Vision!
 - ☁️ **Kaggle / Colab Ready** — Includes a unified script (`dubbingstory_colab.py`) to run the local vision model for free on T4 cloud GPUs.
 - 📝 **Bilingual Narration** — Generate narration scripts in Indonesian & English.
-- 🎙️ **TTS Dubbing** — Text-to-Speech support with offline (Piper TTS for CPU) and advanced (VoxCPM2 for GPU) engines.
+- 🎙️ **TTS Dubbing** — Text-to-Speech support powered by **Edge TTS** by default for maximum stability in cloud environments (Kaggle/Colab).
 - 🎬 **Video Render** — Final video render with audio mix and optional subtitles for 16:9 & 9:16 aspect ratios.
 - ✂️ **Highlight Recap Mode** — Automatically cut and condense long videos into short highlight reels using the `--mode summary` option.
 
@@ -50,7 +50,7 @@ python main.py run --input video.mp4
 dubbingstory run --input video.mp4
 
 # Full pipeline — using local Qwen3-VL via vLLM
-dubbingstory run --input video.mp4 --vision-provider openai --engine piper
+dubbingstory run --input video.mp4 --vision-provider openai --engine edge
 
 # Full pipeline — YouTube (with rights)
 dubbingstory run --url "https://youtube.com/..." --i-have-rights
@@ -63,7 +63,7 @@ dubbingstory ingest --input video.mp4
 dubbingstory segment --project video
 dubbingstory analyze --project video --vision-provider openai
 dubbingstory narrate --project video --style viral_fb --lang id en
-dubbingstory dub --project video --engine piper
+dubbingstory dub --project video --engine edge
 dubbingstory render --project video --ratio 16:9 9:16
 ```
 
@@ -85,7 +85,7 @@ Run the entire process from start to finish.
 | `--summary-max-scenes`| `auto` | Max number of scenes for summary mode. |
 | `--style` | `viral_fb` | Narration style (`viral_fb`, `documentary`, `technical`, `calm_educational`). |
 | `--lang` | `id en` | Target languages for narration. |
-| `--engine` | `piper` | TTS Engine to use (`piper`, `voxcpm2`). |
+| `--engine` | `edge` | TTS Engine to use (`edge`). |
 | `--ratio` | `16:9` | Output video aspect ratios (e.g., `16:9 9:16`). |
 | `--vision-provider` | `gemini` | Vision API choice (`gemini` or `openai` for local vLLM/Qwen). |
 | `--vision-model` | - | Override model name if using `--vision-provider openai`. |
@@ -95,7 +95,7 @@ Run the entire process from start to finish.
 
 **Example:**
 ```bash
-dubbingstory run --url "https://youtube.com/watch?v=..." --i-have-rights --style documentary --lang id --engine piper --ratio 16:9
+dubbingstory run --url "https://youtube.com/watch?v=..." --i-have-rights --style documentary --lang id --engine edge --ratio 16:9
 ```
 
 ---
@@ -169,11 +169,11 @@ Convert scripts to audio using AI Voice.
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `--project`, `-p` | **(Required)** | Project name. |
-| `--engine` | `piper` | TTS engine (`piper`, `voxcpm2`). |
+| `--engine` | `edge` | TTS engine (`edge`). |
 
 **Example:**
 ```bash
-dubbingstory dub --project my_awesome_project --engine piper
+dubbingstory dub --project my_awesome_project --engine edge
 ```
 
 ---
@@ -237,8 +237,7 @@ outputs/{project_name}/
 
 | Engine | GPU | License | Indonesian Support | Quality |
 |--------|-----|---------|--------------------|---------|
-| **Piper** (MVP) | ❌ CPU | MIT | ✅ | Medium (22kHz) |
-| **VoxCPM2** (Advanced) | ✅ ~8GB | Apache-2.0 | ✅ Native | Studio (48kHz) |
+| **Edge TTS** | ❌ Online API | Free | ✅ Native | Excellent |
 
 ## 🎬 Film Support
 

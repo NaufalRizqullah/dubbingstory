@@ -17,7 +17,7 @@ Terinspirasi dari video repair Pakistan di Facebook yang di-dubbing dan dinarasi
 - 👁️ **Visual Understanding (Cloud & Local)** — Pahami konteks visual menggunakan **Gemini API** (default) atau model HuggingFace open-source (seperti **Qwen3-VL**) via integrasi OpenAI-compatible endpoint. Bebas biaya API Vision!
 - ☁️ **Kaggle / Colab Ready** — Disediakan skrip terintegrasi (`dubbingstory_colab.py`) untuk menjalankan model vision lokal secara gratis di cloud GPU T4.
 - 📝 **Bilingual Narration** — Membuat script narasi dalam bahasa Indonesia & Inggris.
-- 🎙️ **TTS Dubbing** — Dukungan Text-to-Speech offline (Piper TTS untuk CPU) dan advanced (VoxCPM2 untuk GPU).
+- 🎙️ **TTS Dubbing** — Dukungan Text-to-Speech online menggunakan **Edge TTS** secara bawaan untuk stabilitas tinggi di cloud (Kaggle/Colab).
 - 🎬 **Video Render** — Render video final dengan mix audio dan subtitle (opsional) untuk format 16:9 & 9:16.
 - ✂️ **Highlight Recap Mode** — Fitur untuk merangkum video panjang menjadi video pendek berisi momen-momen terpenting (gunakan `--mode summary`).
 
@@ -50,7 +50,7 @@ python main.py run --input video.mp4
 dubbingstory run --input video.mp4
 
 # Pipa lengkap — menggunakan Qwen3-VL lokal via vLLM
-dubbingstory run --input video.mp4 --vision-provider openai --engine piper
+dubbingstory run --input video.mp4 --vision-provider openai --engine edge
 
 # Pipa lengkap — YouTube (dengan pernyataan hak cipta)
 dubbingstory run --url "https://youtube.com/..." --i-have-rights
@@ -63,7 +63,7 @@ dubbingstory ingest --input video.mp4
 dubbingstory segment --project video
 dubbingstory analyze --project video --vision-provider openai
 dubbingstory narrate --project video --style viral_fb --lang id en
-dubbingstory dub --project video --engine piper
+dubbingstory dub --project video --engine edge
 dubbingstory render --project video --ratio 16:9 9:16
 ```
 
@@ -85,7 +85,7 @@ Jalankan seluruh proses dari awal sampai akhir.
 | `--summary-max-scenes`| `auto` | Maksimal scene yang diambil untuk mode summary. |
 | `--style` | `viral_fb` | Gaya narasi (`viral_fb`, `documentary`, `technical`, `calm_educational`). |
 | `--lang` | `id en` | Bahasa target narasi. |
-| `--engine` | `piper` | Mesin TTS yang digunakan (`piper`, `voxcpm2`). |
+| `--engine` | `edge` | Mesin TTS yang digunakan (`edge`). |
 | `--ratio` | `16:9` | Rasio aspek keluaran video (misal: `16:9 9:16`). |
 | `--vision-provider` | `gemini` | Pilihan API Vision (`gemini` atau `openai` untuk vLLM/Qwen lokal). |
 | `--vision-model` | - | Override nama model jika menggunakan `--vision-provider openai`. |
@@ -95,7 +95,7 @@ Jalankan seluruh proses dari awal sampai akhir.
 
 **Contoh:**
 ```bash
-dubbingstory run --url "https://youtube.com/watch?v=..." --i-have-rights --style documentary --lang id --engine piper --ratio 16:9
+dubbingstory run --url "https://youtube.com/watch?v=..." --i-have-rights --style documentary --lang id --engine edge --ratio 16:9
 ```
 
 ---
@@ -169,11 +169,11 @@ Ubah skrip menjadi audio menggunakan AI Voice.
 | Argumen | Default | Deskripsi |
 |---------|---------|-----------|
 | `--project`, `-p` | **(Wajib)** | Nama proyek. |
-| `--engine` | `piper` | Mesin TTS (`piper`, `voxcpm2`). |
+| `--engine` | `edge` | Mesin TTS (`edge`). |
 
 **Contoh:**
 ```bash
-dubbingstory dub --project proyek_keren --engine piper
+dubbingstory dub --project proyek_keren --engine edge
 ```
 
 ---
@@ -237,8 +237,7 @@ outputs/{project_name}/
 
 | Mesin | GPU | Lisensi | Dukungan Bahasa Indonesia | Kualitas |
 |-------|-----|---------|---------------------------|----------|
-| **Piper** (MVP) | ❌ CPU | MIT | ✅ | Menengah (22kHz) |
-| **VoxCPM2** (Advanced) | ✅ ~8GB | Apache-2.0 | ✅ Bawaan | Studio (48kHz) |
+| **Edge TTS** | ❌ API Online | Gratis | ✅ Bawaan | Sangat Baik |
 
 ## 🎬 Dukungan Film
 
