@@ -77,6 +77,7 @@ def extract_video_info(url: str) -> dict:
         "quiet": True,
         "skip_download": True,
         "no_warnings": True,
+        "extractor_args": {"youtube": ["player_client=android,web"]},
     }
 
     with YoutubeDL(ydl_opts) as ydl:
@@ -146,6 +147,7 @@ def download_video(
         "outtmpl": output_path,
         "quiet": True,
         "merge_output_format": "mp4",
+        "extractor_args": {"youtube": ["player_client=android,web"]},
     }
 
     with YoutubeDL(ydl_opts) as ydl:
@@ -208,6 +210,7 @@ def download_subtitles(
             "subtitleslangs": languages,
             "subtitlesformat": "srt",
             "outtmpl": os.path.join(output_dir, "yt_subs"),
+            "extractor_args": {"youtube": ["player_client=android,web"]},
             **opts_extra,
         }
 
@@ -236,6 +239,7 @@ def download_subtitles(
                             "subtitleslangs": [lang],
                             "subtitlesformat": "srt",
                             "outtmpl": os.path.join(output_dir, "yt_subs"),
+                            "extractor_args": {"youtube": ["player_client=android,web"]},
                         }
                         with YoutubeDL(dl_opts) as ydl2:
                             ydl2.download([url])

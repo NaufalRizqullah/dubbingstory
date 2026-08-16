@@ -110,8 +110,7 @@ def main():
         "--max-model-len", "8192", 
         "--tensor-parallel-size", "1",
         "--gpu-memory-utilization", "0.85",
-        # Jika Anda sering mengalami OOM, tambahkan flag berikut:
-        # "--enforce-eager"
+        "--enforce-eager", # Diaktifkan kembali untuk stabilitas
     ]
     
     # Open a subprocess, redirecting output so it doesn't clutter the main console

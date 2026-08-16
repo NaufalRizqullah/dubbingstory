@@ -12,6 +12,12 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Minor (x.Y.z)**: Incremented for new functionality introduced in a backward-compatible manner.
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.3.1] - 2026-08-16
+
+### Fixed
+
+- **YouTube Ingest (yt-dlp)**: Added client spoofing (`player_client=android,web`) to bypass widespread `HTTP Error 403: Forbidden` blocks from YouTube's anti-bot measures, particularly for Kaggle/Colab IP environments.
+
 ## [0.3.0] - 2026-08-15
 
 ### Added
