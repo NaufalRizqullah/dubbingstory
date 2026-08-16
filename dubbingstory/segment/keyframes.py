@@ -208,7 +208,6 @@ def extract_all_scenes(
     Extract keyframes for all scenes.
     
     If source_video is provided, it extracts directly from it.
-    """
 
     Parameters
     ----------
