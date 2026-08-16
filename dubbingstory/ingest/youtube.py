@@ -27,6 +27,17 @@ def _resolve_height(download_height: str | int) -> str | int:
     return QUALITY_MAP.get(label, label)
 
 
+def _apply_cookies(opts: dict, cookies: str | None) -> None:
+    """Apply cookies to yt-dlp options dictionary."""
+    if not cookies:
+        return
+    if cookies.endswith(".txt") or os.path.isfile(cookies):
+        opts["cookiefile"] = cookies
+    else:
+        # Browser format: (browser, profile, keyring, container)
+        opts["cookiesfrombrowser"] = (cookies, None, None, None)
+
+
 def _build_format_selector(download_height: str | int = "1080") -> str:
     """
     Build yt-dlp format selector string.
@@ -64,7 +75,7 @@ def _build_format_selector(download_height: str | int = "1080") -> str:
     )
 
 
-def extract_video_info(url: str) -> dict:
+def extract_video_info(url: str, cookies: str | None = None) -> dict:
     """
     Extract video metadata without downloading.
 
@@ -79,6 +90,7 @@ def extract_video_info(url: str) -> dict:
         "no_warnings": True,
         "extractor_args": {"youtube": ["player_client=android,web"]},
     }
+    _apply_cookies(ydl_opts, cookies)
 
     with YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -99,6 +111,7 @@ def download_video(
     url: str,
     output_dir: str,
     download_height: str | int = "1080",
+    cookies: str | None = None,
 ) -> str:
     """
     Download a video from YouTube (or other supported sites) using yt-dlp.
@@ -111,6 +124,8 @@ def download_video(
         Directory to save the downloaded video.
     download_height : str | int
         Target resolution: "720", "1080" (default), "2k", "4k", "max".
+    cookies : str | None
+        Cookies from browser name (e.g., "chrome") or path to cookies.txt.
 
     Returns
     -------
@@ -128,7 +143,7 @@ def download_video(
 
     # Extract metadata first
     try:
-        info = extract_video_info(url)
+        info = extract_video_info(url, cookies=cookies)
         print(f"      📋 Title: {info['title'][:60]}...")
         print(f"      📋 Duration: {info['duration']}s")
         print(f"      📋 Uploader: {info['uploader']}")
@@ -149,6 +164,7 @@ def download_video(
         "merge_output_format": "mp4",
         "extractor_args": {"youtube": ["player_client=android,web"]},
     }
+    _apply_cookies(ydl_opts, cookies)
 
     with YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
@@ -167,6 +183,7 @@ def download_subtitles(
     url: str,
     output_dir: str,
     languages: list[str] | None = None,
+    cookies: str | None = None,
 ) -> str | None:
     """
     Download subtitles (auto-generated or manual) from YouTube via yt-dlp.
@@ -213,6 +230,7 @@ def download_subtitles(
             "extractor_args": {"youtube": ["player_client=android,web"]},
             **opts_extra,
         }
+        _apply_cookies(ydl_opts, cookies)
 
         try:
             with YoutubeDL(ydl_opts) as ydl:
@@ -241,6 +259,7 @@ def download_subtitles(
                             "outtmpl": os.path.join(output_dir, "yt_subs"),
                             "extractor_args": {"youtube": ["player_client=android,web"]},
                         }
+                        _apply_cookies(dl_opts, cookies)
                         with YoutubeDL(dl_opts) as ydl2:
                             ydl2.download([url])
 

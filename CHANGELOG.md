@@ -12,6 +12,12 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Minor (x.Y.z)**: Incremented for new functionality introduced in a backward-compatible manner.
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.3.2] - 2026-08-16
+
+### Added
+
+- **YouTube Ingest (yt-dlp)**: Added `--yt-cookies` CLI flag to support `cookies.txt` files and browser cookies (`--cookies-from-browser`), providing a reliable workaround for YouTube download blocks on Kaggle/Colab.
+
 ## [0.3.1] - 2026-08-16
 
 ### Fixed

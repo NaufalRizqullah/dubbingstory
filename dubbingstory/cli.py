@@ -83,6 +83,7 @@ def cmd_ingest(args, cfg):
             url=args.url,
             output_dir=project_dir,
             download_height=download_q,
+            cookies=getattr(args, "yt_cookies", None) or getattr(cfg, "ingest_yt_cookies", None),
         )
     else:
         print("❌ Harus menyediakan --input atau --url")
@@ -109,6 +110,7 @@ def cmd_ingest(args, cfg):
             url=args.url,
             output_dir=project_dir,
             languages=getattr(cfg, "narration_languages", ["id", "en"]),
+            cookies=getattr(args, "yt_cookies", None) or getattr(cfg, "ingest_yt_cookies", None),
         )
         if yt_sub_path:
             # Read the downloaded subtitle file
@@ -665,6 +667,10 @@ def main():
         help="Download quality (default: 1080). Options: 720, 1080, 2k, 4k, max"
     )
     p_run.add_argument(
+        "--yt-cookies", type=str, default=None,
+        help="Cookies from browser (e.g. 'chrome', 'firefox') or path to cookies.txt for yt-dlp"
+    )
+    p_run.add_argument(
         "--use-asr",
         action="store_true",
         help="If no subtitles are found, use Whisper ASR to generate a transcript.",
@@ -714,6 +720,10 @@ def main():
         "--quality", "-q", type=str, default=None,
         choices=["720", "1080", "2k", "4k", "max"],
         help="Download quality (default: 1080). Options: 720, 1080, 2k, 4k, max"
+    )
+    p_ingest.add_argument(
+        "--yt-cookies", type=str, default=None,
+        help="Cookies from browser (e.g. 'chrome', 'firefox') or path to cookies.txt for yt-dlp"
     )
     p_ingest.add_argument(
         "--use-asr",
