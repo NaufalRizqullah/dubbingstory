@@ -154,7 +154,13 @@ def build_temporal_prompt(
     domain: str = "general",
     subtitle_context: str = "",
 ) -> str:
-    """Build the temporal flow analysis prompt."""
+    """Build the temporal flow analysis prompt.
+
+    To avoid context-window overflows, produce a compact summary of each
+    per-scene analysis rather than embedding full verbose JSON. Keep the
+    essential fields (scene_id, short action/description, confidence, and
+    a few visible objects) and truncate long strings.
+    """
     import json
 
     subtitle_section = ""
@@ -166,9 +172,37 @@ def build_temporal_prompt(
             f"\nFULL VIDEO SUBTITLE CONTEXT:\n```\n{subtitle_context}\n```"
         )
 
+    # Build a compact summary for each scene to reduce token usage
+    def _summarize_scene(a: dict) -> dict:
+        brief = None
+        # Prefer short action or likely_context or visible_objects
+        if a.get("action"):
+            brief = str(a.get("action"))
+        elif a.get("likely_context"):
+            brief = str(a.get("likely_context"))
+        else:
+            vo = a.get("visible_objects") or []
+            brief = ", ".join(vo[:6]) if isinstance(vo, list) else str(vo)
+
+        # Truncate long text
+        if brief is None:
+            brief = ""
+        if len(brief) > 300:
+            brief = brief[:300] + "..."
+
+        return {
+            "scene_id": a.get("scene_id", ""),
+            "brief": brief,
+            "confidence": round(float(a.get("confidence", 0) or 0), 3),
+            # include a short list of visible objects (max 8)
+            "visible_objects": (a.get("visible_objects") or [])[:8],
+        }
+
+    compact = [_summarize_scene(a) for a in scene_analyses]
+
     return TEMPORAL_FLOW_PROMPT.format(
         domain=domain,
         n_scenes=len(scene_analyses),
         subtitle_context=subtitle_section,
-        scene_analyses_json=json.dumps(scene_analyses, indent=2, ensure_ascii=False),
+        scene_analyses_json=json.dumps(compact, indent=2, ensure_ascii=False),
     )

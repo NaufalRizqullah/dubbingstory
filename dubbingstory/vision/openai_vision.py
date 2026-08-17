@@ -100,6 +100,40 @@ def _image_to_base64_url(image_path: str) -> str:
     return f"data:{mime};base64,{data}"
 
 
+# Token estimation helper: use tiktoken if available, otherwise fall back
+# to a conservative char-based heuristic (chars / 4).
+try:
+    import tiktoken  # type: ignore
+except Exception:
+    tiktoken = None
+
+
+def _estimate_tokens(text: str, model: str | None = None) -> int:
+    """Estimate token count for a text. Prefer tiktoken when available.
+
+    This is a best-effort estimate and used for budgeting only.
+    """
+    if not text:
+        return 0
+    if tiktoken is not None:
+        try:
+            # Choose an encoding based on model if possible; fall back to 'cl100k_base'
+            enc_name = None
+            if model:
+                try:
+                    enc = tiktoken.encoding_for_model(model)
+                except Exception:
+                    enc = tiktoken.get_encoding("cl100k_base")
+            else:
+                enc = tiktoken.get_encoding("cl100k_base")
+            return len(enc.encode(text))
+        except Exception:
+            # Fallback to heuristic below
+            pass
+    # Heuristic: assume ~4 characters per token (conservative)
+    return max(1, len(text) // 4)
+
+
 class OpenAIVisionAnalyzer:
     """
     Vision analyzer using OpenAI-compatible API.
@@ -122,18 +156,11 @@ class OpenAIVisionAnalyzer:
     temperature : float
         Sampling temperature. Lower = more deterministic.
     max_tokens : int
-        Maximum tokens in response.
-
-    Model Discovery
-    ---------------
-    Browse HuggingFace for vision-language models:
-        https://huggingface.co/models?pipeline_tag=image-text-to-text&sort=trending
-
-    Popular choices:
-        - Qwen/Qwen3-VL-2B-Instruct  (16GB VRAM, T4 friendly)
-        - Qwen/Qwen3-VL-4B-Instruct  (needs quantization on T4)
-        - Qwen/Qwen3-VL-8B-Instruct  (24GB+ VRAM)
-        - meta-llama/Llama-4-Scout-17B-16E-Instruct
+        Maximum tokens in response (request default). This will be
+        dynamically adjusted based on prompt size to avoid context errors.
+    model_max_context : int | None
+        (Optional) Known maximum context length of the model. If None, a
+        conservative default of 8192 is used.
     """
 
     def __init__(
@@ -142,7 +169,8 @@ class OpenAIVisionAnalyzer:
         base_url: str = "http://127.0.0.1:8000/v1",
         model: str = "Qwen/Qwen3-VL-2B-Instruct",
         temperature: float = 0.2,
-        max_tokens: int = 2048,
+        max_tokens: int = 1024,
+        model_max_context: int | None = None,
     ):
         if OpenAI is None:
             raise ImportError(
@@ -155,6 +183,8 @@ class OpenAIVisionAnalyzer:
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
+        # If not provided, default to 8192 (can be overridden via cfg)
+        self.model_max_context = int(model_max_context or 8192)
 
     def _build_image_content(self, image_paths: list[str]) -> list[dict]:
         """Build OpenAI Vision API content parts from image file paths."""
@@ -182,11 +212,45 @@ class OpenAIVisionAnalyzer:
 
         while format_retries_left >= 0 and network_retries_left >= 0:
             try:
+                # Estimate prompt/input token usage (text parts only) to avoid
+                # exceeding model context when combined with requested output.
+                text_parts = []
+                for m in messages:
+                    content = m.get("content")
+                    if isinstance(content, str):
+                        text_parts.append(content)
+                    elif isinstance(content, list):
+                        # multimodal parts: include only the text parts for budgeting
+                        for p in content:
+                            if isinstance(p, dict) and p.get("type") == "text":
+                                text_parts.append(p.get("text", ""))
+                prompt_text = "\n".join(text_parts)
+
+                input_tokens = _estimate_tokens(prompt_text, model=self.model)
+                safety_margin = 64
+                allowed_output = self.model_max_context - input_tokens - safety_margin
+
+                if allowed_output <= 0:
+                    # Prompt is already too large for the model — fail fast with guidance
+                    raise RuntimeError(
+                        f"Prompt too large for model context ({self.model_max_context}): "
+                        f"estimated input tokens={input_tokens}. "
+                        f"Summarize or trim scene_analyses before calling temporal analysis."
+                    )
+
+                # Allocate output tokens conservatively
+                call_max_tokens = min(int(self.max_tokens), int(allowed_output))
+
+                print(
+                    f"      [Vision] token_budget input={input_tokens} model_max={self.model_max_context} "
+                    f"allowed_output={allowed_output} using_max_tokens={call_max_tokens}"
+                )
+
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
                     temperature=self.temperature,
-                    max_tokens=self.max_tokens,
+                    max_tokens=call_max_tokens,
                     response_format={"type": "json_object"},
                 )
 
