@@ -157,9 +157,24 @@ def select_scenes(
         entry = {**scene, "summary_score": score}
         scored.append(entry)
 
-    # Filter by minimum score
-    candidates = [s for s in scored if s["summary_score"] >= min_score]
-    print(f"      Candidates (score >= {min_score}): {len(candidates)}/{total_scenes}")
+    # Filter by minimum score and valid analysis
+    candidates = []
+    for s in scored:
+        if s["summary_score"] < min_score:
+            continue
+            
+        analysis = s.get("analysis", {})
+        confidence = analysis.get("confidence", 1.0)
+        action_text = analysis.get("action", "").lower()
+        
+        # Exclude scenes that failed vision analysis
+        if confidence < 0.1 or "failed to analyze" in action_text or "skipped" in action_text:
+            print(f"      ⚠️ Excluding {s.get('scene_id')} (failed analysis/low confidence)")
+            continue
+            
+        candidates.append(s)
+        
+    print(f"      Candidates (valid & score >= {min_score}): {len(candidates)}/{total_scenes}")
 
     if not candidates:
         # Fallback: take top 5 scenes regardless of min_score

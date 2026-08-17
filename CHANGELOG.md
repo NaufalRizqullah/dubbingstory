@@ -11,6 +11,13 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.4.4] - 2026-08-17
+
+### Fixed
+- **Summary Cut Audio Desync**: Fixed a critical bug in Summary Mode where scenes that failed vision analysis were skipped by the TTS generation but still cut into the video compilation. This caused silent scenes and desynced dubbing. Failed scenes are now completely excluded from the cut sequence.
+- **Vision Token Overflow (OOM/Truncation)**: Mitigated extreme token generation during scene analysis by enforcing strict brevity constraints in the Vision prompt (`finish_reason=length`).
+- **Temporal Context Exceeded**: Fixed a critical bug where long videos (e.g. 150+ scenes) would trigger HTTP 400 Context Length errors in local models (e.g. vLLM). Implemented a **Temporal Chunking** algorithm to process global scenes in batches of 40 and condense the JSON payload, ensuring it stays well within the 8192 token limit regardless of video length.
+
 ## [0.4.3] - 2026-08-17
 
 ### Added
