@@ -84,7 +84,11 @@ def _extract_json_from_text(text: str) -> dict | list:
 
 
 def _image_to_base64_url(image_path: str) -> str:
-    """Convert an image file to a base64 data URL for OpenAI Vision API."""
+    """Convert an image file to a base64 data URL for OpenAI Vision API.
+
+    Kept for compatibility; prefer using OpenAIVisionAnalyzer._image_to_url which
+    can return file:// URLs when configured.
+    """
     with open(image_path, "rb") as f:
         data = base64.b64encode(f.read()).decode("utf-8")
 
@@ -171,6 +175,7 @@ class OpenAIVisionAnalyzer:
         temperature: float = 0.2,
         max_tokens: int = 1024,
         model_max_context: int | None = None,
+        image_mode: str = "file",
     ):
         if OpenAI is None:
             raise ImportError(
@@ -185,19 +190,43 @@ class OpenAIVisionAnalyzer:
         self.max_tokens = max_tokens
         # If not provided, default to 8192 (can be overridden via cfg)
         self.model_max_context = int(model_max_context or 8192)
+        # image_mode controls whether images are referenced as local file:// URLs
+        # or embedded as data URIs. Default to 'file' which is much smaller than
+        # embedding base64 inline and avoids large prompt sizes when the server
+        # shares the same filesystem (Colab/Kaggle local vLLM setup).
+        self.image_mode = image_mode or "file"
 
     def _build_image_content(self, image_paths: list[str]) -> list[dict]:
-        """Build OpenAI Vision API content parts from image file paths."""
+        """Build OpenAI Vision API content parts from image file paths.
+
+        Uses self.image_mode to decide whether to reference images as local file://
+        URLs (preferred) or inline data URIs (fallback).
+        """
         parts = []
         for path in image_paths:
             if not os.path.exists(path):
                 continue
-            url = _image_to_base64_url(path)
+            url = self._image_to_url(path)
             parts.append({
                 "type": "image_url",
                 "image_url": {"url": url},
             })
         return parts
+
+    def _image_to_url(self, image_path: str) -> str:
+        """Return an image URL according to configured image_mode.
+
+        Modes:
+        - "file": return file:// absolute path (preferred for local vLLM servers)
+        - "data": return full data:... base64 URI (fallback)
+
+        Note: file:// requires the server to have access to the same filesystem.
+        """
+        abs_path = os.path.abspath(image_path)
+        if getattr(self, "image_mode", "file") == "file":
+            return f"file://{abs_path}"
+        # fallback to data URI
+        return _image_to_base64_url(abs_path)
 
     def _call_with_retry(
         self,
