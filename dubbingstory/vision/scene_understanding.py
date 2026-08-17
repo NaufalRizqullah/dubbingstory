@@ -10,7 +10,7 @@ import hashlib
 from concurrent.futures import ThreadPoolExecutor
 
 from dubbingstory.vision.gemini_analyzer import GeminiVideoAnalyzer
-from dubbingstory.vision.openai_vision import OpenAIVisionAnalyzer
+from dubbingstory.vision.openai_vision import OpenAIVisionAnalyzer, _estimate_tokens
 from dubbingstory.vision.prompts import build_scene_prompt, build_temporal_prompt, build_cheap_scene_prompt
 
 
@@ -70,7 +70,9 @@ def _create_analyzer(cfg):
         base_url = getattr(cfg, "vision_openai_base_url", "http://127.0.0.1:8000/v1")
         model = getattr(cfg, "vision_openai_model", "Qwen/Qwen3-VL-2B-Instruct")
         temperature = getattr(cfg, "vision_openai_temperature", 0.2)
-        max_tokens = getattr(cfg, "vision_openai_max_tokens", 2048)
+        max_tokens = getattr(cfg, "vision_openai_max_tokens", 1024)
+        model_max_context = getattr(cfg, "vision_openai_model_max_context", None)
+        image_mode = getattr(cfg, "vision_openai_image_mode", "file")
 
         return OpenAIVisionAnalyzer(
             api_key=api_key,
@@ -78,6 +80,8 @@ def _create_analyzer(cfg):
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
+            model_max_context=model_max_context,
+            image_mode=image_mode,
         )
 
     elif provider == "gemini":
@@ -234,6 +238,19 @@ def run_analysis(
 
 
         try:
+            # Log per-scene prompt token estimate and keyframe sizes to help
+            # identify offenders that blow up the context window.
+            try:
+                prompt_tokens = _estimate_tokens(prompt, model=getattr(analyzer, "model", None))
+            except Exception:
+                prompt_tokens = None
+
+            total_kf_bytes = sum(os.path.getsize(p) for p in kf_paths if os.path.exists(p))
+            print(
+                f"   [Tokens] {scene_id}: prompt_tokens~{prompt_tokens} keyframes={len(kf_paths)} "
+                f"total_kf_bytes={total_kf_bytes}"
+            )
+
             if analysis_mode == "video_upload" and scene.get("file_path"):
                 analysis = analyzer.analyze_scene_from_video(
                     video_path=scene["file_path"],
@@ -333,6 +350,13 @@ def run_analysis(
         domain=domain_hint or "general",
         subtitle_context=full_subtitle_context,
     )
+
+    # Log temporal prompt token estimate to detect large combined prompts
+    try:
+        temporal_tokens = _estimate_tokens(temporal_prompt, model=getattr(analyzer, "model", None))
+    except Exception:
+        temporal_tokens = None
+    print(f"   [Tokens] temporal_prompt_tokens~{temporal_tokens} scenes={len(scenes_for_temporal)}")
 
     try:
         temporal_data = analyzer.analyze_temporal_flow(

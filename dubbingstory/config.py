@@ -133,13 +133,32 @@ def build_config(
     flat["api_key_openai_vision"] = os.getenv("OPENAI_VISION_API_KEY", "")
     flat["api_key_hf"] = os.getenv("HF_API_KEY", "")
 
-    # Allow env-level override of vision provider and base URL
+    # Vision-related env overrides
     env_vision_provider = os.getenv("VISION_PROVIDER", "")
     if env_vision_provider:
         flat["vision_provider"] = env_vision_provider
     env_vision_base_url = os.getenv("OPENAI_VISION_BASE_URL", "")
     if env_vision_base_url:
         flat["vision_openai_base_url"] = env_vision_base_url
+
+    # New env vars introduced for image_mode and token budgeting
+    env_image_mode = os.getenv("OPENAI_VISION_IMAGE_MODE", "")
+    if env_image_mode:
+        flat["vision_openai_image_mode"] = env_image_mode
+
+    env_vision_max_tokens = os.getenv("OPENAI_VISION_MAX_TOKENS", "")
+    if env_vision_max_tokens:
+        try:
+            flat["vision_openai_max_tokens"] = int(env_vision_max_tokens)
+        except Exception:
+            flat["vision_openai_max_tokens"] = env_vision_max_tokens
+
+    env_model_max_context = os.getenv("OPENAI_VISION_MODEL_MAX_CONTEXT", "")
+    if env_model_max_context:
+        try:
+            flat["vision_openai_model_max_context"] = int(env_model_max_context)
+        except Exception:
+            flat["vision_openai_model_max_context"] = env_model_max_context
 
     # Inject project root
     flat["project_root"] = str(PROJECT_ROOT)

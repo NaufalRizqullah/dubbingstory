@@ -154,7 +154,13 @@ def build_temporal_prompt(
     domain: str = "general",
     subtitle_context: str = "",
 ) -> str:
-    """Build the temporal flow analysis prompt."""
+    """Build the temporal flow analysis prompt.
+
+    To avoid context-window overflows, produce a compact summary of each
+    per-scene analysis rather than embedding full verbose JSON. Keep the
+    essential fields (scene_id, short action/description, confidence, and
+    a few visible objects) and truncate long strings.
+    """
     import json
 
     subtitle_section = ""
