@@ -390,7 +390,7 @@ def cmd_dub(args, cfg):
     print("=" * 70)
 
     engine_name = args.engine if hasattr(args, "engine") and args.engine else \
-        getattr(cfg, "tts_engine", "piper")
+        getattr(cfg, "tts_engine", "edge")
 
     print(f"   Engine: {engine_name}")
 
@@ -568,7 +568,7 @@ def cmd_summary(args, cfg):
 
     # ── Step 5: TTS dubbing ──────────────────────────────────────────────
     engine_name = args.engine if hasattr(args, "engine") and args.engine else \
-        getattr(cfg, "tts_engine", "piper")
+        getattr(cfg, "tts_engine", "edge")
 
     audio_dir = os.path.join(project_dir, "audio")
     os.makedirs(audio_dir, exist_ok=True)
@@ -655,7 +655,7 @@ def main():
     p_run.add_argument("--style", type=str, default=None,
                         choices=["viral_fb", "documentary", "technical", "calm_educational"])
     p_run.add_argument("--lang", nargs="+", default=None, help="Languages (e.g., id en)")
-    p_run.add_argument("--engine", type=str, default="edge", choices=["edge", "piper"], help="TTS engine (default: edge)")
+    p_run.add_argument("--engine", type=str, default=None, choices=["edge", "piper"], help="TTS engine (default: edge)")
     p_run.add_argument("--ratio", nargs="+", default=None, help="Output ratios (16:9, 9:16)")
     p_run.add_argument(
         "--mode", type=str, default="full",
@@ -827,7 +827,7 @@ def main():
     # ── dub ───────────────────────────────────────────────────────────────
     p_dub = subparsers.add_parser("dub", help="Generate TTS audio")
     p_dub.add_argument("--project", "-p", type=str, required=True)
-    p_dub.add_argument("--engine", type=str, default="edge", choices=["edge", "piper"], help="TTS engine (default: edge)")
+    p_dub.add_argument("--engine", type=str, default=None, choices=["edge", "piper"], help="TTS engine (default: edge)")
 
     # ── render ────────────────────────────────────────────────────────────
     p_render = subparsers.add_parser("render", help="Render final video")

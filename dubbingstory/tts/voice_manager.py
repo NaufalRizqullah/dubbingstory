@@ -40,6 +40,9 @@ def get_engine(name: str = "edge", cfg=None) -> BaseTTSEngine:
             if edge_en:
                 custom_voices["en"] = edge_en
         return EdgeTTSEngine(custom_voices=custom_voices or None)
+    elif name == "piper":
+        from dubbingstory.tts.piper_tts_engine import PiperTTSEngine
+        return PiperTTSEngine()
     else:
         print(f"⚠️ Unknown TTS engine '{name}', falling back to Edge-TTS.")
         from dubbingstory.tts.edge_tts_engine import EdgeTTSEngine
