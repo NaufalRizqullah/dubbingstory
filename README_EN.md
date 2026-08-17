@@ -18,7 +18,7 @@ Inspired by the accurately narrated and dubbed Pakistani repair videos on Facebo
 - ⚡ **Optimized Summary Mode** — Faster execution with a *Two-Pass Vision* architecture (Cheap screening -> Deep Analysis on top-20 scenes) and hash-based *Smart Caching*.
 - ☁️ **Kaggle / Colab Ready** — Includes a unified script (`dubbingstory_colab.py`) to run the local vision model for free on T4 cloud GPUs.
 - 📝 **Bilingual Narration** — Generate narration scripts in Indonesian & English.
-- 🎙️ **TTS Dubbing** — Text-to-Speech support powered by **Edge TTS** by default for maximum stability in cloud environments (Kaggle/Colab).
+- 🎙️ **TTS Dubbing** — Text-to-Speech support powered by **Edge TTS** by default for maximum stability in cloud environments, as well as robust offline support with **Piper**. Customize voices effortlessly using `--voice-id` and `--voice-en` CLI flags.
 - 🎬 **Video Render** — Final video render with audio mix and optional subtitles for 16:9 & 9:16 aspect ratios.
 - ✂️ **Highlight Recap Mode** — Automatically cut and condense long videos into short highlight reels using the `--mode summary` option.
 

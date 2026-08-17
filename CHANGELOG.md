@@ -9,8 +9,16 @@ All notable changes to the **dubbingstory** project will be documented in this f
 
 **The Standard Structure (SemVer)**
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
-- **Minor (x.Y.z)**: Incremented for new functionality introduced in a backward-compatible manner.
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
+
+## [1.1.1] - 2026-08-17
+
+### Added
+- **Piper TTS Restoration**: Re-implemented the `PiperTTSEngine` with robust auto-download capabilities and reliable path resolution for `piper` models.
+- **CLI Voice Overrides**: Added `--voice-id` and `--voice-en` CLI flags to `run` and `dub` commands, allowing users to override TTS voices on the fly for both Edge and Piper engines.
+
+### Fixed
+- **CLI Engine Default Bug**: Fixed an issue where the `--engine` CLI argument ignored fallback configurations (e.g. from `.yaml`) because it always forced `"edge"` as the parsed default.
 
 ## [1.1.0] - 2026-08-17
 

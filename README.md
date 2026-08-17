@@ -18,7 +18,7 @@ Terinspirasi dari video repair Pakistan di Facebook yang di-dubbing dan dinarasi
 - ⚡ **Optimized Summary Mode** — Eksekusi lebih cepat dengan arsitektur *Two-Pass Vision* (Screening kilat -> Deep Analysis pada top-20 adegan) dan sistem *Smart Caching* berbasis hash.
 - ☁️ **Kaggle / Colab Ready** — Disediakan skrip terintegrasi (`dubbingstory_colab.py`) untuk menjalankan model vision lokal secara gratis di cloud GPU T4.
 - 📝 **Bilingual Narration** — Membuat script narasi dalam bahasa Indonesia & Inggris.
-- 🎙️ **TTS Dubbing** — Dukungan Text-to-Speech online menggunakan **Edge TTS** secara bawaan untuk stabilitas tinggi di cloud (Kaggle/Colab).
+- 🎙️ **TTS Dubbing** — Dukungan Text-to-Speech online menggunakan **Edge TTS** secara bawaan untuk stabilitas tinggi di cloud, serta dukungan TTS offline dengan **Piper**. Dilengkapi fitur override suara via argumen `--voice-id` dan `--voice-en`.
 - 🎬 **Video Render** — Render video final dengan mix audio dan subtitle (opsional) untuk format 16:9 & 9:16.
 - ✂️ **Highlight Recap Mode** — Fitur untuk merangkum video panjang menjadi video pendek berisi momen-momen terpenting (gunakan `--mode summary`).
 

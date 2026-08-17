@@ -656,6 +656,8 @@ def main():
                         choices=["viral_fb", "documentary", "technical", "calm_educational"])
     p_run.add_argument("--lang", nargs="+", default=None, help="Languages (e.g., id en)")
     p_run.add_argument("--engine", type=str, default=None, choices=["edge", "piper"], help="TTS engine (default: edge)")
+    p_run.add_argument("--voice-id", type=str, default=None, help="Specific voice name/ID for Indonesian (e.g., id-ID-ArdiNeural or id_ID-news_tts-medium)")
+    p_run.add_argument("--voice-en", type=str, default=None, help="Specific voice name/ID for English")
     p_run.add_argument("--ratio", nargs="+", default=None, help="Output ratios (16:9, 9:16)")
     p_run.add_argument(
         "--mode", type=str, default="full",
@@ -828,6 +830,8 @@ def main():
     p_dub = subparsers.add_parser("dub", help="Generate TTS audio")
     p_dub.add_argument("--project", "-p", type=str, required=True)
     p_dub.add_argument("--engine", type=str, default=None, choices=["edge", "piper"], help="TTS engine (default: edge)")
+    p_dub.add_argument("--voice-id", type=str, default=None, help="Specific voice name/ID for Indonesian")
+    p_dub.add_argument("--voice-en", type=str, default=None, help="Specific voice name/ID for English")
 
     # ── render ────────────────────────────────────────────────────────────
     p_render = subparsers.add_parser("render", help="Render final video")
@@ -848,6 +852,10 @@ def main():
         cfg.render_ratios = args.ratio
     if hasattr(args, "asr_model") and args.asr_model:
         cfg.asr_model_name = args.asr_model
+    if hasattr(args, "voice_id") and args.voice_id:
+        cfg.tts_voice_id = args.voice_id
+    if hasattr(args, "voice_en") and args.voice_en:
+        cfg.tts_voice_en = args.voice_en
     if hasattr(args, "vision_provider") and args.vision_provider:
         cfg.vision_provider = args.vision_provider
     if hasattr(args, "vision_model") and args.vision_model:

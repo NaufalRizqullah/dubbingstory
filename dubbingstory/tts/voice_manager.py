@@ -28,25 +28,25 @@ def get_engine(name: str = "edge", cfg=None) -> BaseTTSEngine:
     BaseTTSEngine
         TTS engine instance.
     """
+    custom_voices = {}
+    if cfg:
+        vid = getattr(cfg, "tts_voice_id", getattr(cfg, "tts_edge_voices_id", None))
+        ven = getattr(cfg, "tts_voice_en", getattr(cfg, "tts_edge_voices_en", None))
+        if vid:
+            custom_voices["id"] = vid
+        if ven:
+            custom_voices["en"] = ven
+
     if name == "edge":
         from dubbingstory.tts.edge_tts_engine import EdgeTTSEngine
-        # Build custom voice map from config if available
-        custom_voices = {}
-        if cfg:
-            edge_id = getattr(cfg, "tts_edge_voices_id", None)
-            edge_en = getattr(cfg, "tts_edge_voices_en", None)
-            if edge_id:
-                custom_voices["id"] = edge_id
-            if edge_en:
-                custom_voices["en"] = edge_en
         return EdgeTTSEngine(custom_voices=custom_voices or None)
     elif name == "piper":
         from dubbingstory.tts.piper_tts_engine import PiperTTSEngine
-        return PiperTTSEngine()
+        return PiperTTSEngine(custom_voices=custom_voices or None)
     else:
         print(f"⚠️ Unknown TTS engine '{name}', falling back to Edge-TTS.")
         from dubbingstory.tts.edge_tts_engine import EdgeTTSEngine
-        return EdgeTTSEngine()
+        return EdgeTTSEngine(custom_voices=custom_voices or None)
 
 
 def generate_all_audio(
