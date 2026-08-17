@@ -15,6 +15,7 @@ Terinspirasi dari video repair Pakistan di Facebook yang di-dubbing dan dinarasi
 - 🖼️ **Keyframe Extraction** — Ekstrak frame representatif per scene.
 - 🧠 **Dual LLM Architecture** — Memisahkan tugas *Vision* (melihat adegan) dan *Text* (menulis narasi) demi keseimbangan kualitas dan biaya.
 - 👁️ **Visual Understanding (Cloud & Local)** — Pahami konteks visual menggunakan **Gemini API** (default) atau model HuggingFace open-source (seperti **Qwen3-VL**) via integrasi OpenAI-compatible endpoint. Bebas biaya API Vision!
+- ⚡ **Optimized Summary Mode** — Eksekusi lebih cepat dengan arsitektur *Two-Pass Vision* (Screening kilat -> Deep Analysis pada top-20 adegan) dan sistem *Smart Caching* berbasis hash.
 - ☁️ **Kaggle / Colab Ready** — Disediakan skrip terintegrasi (`dubbingstory_colab.py`) untuk menjalankan model vision lokal secara gratis di cloud GPU T4.
 - 📝 **Bilingual Narration** — Membuat script narasi dalam bahasa Indonesia & Inggris.
 - 🎙️ **TTS Dubbing** — Dukungan Text-to-Speech online menggunakan **Edge TTS** secara bawaan untuk stabilitas tinggi di cloud (Kaggle/Colab).

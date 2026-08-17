@@ -42,6 +42,20 @@ Return ONLY a valid JSON object (no markdown, no explanation):
   "confidence": 0.0
 }}"""
 
+CHEAP_SCENE_ANALYSIS_PROMPT = """You are screening a video scene from a {domain} video.
+You are given {n_frames} keyframes spanning {time_range}.
+
+Briefly describe the scene and score its visual salience (how important or distinct this scene is) from 0.0 to 1.0.
+
+Return ONLY a valid JSON object:
+{{
+  "scene_id": "{scene_id}",
+  "action": "brief description of action",
+  "visual_change": 0.8,
+  "salience": 0.9,
+  "confidence": 0.9
+}}"""
+
 
 TEMPORAL_FLOW_PROMPT = """You are building a narrative understanding of a complete video.
 Below are per-scene analyses from a {domain} video with {n_scenes} scenes.
@@ -117,6 +131,21 @@ def build_scene_prompt(
         scene_id=scene_id,
         subtitle_context=subtitle_section,
         context_hint=hint_section,
+    )
+
+
+def build_cheap_scene_prompt(
+    scene_id: str,
+    time_range: str,
+    n_frames: int,
+    domain: str = "general",
+) -> str:
+    """Build a cheap scene screening prompt."""
+    return CHEAP_SCENE_ANALYSIS_PROMPT.format(
+        domain=domain,
+        n_frames=n_frames,
+        time_range=time_range,
+        scene_id=scene_id,
     )
 
 

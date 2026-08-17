@@ -655,7 +655,7 @@ def main():
     p_run.add_argument("--style", type=str, default=None,
                         choices=["viral_fb", "documentary", "technical", "calm_educational"])
     p_run.add_argument("--lang", nargs="+", default=None, help="Languages (e.g., id en)")
-    p_run.add_argument("--engine", type=str, default="edge", choices=["edge"], help="TTS engine (default: edge)")
+    p_run.add_argument("--engine", type=str, default="edge", choices=["edge", "piper"], help="TTS engine (default: edge)")
     p_run.add_argument("--ratio", nargs="+", default=None, help="Output ratios (16:9, 9:16)")
     p_run.add_argument(
         "--mode", type=str, default="full",
@@ -722,8 +722,8 @@ def main():
     # ── Pipeline speed optimization flags ──
     p_run.add_argument(
         "--max-keyframes", type=int, default=None,
-        help="Max keyframes per scene for vision analysis (default: 7). "
-             "Lower = faster but less accurate. Recommended: 3-5 for speed."
+        help="Max keyframes per scene for vision analysis (default: 3). "
+             "Lower = faster but less accurate. Recommended: 3 for speed."
     )
     p_run.add_argument(
         "--min-scene-duration", type=float, default=None,
@@ -783,7 +783,7 @@ def main():
     p_segment.add_argument("--project", "-p", type=str, required=True)
     p_segment.add_argument(
         "--max-keyframes", type=int, default=None,
-        help="Max keyframes per scene (default: 7). Lower = faster."
+        help="Max keyframes per scene (default: 3). Lower = faster."
     )
     p_segment.add_argument(
         "--min-scene-duration", type=float, default=None,
@@ -827,7 +827,7 @@ def main():
     # ── dub ───────────────────────────────────────────────────────────────
     p_dub = subparsers.add_parser("dub", help="Generate TTS audio")
     p_dub.add_argument("--project", "-p", type=str, required=True)
-    p_dub.add_argument("--engine", type=str, default="edge", choices=["edge"], help="TTS engine (default: edge)")
+    p_dub.add_argument("--engine", type=str, default="edge", choices=["edge", "piper"], help="TTS engine (default: edge)")
 
     # ── render ────────────────────────────────────────────────────────────
     p_render = subparsers.add_parser("render", help="Render final video")

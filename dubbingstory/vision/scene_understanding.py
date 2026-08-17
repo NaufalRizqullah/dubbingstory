@@ -6,11 +6,12 @@ Coordinates per-scene visual analysis and builds the final storyboard.
 
 import json
 import os
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 
 from dubbingstory.vision.gemini_analyzer import GeminiVideoAnalyzer
 from dubbingstory.vision.openai_vision import OpenAIVisionAnalyzer
-from dubbingstory.vision.prompts import build_scene_prompt, build_temporal_prompt
+from dubbingstory.vision.prompts import build_scene_prompt, build_temporal_prompt, build_cheap_scene_prompt
 
 
 def _get_subtitle_for_scene(
@@ -177,9 +178,52 @@ def run_analysis(
     cache_dir = os.path.join(project_dir, "vision_cache")
     os.makedirs(cache_dir, exist_ok=True)
 
-    def analyze_scene(scene):
+    def analyze_scene(scene, is_cheap=False):
         scene_id = scene["scene_id"]
-        cache_path = os.path.join(cache_dir, f"{scene_id}_analysis.json")
+        time_range = f"{scene['start_time']:.1f}s - {scene['end_time']:.1f}s"
+        
+        kf_paths = keyframes_data.get(scene_id, [])
+        if is_cheap:
+            if len(kf_paths) > 2:
+                kf_paths = [kf_paths[0], kf_paths[-1]]
+            prompt = build_cheap_scene_prompt(
+                scene_id=scene_id,
+                time_range=time_range,
+                n_frames=len(kf_paths),
+                domain=domain_hint or "general",
+            )
+            scene_words = []
+        else:
+            scene_subtitle, scene_words = _get_subtitle_for_scene(
+                subtitle_entries,
+                scene["start_time"],
+                scene["end_time"],
+            )
+            prompt = build_scene_prompt(
+                scene_id=scene_id,
+                time_range=time_range,
+                n_frames=len(kf_paths),
+                domain=domain_hint or "general",
+                context_hint=context_hint,
+                subtitle_text=scene_subtitle,
+            )
+
+        # Version-aware cache key
+        payload = {
+            "scene_id": scene_id,
+            "model": getattr(analyzer, "model", "gemini"),
+            "prompt": prompt,
+            "keyframes": [
+                {
+                    "path": os.path.basename(p),
+                    "size": os.path.getsize(p) if os.path.exists(p) else 0,
+                    "mtime": os.path.getmtime(p) if os.path.exists(p) else 0,
+                }
+                for p in kf_paths
+            ]
+        }
+        cache_key = hashlib.sha1(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
+        cache_path = os.path.join(cache_dir, f"{scene_id}_{cache_key}.json")
 
         # Check cache
         if os.path.exists(cache_path):
@@ -187,22 +231,7 @@ def run_analysis(
             with open(cache_path, "r", encoding="utf-8") as f:
                 return json.load(f)
 
-        time_range = f"{scene['start_time']:.1f}s - {scene['end_time']:.1f}s"
-        scene_subtitle, scene_words = _get_subtitle_for_scene(
-            subtitle_entries,
-            scene["start_time"],
-            scene["end_time"],
-        )
 
-        kf_paths = keyframes_data.get(scene_id, [])
-        prompt = build_scene_prompt(
-            scene_id=scene_id,
-            time_range=time_range,
-            n_frames=len(kf_paths),
-            domain=domain_hint or "general",
-            context_hint=context_hint,
-            subtitle_text=scene_subtitle,
-        )
 
         try:
             if analysis_mode == "video_upload" and scene.get("file_path"):
@@ -219,7 +248,7 @@ def run_analysis(
             analysis["start_time"] = scene["start_time"]
             analysis["end_time"] = scene["end_time"]
             analysis["duration"] = scene["duration"]
-            if scene_words:
+            if not is_cheap and scene_words:
                 analysis["words"] = scene_words
 
             with open(cache_path, "w", encoding="utf-8") as f:
@@ -231,6 +260,8 @@ def run_analysis(
 
         except Exception as e:
             print(f"   ❌ {scene_id}: analysis failed — {e}")
+            if is_cheap:
+                return {"scene_id": scene_id, "salience": 0.0}
             return {
                 "scene_id": scene_id,
                 "time_range": time_range,
@@ -249,14 +280,56 @@ def run_analysis(
             }
 
     workers = getattr(cfg, "vision_concurrency", 2)
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        scene_analyses = list(pool.map(analyze_scene, scenes))
+    mode = getattr(cfg, "mode", "full")
+
+    if mode == "summary":
+        print(f"   🔍 Pass A: Screening {len(scenes)} scenes...")
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            cheap_analyses = list(pool.map(lambda s: analyze_scene(s, is_cheap=True), scenes))
+            
+        summary_max_scenes = getattr(cfg, "summary_max_scenes", 20)
+        if not summary_max_scenes:
+            summary_max_scenes = 20
+
+        for scene, analysis in zip(scenes, cheap_analyses):
+            scene["_salience"] = analysis.get("salience", 0.0)
+            
+        selected_scenes = sorted(scenes, key=lambda x: x.get("_salience", 0.0), reverse=True)[:summary_max_scenes]
+        selected_scenes = sorted(selected_scenes, key=lambda x: x.get("scene_id", ""))
+        selected_ids = {s["scene_id"] for s in selected_scenes}
+
+        print(f"   🎯 Pass B: Deep analysis on {len(selected_scenes)} selected scenes...")
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            deep_analyses = list(pool.map(lambda s: analyze_scene(s, is_cheap=False), selected_scenes))
+            
+        deep_map = {a["scene_id"]: a for a in deep_analyses}
+        for scene in scenes:
+            sid = scene["scene_id"]
+            if sid in selected_ids:
+                analysis = deep_map.get(sid, {})
+                analysis["selected"] = True
+                scene_analyses.append(analysis)
+            else:
+                scene_analyses.append({
+                    "scene_id": sid,
+                    "start_time": scene["start_time"],
+                    "end_time": scene["end_time"],
+                    "duration": scene["duration"],
+                    "action": "Skipped in summary mode",
+                    "confidence": 0.0,
+                    "selected": False,
+                })
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            scene_analyses = list(pool.map(lambda s: analyze_scene(s, is_cheap=False), scenes))
 
     # ── Step 2: Temporal flow analysis ──────────────────────────────────
     print(f"\n   🔄 Building temporal flow understanding...")
 
+    scenes_for_temporal = [a for a in scene_analyses if a.get("selected", True)]
+
     temporal_prompt = build_temporal_prompt(
-        scene_analyses=scene_analyses,
+        scene_analyses=scenes_for_temporal,
         domain=domain_hint or "general",
         subtitle_context=full_subtitle_context,
     )

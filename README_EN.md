@@ -15,6 +15,7 @@ Inspired by the accurately narrated and dubbed Pakistani repair videos on Facebo
 - 🖼️ **Keyframe Extraction** — Extract representative frames per scene.
 - 🧠 **Dual LLM Architecture** — Separates the *Vision* (seeing scenes) and *Text* (writing narration) tasks for optimal quality-to-cost balance.
 - 👁️ **Visual Understanding (Cloud & Local)** — Understand visual context using **Gemini API** (default) or open-source HuggingFace models (like **Qwen3-VL**) via OpenAI-compatible endpoints. Zero API cost for Vision!
+- ⚡ **Optimized Summary Mode** — Faster execution with a *Two-Pass Vision* architecture (Cheap screening -> Deep Analysis on top-20 scenes) and hash-based *Smart Caching*.
 - ☁️ **Kaggle / Colab Ready** — Includes a unified script (`dubbingstory_colab.py`) to run the local vision model for free on T4 cloud GPUs.
 - 📝 **Bilingual Narration** — Generate narration scripts in Indonesian & English.
 - 🎙️ **TTS Dubbing** — Text-to-Speech support powered by **Edge TTS** by default for maximum stability in cloud environments (Kaggle/Colab).

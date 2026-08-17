@@ -12,6 +12,16 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Minor (x.Y.z)**: Incremented for new functionality introduced in a backward-compatible manner.
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [1.1.0] - 2026-08-17
+
+### Added
+- **Two-Pass Summary Vision**: Introduced a two-pass architecture for summary mode (Cheap Screening -> Deep Analysis on Top N) to drastically reduce GPU compute time.
+- **Smart Version-Aware Cache**: Vision cache keys are now hashed using prompt text, model name, and keyframe metadata to prevent stale cache hits when configurations change.
+
+### Changed
+- **Adaptive Keyframe Count**: Reduced the default `--max-keyframes` from 7 to 3 to optimize analysis speed without significantly degrading context quality.
+- **Hierarchical Temporal Flow**: Summary mode temporal flow now only processes the selected Top N scenes instead of all scenes, preventing LLM context window overflow (HTTP 400 errors).
+
 ## [0.4.1] - 2026-08-17
 
 ### Added
