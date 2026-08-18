@@ -90,12 +90,22 @@ def cut_and_concat(
         clip_path = os.path.join(clips_dir, f"{scene_id}.mp4")
 
         start = scene["start_time"]
+        end = scene.get("end_time", start + scene["duration"])
         duration = scene["duration"]
 
-        print(f"      ✂️  {scene_id}: {start:.1f}s → {start + duration:.1f}s ({duration:.1f}s)")
+        print(f"      ✂️  {scene_id}: {start:.1f}s → {end:.1f}s ({duration:.1f}s)")
 
         success = _extract_clip(source_video, start, duration, clip_path)
         if success and os.path.exists(clip_path):
+            # Validate actual clip duration matches expected
+            actual_dur = _get_video_duration(clip_path)
+            tolerance = 1.0  # seconds
+            if actual_dur > 0 and abs(actual_dur - duration) > tolerance:
+                print(
+                    f"      ⚠️  {scene_id}: duration mismatch "
+                    f"(expected={duration:.1f}s, actual={actual_dur:.1f}s, "
+                    f"diff={abs(actual_dur - duration):.1f}s)"
+                )
             clip_paths.append(clip_path)
         else:
             print(f"      ⚠️  Skipping {scene_id} (extraction failed)")

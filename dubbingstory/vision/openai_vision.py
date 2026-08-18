@@ -191,6 +191,11 @@ class OpenAIVisionAnalyzer:
         #   "file"  → file:// path (efficient, but requires vLLM flag
         #             --allowed-local-media-path)
         self.image_mode = image_mode or "data"
+        # Estimated token cost per image for Qwen3-VL vision models.
+        # Qwen3-VL-2B typically uses ~1300-2600 tokens per image depending
+        # on resolution. This is used for token budgeting to avoid context
+        # overflow errors that the text-only estimation misses entirely.
+        self.image_token_cost = 1300
 
     def _build_image_content(self, image_paths: list[str]) -> list[dict]:
         """Build OpenAI Vision API content parts from image file paths."""
@@ -221,21 +226,26 @@ class OpenAIVisionAnalyzer:
 
         while format_retries_left >= 0 and network_retries_left >= 0:
             try:
-                # Estimate prompt/input token usage (text parts only) to avoid
-                # exceeding model context when combined with requested output.
+                # Estimate prompt/input token usage to avoid exceeding model
+                # context when combined with requested output.
                 text_parts = []
+                n_images = 0
                 for m in messages:
                     content = m.get("content")
                     if isinstance(content, str):
                         text_parts.append(content)
                     elif isinstance(content, list):
-                        # multimodal parts: include only the text parts for budgeting
                         for p in content:
-                            if isinstance(p, dict) and p.get("type") == "text":
-                                text_parts.append(p.get("text", ""))
+                            if isinstance(p, dict):
+                                if p.get("type") == "text":
+                                    text_parts.append(p.get("text", ""))
+                                elif p.get("type") == "image_url":
+                                    n_images += 1
                 prompt_text = "\n".join(text_parts)
 
-                input_tokens = _estimate_tokens(prompt_text, model=self.model)
+                text_tokens = _estimate_tokens(prompt_text, model=self.model)
+                image_tokens = n_images * self.image_token_cost
+                input_tokens = text_tokens + image_tokens
                 safety_margin = 64
                 allowed_output = self.model_max_context - input_tokens - safety_margin
 
@@ -243,7 +253,8 @@ class OpenAIVisionAnalyzer:
                     # Prompt is already too large for the model — fail fast with guidance
                     raise RuntimeError(
                         f"Prompt too large for model context ({self.model_max_context}): "
-                        f"estimated input tokens={input_tokens}. "
+                        f"estimated input tokens={input_tokens} "
+                        f"(text={text_tokens} + images={n_images}×{self.image_token_cost}={image_tokens}). "
                         f"Summarize or trim scene_analyses before calling temporal analysis."
                     )
 
@@ -251,7 +262,8 @@ class OpenAIVisionAnalyzer:
                 call_max_tokens = min(int(self.max_tokens), int(allowed_output))
 
                 print(
-                    f"      [Vision] token_budget input={input_tokens} model_max={self.model_max_context} "
+                    f"      [Vision] token_budget text={text_tokens} images={n_images}×{self.image_token_cost}={image_tokens} "
+                    f"total_input={input_tokens} model_max={self.model_max_context} "
                     f"allowed_output={allowed_output} using_max_tokens={call_max_tokens}"
                 )
 
@@ -315,6 +327,9 @@ class OpenAIVisionAnalyzer:
         """
         Analyze a scene using its keyframe images.
 
+        If the first attempt fails due to token limits (finish_reason=length
+        or context overflow), automatically retries with fewer images.
+
         Parameters
         ----------
         keyframe_paths : list[str]
@@ -330,10 +345,29 @@ class OpenAIVisionAnalyzer:
         # Build multimodal content: images + text
         content = self._build_image_content(keyframe_paths)
         content.append({"type": "text", "text": prompt})
-
         messages = [{"role": "user", "content": content}]
 
-        return self._call_with_retry(messages)
+        try:
+            return self._call_with_retry(messages)
+        except RuntimeError as exc:
+            err_msg = str(exc).lower()
+            is_token_issue = (
+                "finish_reason=length" in err_msg
+                or "prompt too large" in err_msg
+                or "context length" in err_msg
+            )
+            # Only retry with fewer images if we had more than 1
+            if is_token_issue and len(keyframe_paths) > 1:
+                reduced = keyframe_paths[:1]
+                print(
+                    f"      [Vision] Retrying with {len(reduced)} image(s) "
+                    f"(reduced from {len(keyframe_paths)}) to fit context..."
+                )
+                content = self._build_image_content(reduced)
+                content.append({"type": "text", "text": prompt})
+                messages = [{"role": "user", "content": content}]
+                return self._call_with_retry(messages)
+            raise
 
     def analyze_temporal_flow(
         self,

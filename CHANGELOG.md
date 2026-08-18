@@ -11,8 +11,14 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
-## [0.4.5] - 2026-08-18
+## [0.4.6] - 2026-08-19
 
+### Fixed
+- **Vision Token Overflow (`finish_reason=length`)**: Completely overhauled token budget estimation in `openai_vision.py` to account for image tokens (~1300 per image for Qwen3-VL). Previously, only text tokens were counted, causing massive context overflows. Implemented an automatic retry mechanism that reduces the number of keyframes if a context limit error is encountered.
+- **Summary Cut Audio Desync**: Fixed an issue where the summary narration script could become desynced from the video cut if the temporal flow analysis failed or generated empty `action` fields for certain scenes. Also added strict clip duration validation (`±1.0s` tolerance) and explicit time-range logging in `video_cutter.py` to ensure FFmpeg cuts align perfectly with the selected scenes.
+- **Kaggle Context Mismatch**: Synced `OPENAI_VISION_MODEL_MAX_CONTEXT=12288` in `.env` for Kaggle notebooks to match the vLLM `--max-model-len` flag, unlocking the full context window. Raised default `VISION_MAX_TOKENS` to 2048 to prevent premature output truncation.
+
+## [0.4.5] - 2026-08-18
 ### Fixed
 - **Vision Image Loading Crash (100% scene failure)**: Fixed the `file://` image path mode that caused `InternalServerError: Cannot load local files without --allowed-local-media-path` on every scene. The default `image_mode` is now `"data"` (base64, always works). For efficient local vLLM (Kaggle/Colab), set `OPENAI_VISION_IMAGE_MODE=file` in `.env` and add `--allowed-local-media-path /kaggle/working` to the vLLM startup command.
 - **Kaggle Script Auto-Setup**: Updated `mereska-dubbingstory-yt.py` to automatically enable `file://` mode with the correct vLLM `--allowed-local-media-path` flag for optimal performance.
