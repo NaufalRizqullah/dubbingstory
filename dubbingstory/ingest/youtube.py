@@ -89,7 +89,7 @@ def extract_video_info(url: str, cookies: str | None = None) -> dict:
         "skip_download": True,
         "no_warnings": True,
         "extractor_args": {"youtube": ["player_client=web"]},
-        "remote_components": "ejs:github",
+        "remote_components": ["ejs:github"],
     }
     _apply_cookies(ydl_opts, cookies)
 
@@ -164,7 +164,7 @@ def download_video(
         "quiet": True,
         "merge_output_format": "mp4",
         "extractor_args": {"youtube": ["player_client=web"]},
-        "remote_components": "ejs:github",
+        "remote_components": ["ejs:github"],
     }
     _apply_cookies(ydl_opts, cookies)
 
@@ -230,7 +230,7 @@ def download_subtitles(
             "subtitlesformat": "srt",
             "outtmpl": os.path.join(output_dir, "yt_subs"),
             "extractor_args": {"youtube": ["player_client=web"]},
-            "remote_components": "ejs:github",
+            "remote_components": ["ejs:github"],
             **opts_extra,
         }
         _apply_cookies(ydl_opts, cookies)
