@@ -14,8 +14,8 @@ All notable changes to the **dubbingstory** project will be documented in this f
 ## [0.4.5] - 2026-08-18
 
 ### Fixed
-- **Vision Image Loading Crash (100% scene failure)**: Reverted broken `file://` image path optimization back to reliable **base64 data URI** embedding. The `file://` mode required vLLM's `--allowed-local-media-path` flag which is not set by default, causing every single scene analysis to fail with `InternalServerError: Cannot load local files without --allowed-local-media-path`.
-- **Removed `image_mode` parameter**: Cleaned up `OpenAIVisionAnalyzer`, `scene_understanding.py`, and `config.py` — the `image_mode` / `OPENAI_VISION_IMAGE_MODE` config is no longer used.
+- **Vision Image Loading Crash (100% scene failure)**: Fixed the `file://` image path mode that caused `InternalServerError: Cannot load local files without --allowed-local-media-path` on every scene. The default `image_mode` is now `"data"` (base64, always works). For efficient local vLLM (Kaggle/Colab), set `OPENAI_VISION_IMAGE_MODE=file` in `.env` and add `--allowed-local-media-path /kaggle/working` to the vLLM startup command.
+- **Kaggle Script Auto-Setup**: Updated `mereska-dubbingstory-yt.py` to automatically enable `file://` mode with the correct vLLM `--allowed-local-media-path` flag for optimal performance.
 
 ## [0.4.4] - 2026-08-17
 

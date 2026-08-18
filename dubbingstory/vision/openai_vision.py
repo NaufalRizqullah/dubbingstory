@@ -171,6 +171,7 @@ class OpenAIVisionAnalyzer:
         temperature: float = 0.2,
         max_tokens: int = 1024,
         model_max_context: int | None = None,
+        image_mode: str = "data",
     ):
         if OpenAI is None:
             raise ImportError(
@@ -185,6 +186,11 @@ class OpenAIVisionAnalyzer:
         self.max_tokens = max_tokens
         # If not provided, default to 8192 (can be overridden via cfg)
         self.model_max_context = int(model_max_context or 8192)
+        # image_mode: how images are sent to the vision API
+        #   "data"  → base64 data URI (default, always works)
+        #   "file"  → file:// path (efficient, but requires vLLM flag
+        #             --allowed-local-media-path)
+        self.image_mode = image_mode or "data"
 
     def _build_image_content(self, image_paths: list[str]) -> list[dict]:
         """Build OpenAI Vision API content parts from image file paths."""
@@ -192,7 +198,10 @@ class OpenAIVisionAnalyzer:
         for path in image_paths:
             if not os.path.exists(path):
                 continue
-            url = _image_to_base64_url(path)
+            if self.image_mode == "file":
+                url = f"file://{os.path.abspath(path)}"
+            else:
+                url = _image_to_base64_url(path)
             parts.append({
                 "type": "image_url",
                 "image_url": {"url": url},

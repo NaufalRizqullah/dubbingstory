@@ -274,6 +274,7 @@ API_KEY_GEMINI = UserSecretsClient().get_secret('GOOGLE_API_KEY') or ""
 # Create .env File
 env_text = f"""# Auto-generated from notebook userdata
 GOOGLE_API_KEY={API_KEY_GEMINI}
+OPENAI_VISION_IMAGE_MODE=file
 """
 
 Path(".env").write_text(env_text, encoding="utf-8")
@@ -325,7 +326,8 @@ else:
         "--tensor-parallel-size", TENSOR_PARALLEL_SIZE,
         "--gpu-memory-utilization", GPU_MEM_UTIL,
         "--dtype", "half",
-        "--enforce-eager",   # Hapus komentar ini jika sering OOM di T4
+        "--enforce-eager",
+        "--allowed-local-media-path", "/kaggle/working",
     ]
 
     print(f"   Command: {' '.join(vllm_cmd)}")
