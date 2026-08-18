@@ -72,7 +72,6 @@ def _create_analyzer(cfg):
         temperature = getattr(cfg, "vision_openai_temperature", 0.2)
         max_tokens = getattr(cfg, "vision_openai_max_tokens", 1024)
         model_max_context = getattr(cfg, "vision_openai_model_max_context", None)
-        image_mode = getattr(cfg, "vision_openai_image_mode", "file")
 
         return OpenAIVisionAnalyzer(
             api_key=api_key,
@@ -81,7 +80,6 @@ def _create_analyzer(cfg):
             temperature=temperature,
             max_tokens=max_tokens,
             model_max_context=model_max_context,
-            image_mode=image_mode,
         )
 
     elif provider == "gemini":

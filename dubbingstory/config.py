@@ -141,11 +141,6 @@ def build_config(
     if env_vision_base_url:
         flat["vision_openai_base_url"] = env_vision_base_url
 
-    # New env vars introduced for image_mode and token budgeting
-    env_image_mode = os.getenv("OPENAI_VISION_IMAGE_MODE", "")
-    if env_image_mode:
-        flat["vision_openai_image_mode"] = env_image_mode
-
     env_vision_max_tokens = os.getenv("OPENAI_VISION_MAX_TOKENS", "")
     if env_vision_max_tokens:
         try:

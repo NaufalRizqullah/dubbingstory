@@ -11,6 +11,12 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.4.5] - 2026-08-18
+
+### Fixed
+- **Vision Image Loading Crash (100% scene failure)**: Reverted broken `file://` image path optimization back to reliable **base64 data URI** embedding. The `file://` mode required vLLM's `--allowed-local-media-path` flag which is not set by default, causing every single scene analysis to fail with `InternalServerError: Cannot load local files without --allowed-local-media-path`.
+- **Removed `image_mode` parameter**: Cleaned up `OpenAIVisionAnalyzer`, `scene_understanding.py`, and `config.py` — the `image_mode` / `OPENAI_VISION_IMAGE_MODE` config is no longer used.
+
 ## [0.4.4] - 2026-08-17
 
 ### Fixed
