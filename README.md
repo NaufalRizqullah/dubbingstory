@@ -32,12 +32,16 @@ Terinspirasi dari video repair Pakistan di Facebook yang di-dubbing dan dinarasi
 pip install -e .
 ```
 
-### 2. Setup API Key
+### 2. Setup Lingkungan & API Key
 
 ```bash
 cp .env.sample .env
-# Edit file .env dan tambahkan GOOGLE_API_KEY Anda
 ```
+Edit file `.env` dan konfigurasikan variabel berikut:
+- `GOOGLE_API_KEY`: (Wajib) API key untuk Gemini (digunakan untuk menulis naskah).
+- `OPENAI_VISION_IMAGE_MODE`: (Opsional) Cara pengiriman gambar ke model vision lokal (vLLM).
+  - `data` (default): base64 encoding (aman dan selalu berhasil).
+  - `file`: Mengirim file path lokal (jauh lebih cepat dan hemat memori, sangat disarankan untuk Kaggle/Colab). **Catatan**: Jika menggunakan `file`, Anda wajib menambahkan flag `--allowed-local-media-path <path>` saat menjalankan server vLLM.
 
 ### 3. Jalankan
 
