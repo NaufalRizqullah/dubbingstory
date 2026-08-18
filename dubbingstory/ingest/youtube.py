@@ -88,7 +88,7 @@ def extract_video_info(url: str, cookies: str | None = None) -> dict:
         "quiet": True,
         "skip_download": True,
         "no_warnings": True,
-        "extractor_args": {"youtube": ["player_client=android,web"]},
+        "extractor_args": {"youtube": ["player_client=web"]},
         "remote_components": "ejs:github",
     }
     _apply_cookies(ydl_opts, cookies)
@@ -163,7 +163,7 @@ def download_video(
         "outtmpl": output_path,
         "quiet": True,
         "merge_output_format": "mp4",
-        "extractor_args": {"youtube": ["player_client=android,web"]},
+        "extractor_args": {"youtube": ["player_client=web"]},
         "remote_components": "ejs:github",
     }
     _apply_cookies(ydl_opts, cookies)
@@ -229,7 +229,7 @@ def download_subtitles(
             "subtitleslangs": languages,
             "subtitlesformat": "srt",
             "outtmpl": os.path.join(output_dir, "yt_subs"),
-            "extractor_args": {"youtube": ["player_client=android,web"]},
+            "extractor_args": {"youtube": ["player_client=web"]},
             "remote_components": "ejs:github",
             **opts_extra,
         }
@@ -260,7 +260,7 @@ def download_subtitles(
                             "subtitleslangs": [lang],
                             "subtitlesformat": "srt",
                             "outtmpl": os.path.join(output_dir, "yt_subs"),
-                            "extractor_args": {"youtube": ["player_client=android,web"]},
+                            "extractor_args": {"youtube": ["player_client=web"]},
                         }
                         _apply_cookies(dl_opts, cookies)
                         with YoutubeDL(dl_opts) as ydl2:
