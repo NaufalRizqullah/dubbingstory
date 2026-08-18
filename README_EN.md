@@ -70,6 +70,22 @@ dubbingstory render --project video --ratio 16:9 9:16
 
 ---
 
+## 🧠 How the Pipeline Works
+
+DubbingStory automatically dissects and processes your video through several smart stages, particularly when using **Summary Mode (Highlight Recap)**:
+
+1. **Visual Segmentation (Scene Detection):** The algorithm watches the video from start to finish and detects drastic camera angle changes (*cuts*). A 30-minute video might be split into ~150 scenes. *(You can adjust speed optimization parameters like `--min-scene-duration` and `--scene-threshold` to prevent too many micro-cuts).*
+2. **Keyframe Extraction:** For each scene, the program extracts a few representative screenshots. *(Controlled by `--max-keyframes`, lower this number to save GPU RAM).*
+3. **Cheap Screening (Audition):** The Vision AI (Gemini/Qwen) quickly evaluates and assigns an "interest score" (0-100) to each scene based on visual salience.
+4. **Top Scene Selection (The Cut):** The system ranks all scenes by score and selects the absolute best scenes until the **Target Duration** (e.g., 3 minutes) is met. Less interesting scenes are discarded. **Important:** Once selected, these golden scenes are *re-sorted chronologically* based on their original timestamps, ensuring the final video story flows naturally and never jumps out of order.
+5. **Narrative Flow Analysis (Temporal Chunking):** To ensure the story makes sense (not just random clips), the AI reads the chronological timeline of the selected scenes (processed in batches of 40 scenes to prevent GPU *Out of Memory*) to establish the setup, process, and result.
+6. **Execution (Cut, Write, Dub):** 
+   - **Video Cutter:** Physically extracts the selected golden scenes from the original video and concatenates them.
+   - **Script Writer:** The Text AI writes a synchronized narration script (in the chosen style) tailored to those scenes.
+   - **TTS & Render:** The script is converted to human voice (Edge/Piper) and overlaid onto the compiled video while ducking the original background audio.
+
+---
+
 ## ⚙️ CLI Parameters
 
 ### `run` (Full Pipeline)

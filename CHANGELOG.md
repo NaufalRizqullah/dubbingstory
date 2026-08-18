@@ -11,7 +11,14 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
-## [1.1.1] - 2026-08-17
+## [0.4.4] - 2026-08-17
+
+### Fixed
+- **Summary Cut Audio Desync**: Fixed a critical bug in Summary Mode where scenes that failed vision analysis were skipped by the TTS generation but still cut into the video compilation. This caused silent scenes and desynced dubbing. Failed scenes are now completely excluded from the cut sequence.
+- **Vision Token Overflow (OOM/Truncation)**: Mitigated extreme token generation during scene analysis by enforcing strict brevity constraints in the Vision prompt (`finish_reason=length`).
+- **Temporal Context Exceeded**: Fixed a critical bug where long videos (e.g. 150+ scenes) would trigger HTTP 400 Context Length errors in local models (e.g. vLLM). Implemented a **Temporal Chunking** algorithm to process global scenes in batches of 40 and condense the JSON payload, ensuring it stays well within the 8192 token limit regardless of video length.
+
+## [0.4.3] - 2026-08-17
 
 ### Added
 - **Piper TTS Restoration**: Re-implemented the `PiperTTSEngine` with robust auto-download capabilities and reliable path resolution for `piper` models.
@@ -20,7 +27,7 @@ All notable changes to the **dubbingstory** project will be documented in this f
 ### Fixed
 - **CLI Engine Default Bug**: Fixed an issue where the `--engine` CLI argument ignored fallback configurations (e.g. from `.yaml`) because it always forced `"edge"` as the parsed default.
 
-## [1.1.0] - 2026-08-17
+## [0.4.2] - 2026-08-17
 
 ### Added
 - **Two-Pass Summary Vision**: Introduced a two-pass architecture for summary mode (Cheap Screening -> Deep Analysis on Top N) to drastically reduce GPU compute time.

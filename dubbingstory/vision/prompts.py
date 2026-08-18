@@ -16,10 +16,10 @@ CRITICAL RULES:
 
 {subtitle_context}
 
-Analyze and describe:
+Analyze and describe (KEEP ALL DESCRIPTIONS EXTREMELY BRIEF, 1 short sentence max):
 1. visible_objects: List ALL visible objects, tools, materials, text/signs
 2. people: Number of people, their clothing, posture, activity
-3. action: What is happening in this scene (based on frame progression)
+3. action: What is happening in this scene
 4. changes: What changed between the first and last frame
 5. environment: Indoor/outdoor, lighting, workspace type
 6. likely_context: What step in a larger process this might represent
@@ -172,37 +172,21 @@ def build_temporal_prompt(
             f"\nFULL VIDEO SUBTITLE CONTEXT:\n```\n{subtitle_context}\n```"
         )
 
-    # Build a compact summary for each scene to reduce token usage
-    def _summarize_scene(a: dict) -> dict:
-        brief = None
-        # Prefer short action or likely_context or visible_objects
-        if a.get("action"):
-            brief = str(a.get("action"))
-        elif a.get("likely_context"):
-            brief = str(a.get("likely_context"))
-        else:
-            vo = a.get("visible_objects") or []
-            brief = ", ".join(vo[:6]) if isinstance(vo, list) else str(vo)
-
-        # Truncate long text
-        if brief is None:
-            brief = ""
-        if len(brief) > 300:
-            brief = brief[:300] + "..."
-
-        return {
-            "scene_id": a.get("scene_id", ""),
-            "brief": brief,
-            "confidence": round(float(a.get("confidence", 0) or 0), 3),
-            # include a short list of visible objects (max 8)
-            "visible_objects": (a.get("visible_objects") or [])[:8],
+    condensed_scenes = []
+    for s in scene_analyses:
+        c = {
+            "id": s.get("scene_id"),
+            "action": s.get("action"),
+            "changes": s.get("changes"),
+            "context": s.get("likely_context"),
         }
-
-    compact = [_summarize_scene(a) for a in scene_analyses]
+        if s.get("words"):
+            c["words"] = s.get("words")
+        condensed_scenes.append(c)
 
     return TEMPORAL_FLOW_PROMPT.format(
         domain=domain,
         n_scenes=len(scene_analyses),
         subtitle_context=subtitle_section,
-        scene_analyses_json=json.dumps(compact, indent=2, ensure_ascii=False),
+        scene_analyses_json=json.dumps(condensed_scenes, indent=2, ensure_ascii=False),
     )
