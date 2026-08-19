@@ -11,6 +11,12 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.4.10] - 2026-08-20
+
+### Fixed
+- **Summary Duration Manifest Became Zero**: Fixed summary clip durations being measured after temporary clips were deleted, which produced zero durations and corrupted the summary timeline, SRT timestamps, and audio alignment.
+- **Summary Script Missing Timestamps**: Summary text scripts now include each segment's summary-video time range, while the TTS parser removes this display-only metadata before synthesis.
+
 ## [0.4.9] - 2026-08-19
 
 ### Fixed

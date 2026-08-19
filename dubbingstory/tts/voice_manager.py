@@ -123,6 +123,13 @@ def generate_all_audio(
             if match:
                 scene_id = match.group(1)
                 text = match.group(2).strip()
+                # Summary scripts may include display-only SRT timestamps.
+                text = re.sub(
+                    r"^\[\d{2}:\d{2}:\d{2},\d{3}\s+-->\s+"
+                    r"\d{2}:\d{2}:\d{2},\d{3}\]\s*",
+                    "",
+                    text,
+                )
                 if text:
                     segments.append({"scene_id": scene_id, "text": text})
             elif line:

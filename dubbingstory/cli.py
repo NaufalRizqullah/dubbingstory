@@ -602,7 +602,12 @@ def cmd_summary(args, cfg):
         script_path = os.path.join(scripts_dir, f"summary_script_{lang}.txt")
         with open(script_path, "w", encoding="utf-8") as f:
             for seg in segments:
-                f.write(f"[{seg['scene_id']}] {seg['text']}\n\n")
+                f.write(
+                    f"[{seg['scene_id']}] "
+                    f"[{subtitle_gen._format_srt_time(seg.get('start_time', 0))} --> "
+                    f"{subtitle_gen._format_srt_time(seg.get('end_time', 0))}] "
+                    f"{seg['text']}\n\n"
+                )
 
         srt_path = os.path.join(scripts_dir, f"summary_script_{lang}.srt")
         subtitle_gen.generate_srt(segments, srt_path)

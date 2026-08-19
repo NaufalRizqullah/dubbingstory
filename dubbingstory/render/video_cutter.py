@@ -114,6 +114,11 @@ def cut_and_concat(
     if not clip_paths:
         raise RuntimeError("All clip extractions failed. Cannot create summary.")
 
+    actual_clip_durations = {
+        os.path.splitext(os.path.basename(path))[0]: _get_video_duration(path)
+        for path in clip_paths
+    }
+
     # Concatenate clips using FFmpeg concat demuxer
     print(f"\n   🔗 Concatenating {len(clip_paths)} clips...")
 
@@ -163,12 +168,7 @@ def cut_and_concat(
     # concat. The detected scene duration can differ by video frame rounding.
     durations_path = output_path + ".durations.json"
     with open(durations_path, "w", encoding="utf-8") as f:
-        json.dump(
-            {os.path.splitext(os.path.basename(path))[0]: _get_video_duration(path)
-             for path in clip_paths},
-            f,
-            indent=2,
-        )
+        json.dump(actual_clip_durations, f, indent=2)
 
     # Get final duration
     duration_s = _get_video_duration(output_path)
