@@ -11,6 +11,13 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.4.8] - 2026-08-19
+
+### Fixed
+- **Temporal Analysis `finish_reason=length`**: The temporal flow analysis was capped at `max_tokens=2048` for output, even though the input was only ~2600 tokens (leaving ~9600 tokens available). With 30 scenes per chunk, the required output (~3000 tokens) exceeded the 2048 cap, causing JSON truncation and failure for most chunks. Now `analyze_temporal_flow()` uses the full allowed output budget (`model_max_context - input_tokens`) so temporal chunks complete successfully.
+- **Summary SRT Timestamp Desync (Video Longer Than Audio)**: SRT timestamps were using the original video timeline (e.g., `00:44:31` for a scene at 2633s in the original 44-minute video), but the rendered summary video is a concatenated cut of only ~3 minutes. Added cumulative timeline remapping in `cli.py` so SRT timestamps correctly reflect the summary video's own timeline (e.g., `00:02:50` instead of `00:44:31`).
+- **Temporal Chunk Size Reduced**: Default `temporal_chunk_size` changed from 30 → 20 scenes per batch to provide additional safety margin for output token budget.
+
 ## [0.4.7] - 2026-08-19
 
 ### Fixed

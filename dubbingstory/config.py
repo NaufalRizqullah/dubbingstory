@@ -173,7 +173,7 @@ def build_config(
     flat.setdefault("summary_target_duration", None)  # None = auto (~10-15% of original)
     flat.setdefault("summary_max_scenes", None)        # None = auto
     flat.setdefault("summary_min_scene_score", 0.3)
-    flat.setdefault("temporal_chunk_size", 30)
+    flat.setdefault("temporal_chunk_size", 15)
 
     return SimpleNamespace(**flat)
 

@@ -551,6 +551,28 @@ def cmd_summary(args, cfg):
         cfg=cfg,
     )
 
+    # ── Remap timestamps to summary video timeline ─────────────────────
+    # The narration segments have start_time/end_time from the ORIGINAL video
+    # (e.g. scene_070 starts at 2633s). But the summary video is a concat of
+    # selected clips only, so scene_070 might start at second ~180.
+    # Build a mapping: scene_id → (summary_start, summary_end)
+    summary_timeline = {}
+    cumulative = 0.0
+    for scene in selected:
+        sid = scene["scene_id"]
+        summary_timeline[sid] = {
+            "start": cumulative,
+            "end": cumulative + scene["duration"],
+        }
+        cumulative += scene["duration"]
+
+    for lang, segments in narration.items():
+        for seg in segments:
+            sid = seg.get("scene_id", "")
+            if sid in summary_timeline:
+                seg["start_time"] = summary_timeline[sid]["start"]
+                seg["end_time"] = summary_timeline[sid]["end"]
+
     # Save scripts
     scripts_dir = os.path.join(project_dir, "scripts")
     os.makedirs(scripts_dir, exist_ok=True)

@@ -216,6 +216,7 @@ class OpenAIVisionAnalyzer:
     def _call_with_retry(
         self,
         messages: list[dict],
+        max_tokens_override: int | None = None,
     ) -> dict | list:
         """
         Call the OpenAI-compatible API with smart retry logic.
@@ -258,8 +259,11 @@ class OpenAIVisionAnalyzer:
                         f"Summarize or trim scene_analyses before calling temporal analysis."
                     )
 
-                # Allocate output tokens conservatively
-                call_max_tokens = min(int(self.max_tokens), int(allowed_output))
+                # Allocate output tokens: use override if provided (e.g. for
+                # temporal analysis which is text-only and needs large output),
+                # otherwise cap at self.max_tokens (safe for vision calls).
+                effective_max = max_tokens_override if max_tokens_override else self.max_tokens
+                call_max_tokens = min(int(effective_max), int(allowed_output))
 
                 print(
                     f"      [Vision] token_budget text={text_tokens} images={n_images}×{self.image_token_cost}={image_tokens} "
@@ -394,7 +398,14 @@ class OpenAIVisionAnalyzer:
         """
         messages = [{"role": "user", "content": prompt}]
 
-        return self._call_with_retry(messages)
+        # Temporal analysis is text-only (no images) and needs a large output
+        # to fit narrative data for all scenes in the chunk. Use the full
+        # allowed output budget instead of the default max_tokens (which is
+        # tuned for per-scene vision calls and usually only 2048).
+        return self._call_with_retry(
+            messages,
+            max_tokens_override=self.model_max_context,
+        )
 
     def health_check(self) -> bool:
         """Check if the vision server is reachable and serving the expected model."""
