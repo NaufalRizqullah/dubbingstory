@@ -217,6 +217,7 @@ class OpenAIVisionAnalyzer:
         self,
         messages: list[dict],
         max_tokens_override: int | None = None,
+        retry_max_tokens: int | None = None,
     ) -> dict | list:
         """
         Call the OpenAI-compatible API with smart retry logic.
@@ -263,6 +264,8 @@ class OpenAIVisionAnalyzer:
                 # temporal analysis which is text-only and needs large output),
                 # otherwise cap at self.max_tokens (safe for vision calls).
                 effective_max = max_tokens_override if max_tokens_override else self.max_tokens
+                if retry_max_tokens:
+                    effective_max = max(effective_max, retry_max_tokens)
                 call_max_tokens = min(int(effective_max), int(allowed_output))
 
                 print(
@@ -370,7 +373,10 @@ class OpenAIVisionAnalyzer:
                 content = self._build_image_content(reduced)
                 content.append({"type": "text", "text": prompt})
                 messages = [{"role": "user", "content": content}]
-                return self._call_with_retry(messages)
+                return self._call_with_retry(
+                    messages,
+                    retry_max_tokens=max(3072, self.max_tokens),
+                )
             raise
 
     def analyze_temporal_flow(
@@ -404,7 +410,7 @@ class OpenAIVisionAnalyzer:
         # tuned for per-scene vision calls and usually only 2048).
         return self._call_with_retry(
             messages,
-            max_tokens_override=self.model_max_context,
+            max_tokens_override=min(self.model_max_context, 4096),
         )
 
     def health_check(self) -> bool:

@@ -384,15 +384,42 @@ def run_analysis(
                 narrative_arcs.append(chunk_data["narrative_arc"])
         except Exception as e:
             print(f"   ⚠️ Temporal analysis failed for chunk {i//temporal_chunk_size + 1}: {e}")
-            # Fallback for this chunk so we don't lose the scenes
-            for s in chunk:
-                enriched_scenes_all.append({
-                    "scene_id": s.get("scene_id"),
-                    "narrative_role": "process",
-                    "narration_importance": 0.5,
-                    "narration_cue": "",
-                    "connects_to_next": "",
-                })
+            # Retry smaller text-only batches before falling back. A temporal
+            # JSON response can still exceed the model output budget even when
+            # the input prompt itself fits the context window.
+            retry_chunks = [chunk]
+            if len(chunk) > 1:
+                midpoint = max(1, len(chunk) // 2)
+                retry_chunks = [chunk[:midpoint], chunk[midpoint:]]
+
+            for retry_index, retry_chunk in enumerate(retry_chunks, start=1):
+                try:
+                    retry_prompt = build_temporal_prompt(
+                        scene_analyses=retry_chunk,
+                        domain=domain_hint or "general",
+                        subtitle_context=full_subtitle_context,
+                    )
+                    retry_data = analyzer.analyze_temporal_flow(
+                        scene_analyses=retry_chunk,
+                        prompt=retry_prompt,
+                    )
+                    enriched_scenes_all.extend(retry_data.get("scenes_enriched", []))
+                    if retry_data.get("video_summary"):
+                        video_summaries.append(retry_data["video_summary"])
+                    if retry_data.get("narrative_arc") and retry_data["narrative_arc"] != "unknown":
+                        narrative_arcs.append(retry_data["narrative_arc"])
+                except Exception as retry_error:
+                    print(
+                        f"   ⚠️ Temporal retry {retry_index} failed: {retry_error}"
+                    )
+                    for scene in retry_chunk:
+                        enriched_scenes_all.append({
+                            "scene_id": scene.get("scene_id"),
+                            "narrative_role": "process",
+                            "narration_importance": 0.5,
+                            "narration_cue": "",
+                            "connects_to_next": "",
+                        })
 
     temporal_data = {
         "video_summary": " ".join(video_summaries) if video_summaries else "Unable to generate summary.",

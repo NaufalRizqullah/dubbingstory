@@ -11,6 +11,13 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.4.9] - 2026-08-19
+
+### Fixed
+- **Adaptive Vision Output Budget**: Kept the vLLM context at `12288` and added a bounded retry for vision responses that end with `finish_reason=length`. Retries reduce the keyframes to one image and allow up to `3072` output tokens while still respecting the remaining context budget.
+- **Temporal Flow Truncation**: Limited temporal analysis output to a safe maximum of `4096` tokens instead of requesting the entire model context, reducing JSON truncation risk for Qwen3-VL/vLLM.
+- **Temporal Chunk Retry**: Failed temporal chunks are now split into smaller batches and retried before falling back to neutral narrative metadata.
+
 ## [0.4.8] - 2026-08-19
 
 ### Fixed
