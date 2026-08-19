@@ -11,6 +11,11 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.4.7] - 2026-08-19
+
+### Fixed
+- **Temporal Analysis Context Overflow**: Fixed an issue where videos with many scenes (e.g., >200 scenes) would crash the Temporal Flow Analysis because the combined JSON prompt exceeded the model's 12.288 context limit. Implemented **Temporal Chunking** in `scene_understanding.py` that processes scenes in batches (default: 30 scenes/chunk) and merges the enriched narrative roles. This ensures the `summary` mode correctly selects scenes across the entire video duration (including the climax and ending) rather than defaulting to the first few minutes.
+
 ## [0.4.6] - 2026-08-19
 
 ### Fixed

@@ -344,33 +344,62 @@ def run_analysis(
     print(f"\n   🔄 Building temporal flow understanding...")
 
     scenes_for_temporal = [a for a in scene_analyses if a.get("selected", True)]
+    
+    temporal_chunk_size = getattr(cfg, "temporal_chunk_size", 30)
+    if not temporal_chunk_size or temporal_chunk_size < 1:
+        temporal_chunk_size = 30
+        
+    enriched_scenes_all = []
+    video_summaries = []
+    narrative_arcs = []
+    domain_res = domain_hint or "unknown"
+    
+    print(f"   [Temporal] Chunking {len(scenes_for_temporal)} scenes with size {temporal_chunk_size}")
 
-    temporal_prompt = build_temporal_prompt(
-        scene_analyses=scenes_for_temporal,
-        domain=domain_hint or "general",
-        subtitle_context=full_subtitle_context,
-    )
-
-    # Log temporal prompt token estimate to detect large combined prompts
-    try:
-        temporal_tokens = _estimate_tokens(temporal_prompt, model=getattr(analyzer, "model", None))
-    except Exception:
-        temporal_tokens = None
-    print(f"   [Tokens] temporal_prompt_tokens~{temporal_tokens} scenes={len(scenes_for_temporal)}")
-
-    try:
-        temporal_data = analyzer.analyze_temporal_flow(
-            scene_analyses=scene_analyses,
-            prompt=temporal_prompt,
+    for i in range(0, len(scenes_for_temporal), temporal_chunk_size):
+        chunk = scenes_for_temporal[i:i+temporal_chunk_size]
+        
+        temporal_prompt = build_temporal_prompt(
+            scene_analyses=chunk,
+            domain=domain_hint or "general",
+            subtitle_context=full_subtitle_context,
         )
-    except Exception as e:
-        print(f"   ⚠️ Temporal analysis failed: {e}")
-        temporal_data = {
-            "video_summary": "Unable to generate summary.",
-            "narrative_arc": "unknown",
-            "domain": domain_hint or "unknown",
-            "scenes_enriched": [],
-        }
+
+        # Log temporal prompt token estimate to detect large combined prompts
+        try:
+            temporal_tokens = _estimate_tokens(temporal_prompt, model=getattr(analyzer, "model", None))
+        except Exception:
+            temporal_tokens = None
+        print(f"   [Tokens] temporal_prompt_tokens~{temporal_tokens} for chunk {i//temporal_chunk_size + 1}")
+
+        try:
+            chunk_data = analyzer.analyze_temporal_flow(
+                scene_analyses=chunk,
+                prompt=temporal_prompt,
+            )
+            enriched_scenes_all.extend(chunk_data.get("scenes_enriched", []))
+            if chunk_data.get("video_summary"):
+                video_summaries.append(chunk_data["video_summary"])
+            if chunk_data.get("narrative_arc") and chunk_data["narrative_arc"] != "unknown":
+                narrative_arcs.append(chunk_data["narrative_arc"])
+        except Exception as e:
+            print(f"   ⚠️ Temporal analysis failed for chunk {i//temporal_chunk_size + 1}: {e}")
+            # Fallback for this chunk so we don't lose the scenes
+            for s in chunk:
+                enriched_scenes_all.append({
+                    "scene_id": s.get("scene_id"),
+                    "narrative_role": "process",
+                    "narration_importance": 0.5,
+                    "narration_cue": "",
+                    "connects_to_next": "",
+                })
+
+    temporal_data = {
+        "video_summary": " ".join(video_summaries) if video_summaries else "Unable to generate summary.",
+        "narrative_arc": narrative_arcs[-1] if narrative_arcs else "unknown",
+        "domain": domain_res,
+        "scenes_enriched": enriched_scenes_all,
+    }
 
     # ── Step 3: Build storyboard ────────────────────────────────────────
     transcript_source = "none"
