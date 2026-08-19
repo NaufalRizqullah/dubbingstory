@@ -6,6 +6,7 @@ a single highlight/recap video.
 """
 
 import os
+import json
 import subprocess
 import tempfile
 
@@ -157,6 +158,17 @@ def cut_and_concat(
 
     if not os.path.exists(output_path):
         raise RuntimeError(f"Concat output not found: {output_path}")
+
+    # Preserve the durations of the clips that actually made it into the
+    # concat. The detected scene duration can differ by video frame rounding.
+    durations_path = output_path + ".durations.json"
+    with open(durations_path, "w", encoding="utf-8") as f:
+        json.dump(
+            {os.path.splitext(os.path.basename(path))[0]: _get_video_duration(path)
+             for path in clip_paths},
+            f,
+            indent=2,
+        )
 
     # Get final duration
     duration_s = _get_video_duration(output_path)

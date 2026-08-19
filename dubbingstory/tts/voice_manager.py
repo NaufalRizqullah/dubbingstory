@@ -56,6 +56,7 @@ def generate_all_audio(
     cfg=None,
     script_prefix: str = "script_",
     audio_prefix: str = "audio_",
+    segment_durations: dict[str, float] | None = None,
 ) -> dict[str, str]:
     """
     Generate TTS audio for all narration scripts in the scripts directory.
@@ -76,6 +77,8 @@ def generate_all_audio(
         Prefix for script filenames (default: "script_").
     audio_prefix : str
         Prefix for output audio filenames (default: "audio_").
+    segment_durations : dict[str, float] | None
+        Optional target duration per scene for summary alignment.
 
     Returns
     -------
@@ -145,7 +148,15 @@ def generate_all_audio(
                     language=lang,
                     speaking_rate=speaking_rate,
                 )
-                segment_paths.append(seg_audio)
+                target_duration = (segment_durations or {}).get(seg["scene_id"])
+                if target_duration and target_duration > 0:
+                    aligned_audio = os.path.join(
+                        lang_audio_dir, f"{seg['scene_id']}_aligned.wav"
+                    )
+                    _align_audio_duration(seg_audio, aligned_audio, target_duration)
+                    segment_paths.append(aligned_audio)
+                else:
+                    segment_paths.append(seg_audio)
                 print(f"      ✅ {seg['scene_id']}: {len(seg['text'].split())} words")
             except Exception as e:
                 print(f"      ❌ {seg['scene_id']}: {e}")
@@ -204,4 +215,55 @@ def _concatenate_audio(audio_paths: list[str], output_path: str) -> str:
         if os.path.exists(list_path):
             os.remove(list_path)
 
+    return output_path
+
+
+def _get_audio_duration(audio_path: str) -> float:
+    """Return an audio file duration in seconds, or zero when unavailable."""
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", audio_path,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    try:
+        return float(result.stdout.strip())
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _align_audio_duration(input_path: str, output_path: str, target_duration: float) -> str:
+    """Fit one scene's narration exactly to its visual scene duration."""
+    actual_duration = _get_audio_duration(input_path)
+    if actual_duration <= 0:
+        raise RuntimeError(f"Cannot determine audio duration: {input_path}")
+
+    filters = []
+    if actual_duration > target_duration + 0.03:
+        tempo = actual_duration / target_duration
+        while tempo > 2.0:
+            filters.append("atempo=2.0")
+            tempo /= 2.0
+        while tempo < 0.5:
+            filters.append("atempo=0.5")
+            tempo /= 0.5
+        filters.append(f"atempo={tempo:.6f}")
+    else:
+        filters.append(f"apad=pad_dur={target_duration:.3f}")
+
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", input_path,
+            "-af", ",".join(filters),
+            "-t", f"{target_duration:.3f}",
+            "-c:a", "pcm_s16le", output_path,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
     return output_path

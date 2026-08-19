@@ -181,20 +181,66 @@ def select_scenes(
         candidates = sorted(scored, key=lambda s: s["summary_score"], reverse=True)[:5]
         print(f"      ⚠️ No scenes above threshold, using top {len(candidates)} fallback")
 
-    # Sort by score descending
-    candidates.sort(key=lambda s: s["summary_score"], reverse=True)
+    # Pick the best candidate from evenly spaced time windows first. A pure
+    # score sort tends to select adjacent scenes from one strong section and
+    # loses the beginning, middle, or ending of the story.
+    candidates_by_time = sorted(candidates, key=lambda s: s.get("start_time", 0))
+    timeline_end = max(
+        total_duration,
+        max((s.get("end_time", 0) for s in candidates_by_time), default=0),
+    )
+    window_count = min(max_scenes, len(candidates_by_time))
+    window_size = timeline_end / window_count if window_count else 0
 
-    # Greedy selection: pick top scenes until target_duration is reached
     selected = []
+    selected_ids = set()
     cumulative_duration = 0.0
 
-    for scene in candidates:
+    # Always preserve the opening and closing beats when they have valid
+    # analysis. A recap that omits either end cannot explain the full arc.
+    anchors = [candidates_by_time[0]]
+    if len(candidates_by_time) > 1:
+        anchors.append(candidates_by_time[-1])
+    for scene in anchors:
+        if scene["scene_id"] in selected_ids:
+            continue
+        if cumulative_duration + scene["duration"] <= target_duration * 1.2:
+            selected.append(scene)
+            selected_ids.add(scene["scene_id"])
+            cumulative_duration += scene["duration"]
+
+    for window_index in range(window_count):
+        window_start = window_index * window_size
+        window_end = timeline_end if window_index == window_count - 1 else (window_index + 1) * window_size
+        window_candidates = [
+            scene
+            for scene in candidates_by_time
+            if scene["scene_id"] not in selected_ids
+            and window_start <= scene.get("start_time", 0) < window_end
+        ]
+        if not window_candidates:
+            continue
+
+        scene = max(window_candidates, key=lambda item: item["summary_score"])
+        if cumulative_duration + scene["duration"] <= target_duration * 1.2:
+            selected.append(scene)
+            selected_ids.add(scene["scene_id"])
+            cumulative_duration += scene["duration"]
+
+    # Fill unused slots with the strongest remaining scenes while preserving
+    # the duration limit. This keeps coverage without wasting available time.
+    remaining = sorted(
+        (scene for scene in candidates_by_time if scene["scene_id"] not in selected_ids),
+        key=lambda scene: scene["summary_score"],
+        reverse=True,
+    )
+    for scene in remaining:
         if len(selected) >= max_scenes:
             break
         if cumulative_duration + scene["duration"] > target_duration * 1.2:
-            # Allow 20% overshoot, but don't go too far
             continue
         selected.append(scene)
+        selected_ids.add(scene["scene_id"])
         cumulative_duration += scene["duration"]
 
     # Re-sort by start_time (chronological)

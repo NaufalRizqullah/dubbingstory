@@ -537,6 +537,27 @@ def cmd_summary(args, cfg):
         output_path=summary_video,
     )
 
+    # Use the durations of the clips that actually made it into the concat.
+    # This accounts for frame rounding and removes failed extractions before
+    # narration, SRT, and TTS alignment are generated.
+    durations_path = summary_video + ".durations.json"
+    if os.path.exists(durations_path):
+        with open(durations_path, "r", encoding="utf-8") as f:
+            actual_durations = json.load(f)
+        selected = [
+            scene for scene in selected
+            if scene["scene_id"] in actual_durations
+        ]
+        for scene in selected:
+            scene["duration"] = actual_durations[scene["scene_id"]]
+        print(f"   🧭 Using actual durations for {len(selected)} summary clips")
+        manifest_path = scene_selector.save_summary_manifest(
+            selected_scenes=selected,
+            storyboard=storyboard,
+            project_dir=project_dir,
+            target_duration=target_duration,
+        )
+
     # ── Step 4: Generate summary narration ────────────────────────────────
     languages = args.lang if hasattr(args, "lang") and args.lang else \
         getattr(cfg, "narration_languages", ["id", "en"])
@@ -603,6 +624,10 @@ def cmd_summary(args, cfg):
         cfg=cfg,
         script_prefix="summary_script_",
         audio_prefix="summary_audio_",
+        segment_durations={
+            scene["scene_id"]: scene["duration"]
+            for scene in selected
+        },
     )
 
     # Backup summary TTS audio

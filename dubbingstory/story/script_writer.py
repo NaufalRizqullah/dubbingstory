@@ -281,6 +281,16 @@ def generate_summary_narration(
                 "scenes": selected_scenes,
             }
             narration = _validate_narration(segments, summary_storyboard)
+            selected_order = {
+                scene["scene_id"]: index
+                for index, scene in enumerate(selected_scenes)
+            }
+            narration = [
+                segment
+                for segment in narration
+                if segment["scene_id"] in selected_order
+            ]
+            narration.sort(key=lambda segment: selected_order[segment["scene_id"]])
             all_narrations[lang] = narration
 
             total_words = sum(s.get("word_count", 0) for s in narration)
