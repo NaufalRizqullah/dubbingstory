@@ -635,12 +635,24 @@ def cmd_summary(args, cfg):
         needs_rebuild = False
         lang_selected = copy.deepcopy(selected)
         
+        print(f"   📊 [Tracking] Checking audio vs video lengths for {lang.upper()}:")
+        
         for scene in lang_selected:
             sid = scene["scene_id"]
-            if sid in audio_durations and audio_durations[sid] > scene["duration"] + 0.05:
-                # Add 0.5s padding so the voice doesn't get cut off abruptly
-                scene["duration"] = audio_durations[sid] + 0.5
-                needs_rebuild = True
+            if sid in audio_durations:
+                tts_dur = audio_durations[sid]
+                vid_dur = scene["duration"]
+                
+                if tts_dur > vid_dur + 0.05:
+                    # Add 0.5s padding so the voice doesn't get cut off abruptly
+                    new_dur = tts_dur + 0.5
+                    print(f"      [Tracking] {sid}: Video ({vid_dur:.2f}s) < TTS ({tts_dur:.2f}s) -> Extending to {new_dur:.2f}s (+0.5s pad)")
+                    scene["duration"] = new_dur
+                    needs_rebuild = True
+                else:
+                    print(f"      [Tracking] {sid}: Video ({vid_dur:.2f}s) >= TTS ({tts_dur:.2f}s) -> OK")
+            else:
+                print(f"      [Tracking] {sid}: No TTS audio found -> OK")
 
         if needs_rebuild:
             print(f"   🚀 Dynamic Video Extension: Recutting video to fit {lang.upper()} voiceover naturally...")
@@ -650,6 +662,22 @@ def cmd_summary(args, cfg):
                 selected_scenes=lang_selected,
                 output_path=lang_summary_video,
             )
+            
+            # 1b. Load actual durations of the rebuilt video to prevent SRT/Audio desync
+            durations_path = lang_summary_video + ".durations.json"
+            if os.path.exists(durations_path):
+                with open(durations_path, "r", encoding="utf-8") as f:
+                    actual_durations = json.load(f)
+                
+                print("   🧭 [Tracking] Adjusting timeline to actual FFmpeg extracted durations:")
+                for scene in lang_selected:
+                    sid = scene["scene_id"]
+                    if sid in actual_durations:
+                        old_dur = scene["duration"]
+                        new_dur = actual_durations[sid]
+                        if abs(old_dur - new_dur) > 0.05:
+                            print(f"      [Tracking] {sid}: {old_dur:.2f}s -> {new_dur:.2f}s (FFmpeg drift)")
+                        scene["duration"] = new_dur
         else:
             lang_summary_video = summary_video
             

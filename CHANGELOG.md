@@ -11,6 +11,15 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.4.13] - 2026-08-21
+
+### Fixed
+- **FFmpeg Extraction Drift**: Dynamic video padding (where a scene is re-cut to match TTS length) now correctly reads the *actual* extracted duration from `.durations.json` instead of assuming it matches the exact target duration. This fixes a bug where accumulated FFmpeg rounding errors caused the final summary video to be slightly shorter than expected, leading to misaligned subtitles and cut-off audio at the very end.
+
+### Added
+- **Detailed Tracking Logs**: Added verbose `[Tracking]` logs in the CLI for the dynamic extension process (showing Video vs TTS durations) and in the Vision module (showing JSON recovery status from truncated tokens) to aid in debugging vLLM budget issues.
+- **Persistent Error Logs**: Failed vLLM (Vision) analysis and failed TTS generation are now explicitly logged into `failed_vision.log` and `failed_tts.log` within the project directory to provide a written record of bottlenecks for debugging.
+
 ## [0.4.12] - 2026-08-20
 
 ### Fixed

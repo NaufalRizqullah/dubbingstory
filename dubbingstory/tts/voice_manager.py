@@ -89,6 +89,10 @@ def generate_all_audio(
     speaking_rate = getattr(cfg, "tts_speaking_rate", 1.0) if cfg else 1.0
 
     os.makedirs(audio_dir, exist_ok=True)
+    
+    fail_log_path = os.path.join(os.path.dirname(audio_dir), "failed_tts.log")
+    if os.path.exists(fail_log_path):
+        os.remove(fail_log_path)
 
     results: dict[str, dict] = {}
 
@@ -169,7 +173,13 @@ def generate_all_audio(
                     final_durations[seg["scene_id"]] = _get_audio_duration(seg_audio)
                 print(f"      ✅ {seg['scene_id']}: {len(seg['text'].split())} words")
             except Exception as e:
-                print(f"      ❌ {seg['scene_id']}: {e}")
+                err_msg = str(e)
+                print(f"      ❌ {seg['scene_id']}: {err_msg}")
+                
+                # Save failure to log file
+                fail_log_path = os.path.join(os.path.dirname(audio_dir), "failed_tts.log")
+                with open(fail_log_path, "a", encoding="utf-8") as f:
+                    f.write(f"[{lang.upper()}] [{seg['scene_id']}] Error: {err_msg}\n")
 
         # Concatenate all segments into one audio file
         if segment_paths:

@@ -181,6 +181,10 @@ def run_analysis(
     scene_analyses = []
     cache_dir = os.path.join(project_dir, "vision_cache")
     os.makedirs(cache_dir, exist_ok=True)
+    
+    fail_log_path = os.path.join(project_dir, "failed_vision.log")
+    if os.path.exists(fail_log_path):
+        os.remove(fail_log_path)
 
     def analyze_scene(scene, is_cheap=False):
         scene_id = scene["scene_id"]
@@ -276,7 +280,14 @@ def run_analysis(
             return analysis
 
         except Exception as e:
-            print(f"   ❌ {scene_id}: analysis failed — {e}")
+            err_msg = str(e)
+            print(f"   ❌ {scene_id}: analysis failed — {err_msg}")
+            
+            # Save failure to log file
+            fail_log_path = os.path.join(project_dir, "failed_vision.log")
+            with open(fail_log_path, "a", encoding="utf-8") as f:
+                f.write(f"[{scene_id}] Error: {err_msg}\n")
+                
             if is_cheap:
                 return {"scene_id": scene_id, "salience": 0.0}
             return {
