@@ -572,9 +572,19 @@ def cmd_summary(args, cfg):
         cfg=cfg,
     )
 
-    # Save base text scripts (without remapped timestamps yet)
+    # Save base text scripts (without remapped timestamps yet, just for TTS)
     scripts_dir = os.path.join(project_dir, "scripts")
     os.makedirs(scripts_dir, exist_ok=True)
+
+    for lang, segments in narration.items():
+        script_path = os.path.join(scripts_dir, f"summary_script_{lang}.txt")
+        with open(script_path, "w", encoding="utf-8") as f:
+            for seg in segments:
+                f.write(
+                    f"[{seg['scene_id']}] "
+                    f"{seg['text']}\n\n"
+                )
+        print(f"   📄 {script_path}")
 
     # ── Step 5: TTS dubbing ──────────────────────────────────────────────
     engine_name = args.engine if hasattr(args, "engine") and args.engine else \
