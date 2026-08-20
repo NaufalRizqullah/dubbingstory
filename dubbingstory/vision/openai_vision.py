@@ -288,12 +288,15 @@ class OpenAIVisionAnalyzer:
 
                 print(f"      [Vision] finish_reason={finish_reason} chars={len(text)}")
 
-                if finish_reason == "length":
-                    raise RuntimeError("finish_reason=length")
-
                 try:
                     return _extract_json_from_text(text)
                 except json.JSONDecodeError as e:
+                    if finish_reason == "length":
+                        # If it failed to parse AND hit length limit, it was genuinely truncated.
+                        # Throw the specific RuntimeError to trigger context reduction in outer layers.
+                        raise RuntimeError("finish_reason=length") from e
+                    
+                    # Otherwise, it's just a format error
                     print("      [Vision] RAW HEAD:", repr(text[:400]))
                     print("      [Vision] RAW TAIL:", repr(text[-800:]))
                     raise e

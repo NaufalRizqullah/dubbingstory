@@ -11,6 +11,11 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.4.12] - 2026-08-20
+
+### Fixed
+- **vLLM Out of Token Loop (Hallucination Bypass)**: Fixed a bug where Qwen-VL or Llama models served via vLLM would occasionally hallucinate trailing garbage after generating a valid JSON, hitting the `max_tokens` limit (`finish_reason=length`). The pipeline now successfully intercepts and parses the valid JSON from the truncated output instead of discarding it, preventing infinite retries and failed scenes.
+
 ## [0.4.11] - 2026-08-20
 
 ### Added
