@@ -11,6 +11,12 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.4.11] - 2026-08-20
+
+### Added
+- **Dynamic Video Padding (Speedup Fix)**: Voiceover segments that are longer than their visual scenes are no longer heavily sped-up (chipmunk effect). Instead, the video scene is dynamically extended (re-cut from the original footage with a +0.5s padding) to fit the natural duration of the voiceover.
+- **Strict Narration Word Limits**: The AI is now given a strict `max_words_allowed` per scene based on the scene's duration (2.5 words/sec) to discourage generating excessively long sentences for short clips.
+
 ## [0.4.10] - 2026-08-20
 
 ### Fixed

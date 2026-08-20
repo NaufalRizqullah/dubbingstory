@@ -57,7 +57,7 @@ def generate_all_audio(
     script_prefix: str = "script_",
     audio_prefix: str = "audio_",
     segment_durations: dict[str, float] | None = None,
-) -> dict[str, str]:
+) -> dict[str, dict]:
     """
     Generate TTS audio for all narration scripts in the scripts directory.
 
@@ -82,15 +82,15 @@ def generate_all_audio(
 
     Returns
     -------
-    dict[str, str]
-        Mapping of language → path to concatenated audio file.
+    dict[str, dict]
+        Mapping of language → dict with keys "concat_path" and "durations" (scene_id → final_duration).
     """
     engine = get_engine(engine_name, cfg)
     speaking_rate = getattr(cfg, "tts_speaking_rate", 1.0) if cfg else 1.0
 
     os.makedirs(audio_dir, exist_ok=True)
 
-    results: dict[str, str] = {}
+    results: dict[str, dict] = {}
 
     # Find all script files
     import glob
@@ -144,6 +144,7 @@ def generate_all_audio(
         os.makedirs(lang_audio_dir, exist_ok=True)
 
         segment_paths = []
+        final_durations = {}
 
         for i, seg in enumerate(segments):
             seg_audio = os.path.join(lang_audio_dir, f"{seg['scene_id']}.wav")
@@ -160,10 +161,12 @@ def generate_all_audio(
                     aligned_audio = os.path.join(
                         lang_audio_dir, f"{seg['scene_id']}_aligned.wav"
                     )
-                    _align_audio_duration(seg_audio, aligned_audio, target_duration)
+                    final_dur = _align_audio_duration(seg_audio, aligned_audio, target_duration)
                     segment_paths.append(aligned_audio)
+                    final_durations[seg["scene_id"]] = final_dur
                 else:
                     segment_paths.append(seg_audio)
+                    final_durations[seg["scene_id"]] = _get_audio_duration(seg_audio)
                 print(f"      ✅ {seg['scene_id']}: {len(seg['text'].split())} words")
             except Exception as e:
                 print(f"      ❌ {seg['scene_id']}: {e}")
@@ -172,7 +175,10 @@ def generate_all_audio(
         if segment_paths:
             concat_path = os.path.join(audio_dir, f"{audio_prefix}{lang}.wav")
             _concatenate_audio(segment_paths, concat_path)
-            results[lang] = concat_path
+            results[lang] = {
+                "concat_path": concat_path,
+                "durations": final_durations,
+            }
             print(f"   ✅ {lang.upper()} audio: {concat_path}")
 
     return results
@@ -243,15 +249,26 @@ def _get_audio_duration(audio_path: str) -> float:
         return 0.0
 
 
-def _align_audio_duration(input_path: str, output_path: str, target_duration: float) -> str:
-    """Fit one scene's narration exactly to its visual scene duration."""
+def _align_audio_duration(input_path: str, output_path: str, target_duration: float, max_speedup: float = 1.15) -> float:
+    """
+    Fit one scene's narration to its visual scene duration.
+    Returns the final audio duration (which may be > target_duration if max_speedup was reached).
+    """
     actual_duration = _get_audio_duration(input_path)
     if actual_duration <= 0:
         raise RuntimeError(f"Cannot determine audio duration: {input_path}")
 
     filters = []
+    final_duration = actual_duration
+
     if actual_duration > target_duration + 0.03:
         tempo = actual_duration / target_duration
+        if tempo > max_speedup:
+            tempo = max_speedup
+            final_duration = actual_duration / tempo
+        else:
+            final_duration = target_duration
+
         while tempo > 2.0:
             filters.append("atempo=2.0")
             tempo /= 2.0
@@ -261,16 +278,17 @@ def _align_audio_duration(input_path: str, output_path: str, target_duration: fl
         filters.append(f"atempo={tempo:.6f}")
     else:
         filters.append(f"apad=pad_dur={target_duration:.3f}")
+        final_duration = target_duration
 
     subprocess.run(
         [
             "ffmpeg", "-y", "-i", input_path,
             "-af", ",".join(filters),
-            "-t", f"{target_duration:.3f}",
+            "-t", f"{final_duration:.3f}",
             "-c:a", "pcm_s16le", output_path,
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=True,
     )
-    return output_path
+    return final_duration

@@ -158,13 +158,13 @@ SELECTED SCENES TO NARRATE (in chronological order):
 
 CRITICAL RULES FOR SUMMARY MODE:
 1. Write narration ONLY for the selected scenes listed above.
-2. This is a HIGHLIGHT RECAP — narration MUST tell a coherent condensed STORY based on the Video Title and Description. DO NOT just react to individual scenes. Avoid repetitive reactive phrases like "Look at this!", "Wow!", "See here!". Tell the audience what is actually happening (e.g., "They began by stripping down the broken engine...").
+2. This is a HIGHLIGHT RECAP — narration MUST tell a coherent condensed STORY based on the Video Title and Description.
 3. Opening scene: start with a strong hook that introduces the core topic from the Video Title.
 4. Between scenes: use brief connecting phrases because viewers will see jump-cuts.
-   - Indonesian examples: "Lalu mereka melanjutkan...", "Dan yang paling krusial...", "Setelah itu..."
-   - English examples: "Next they proceed to...", "The crucial part...", "Afterwards..."
+   - Indonesian examples: "Lalu mereka melanjutkan...", "Dan yang paling krusial..."
+   - English examples: "Next they proceed to...", "The crucial part..."
 5. Closing scene: wrap up with a satisfying conclusion or takeaway.
-6. Keep narration TIGHT — roughly 2-3 words per second.
+6. STRICT WORD LIMITS: You MUST respect the `max_words_allowed` for each scene. If you write more words than allowed, the voiceover will be sped up and sound like a chipmunk. Keep it punchy!
 7. Each segment must make sense even without seeing the skipped scenes, but still flow as one complete story.
 8. Focus on the HIGHLIGHTS and most interesting moments.
 9. For low-confidence scenes (< {hedging_threshold}), use hedging language.
@@ -176,8 +176,7 @@ Return ONLY a valid JSON array:
     "text": "The narration text for this scene...",
     "word_count": 15,
     "estimated_duration": 5.0,
-    "importance": 0.8,
-    "notes": "Any special notes for TTS"
+    "importance": 0.8
   }}
 ]"""
 
@@ -227,18 +226,17 @@ def build_summary_narration_prompt(
     # Build scenes JSON for selected scenes
     scenes_for_prompt = []
     for scene in selected_scenes:
+        # Calculate a strict maximum word count based on 2.5 words per second
+        max_words = max(5, int(scene["duration"] * 2.5))
         scenes_for_prompt.append({
             "scene_id": scene["scene_id"],
-            "start_time": scene["start_time"],
-            "end_time": scene["end_time"],
-            "duration": scene["duration"],
-            "summary_score": scene.get("summary_score", 0),
+            "duration_seconds": round(scene["duration"], 1),
+            "max_words_allowed": max_words,
             "action": scene.get("analysis", {}).get("action", ""),
             "changes": scene.get("analysis", {}).get("changes", ""),
             "likely_context": scene.get("analysis", {}).get("likely_context", ""),
             "confidence": scene.get("analysis", {}).get("confidence", 0),
             "narrative_role": scene.get("narrative", {}).get("role", ""),
-            "narration_cue": scene.get("narrative", {}).get("cue", ""),
         })
 
     summary_duration = sum(s["duration"] for s in selected_scenes)

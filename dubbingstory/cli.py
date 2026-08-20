@@ -572,47 +572,9 @@ def cmd_summary(args, cfg):
         cfg=cfg,
     )
 
-    # ── Remap timestamps to summary video timeline ─────────────────────
-    # The narration segments have start_time/end_time from the ORIGINAL video
-    # (e.g. scene_070 starts at 2633s). But the summary video is a concat of
-    # selected clips only, so scene_070 might start at second ~180.
-    # Build a mapping: scene_id → (summary_start, summary_end)
-    summary_timeline = {}
-    cumulative = 0.0
-    for scene in selected:
-        sid = scene["scene_id"]
-        summary_timeline[sid] = {
-            "start": cumulative,
-            "end": cumulative + scene["duration"],
-        }
-        cumulative += scene["duration"]
-
-    for lang, segments in narration.items():
-        for seg in segments:
-            sid = seg.get("scene_id", "")
-            if sid in summary_timeline:
-                seg["start_time"] = summary_timeline[sid]["start"]
-                seg["end_time"] = summary_timeline[sid]["end"]
-
-    # Save scripts
+    # Save base text scripts (without remapped timestamps yet)
     scripts_dir = os.path.join(project_dir, "scripts")
     os.makedirs(scripts_dir, exist_ok=True)
-
-    for lang, segments in narration.items():
-        script_path = os.path.join(scripts_dir, f"summary_script_{lang}.txt")
-        with open(script_path, "w", encoding="utf-8") as f:
-            for seg in segments:
-                f.write(
-                    f"[{seg['scene_id']}] "
-                    f"[{subtitle_gen._format_srt_time(seg.get('start_time', 0))} --> "
-                    f"{subtitle_gen._format_srt_time(seg.get('end_time', 0))}] "
-                    f"{seg['text']}\n\n"
-                )
-
-        srt_path = os.path.join(scripts_dir, f"summary_script_{lang}.srt")
-        subtitle_gen.generate_srt(segments, srt_path)
-        print(f"   📄 {script_path}")
-        print(f"   📄 {srt_path}")
 
     # ── Step 5: TTS dubbing ──────────────────────────────────────────────
     engine_name = args.engine if hasattr(args, "engine") and args.engine else \
@@ -622,7 +584,8 @@ def cmd_summary(args, cfg):
     os.makedirs(audio_dir, exist_ok=True)
 
     # Generate audio from summary scripts
-    voice_manager.generate_all_audio(
+    # audio_results: dict[lang, dict("concat_path", "durations")]
+    audio_results = voice_manager.generate_all_audio(
         scripts_dir=scripts_dir,
         audio_dir=audio_dir,
         engine_name=engine_name,
@@ -638,6 +601,7 @@ def cmd_summary(args, cfg):
     # Backup summary TTS audio
     import glob
     import shutil
+    import copy
     summary_audio_files = glob.glob(os.path.join(audio_dir, "summary_audio_*.wav"))
     for audio_path in summary_audio_files:
         basename = os.path.basename(audio_path)
@@ -651,27 +615,84 @@ def cmd_summary(args, cfg):
     audio_strategy = getattr(cfg, "render_audio_strategy", "mute_original")
     burn_subs = getattr(cfg, "render_burn_subtitles", False)
 
-    import glob
-    summary_audio_files = glob.glob(os.path.join(audio_dir, "summary_audio_*.wav"))
+    for lang, audio_info in audio_results.items():
+        audio_path = audio_info["concat_path"]
+        audio_durations = audio_info["durations"]
 
-    for audio_path in summary_audio_files:
-        basename = os.path.basename(audio_path)
-        lang = basename.replace("summary_audio_", "").replace(".wav", "")
+        print(f"\n   🎬 Processing Final Video for: {lang.upper()} ...")
+
+        # 1. Determine if we need to rebuild the video to fit longer audio
+        needs_rebuild = False
+        lang_selected = copy.deepcopy(selected)
+        
+        for scene in lang_selected:
+            sid = scene["scene_id"]
+            if sid in audio_durations and audio_durations[sid] > scene["duration"] + 0.05:
+                # Add 0.5s padding so the voice doesn't get cut off abruptly
+                scene["duration"] = audio_durations[sid] + 0.5
+                needs_rebuild = True
+
+        if needs_rebuild:
+            print(f"   🚀 Dynamic Video Extension: Recutting video to fit {lang.upper()} voiceover naturally...")
+            lang_summary_video = os.path.join(project_dir, f"summary_source_{lang}.mp4")
+            video_cutter.cut_and_concat(
+                source_video=source_video,
+                selected_scenes=lang_selected,
+                output_path=lang_summary_video,
+            )
+        else:
+            lang_summary_video = summary_video
+            
+        # 2. Build language-specific SRT based on the final video duration
+        lang_timeline = {}
+        cumulative = 0.0
+        for scene in lang_selected:
+            sid = scene["scene_id"]
+            lang_timeline[sid] = {
+                "start": cumulative,
+                "end": cumulative + scene["duration"],
+            }
+            cumulative += scene["duration"]
+            
+        segments = narration.get(lang, [])
+        for seg in segments:
+            sid = seg.get("scene_id", "")
+            if sid in lang_timeline:
+                seg["start_time"] = lang_timeline[sid]["start"]
+                seg["end_time"] = lang_timeline[sid]["end"]
+                
+        # Save Scripts & SRT with correct timestamps
+        script_path = os.path.join(scripts_dir, f"summary_script_{lang}.txt")
+        with open(script_path, "w", encoding="utf-8") as f:
+            for seg in segments:
+                f.write(
+                    f"[{seg['scene_id']}] "
+                    f"[{subtitle_gen._format_srt_time(seg.get('start_time', 0))} --> "
+                    f"{subtitle_gen._format_srt_time(seg.get('end_time', 0))}] "
+                    f"{seg['text']}\n\n"
+                )
 
         srt_path = os.path.join(scripts_dir, f"summary_script_{lang}.srt")
-
+        if segments:
+            subtitle_gen.generate_srt(segments, srt_path)
+            print(f"   📄 {script_path}")
+            print(f"   📄 {srt_path}")
+        else:
+            srt_path = None
+        
+        # 3. Render Final
         for ratio in ratios:
             ratio_label = ratio.replace(":", "x")
             output_path = os.path.join(project_dir, f"final_summary_{lang}_{ratio_label}.mp4")
 
-            print(f"\n   🎬 Rendering Summary: {lang.upper()} ({ratio})...")
+            print(f"   🎬 Rendering Summary: {lang.upper()} ({ratio})...")
 
             try:
                 video_render.render_final(
-                    source_video=summary_video,
+                    source_video=lang_summary_video,
                     narration_audio=audio_path,
                     output_path=output_path,
-                    subtitle_path=srt_path if os.path.exists(srt_path) else None,
+                    subtitle_path=srt_path if (srt_path and os.path.exists(srt_path)) else None,
                     audio_strategy=audio_strategy,
                     original_volume=0.1,
                     burn_subs=burn_subs,
