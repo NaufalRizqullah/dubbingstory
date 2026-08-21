@@ -29,6 +29,9 @@ SCENES + NARRATION PLAN, in final playback order:
 {scenes_json}
 
 HARD RULES:
+0. Every `text` value MUST be written entirely in {language_label}. Do not
+    answer in English when the requested language is Bahasa Indonesia. Translate
+    supplied English evidence into the requested language; never copy its wording.
 1. Return one narration item for every supplied NARRATION BEAT scene_id, in the same order.
    A beat may cover multiple visual scene IDs; narrate them as one thought.
 2. Tell one continuous story. A later segment must sound like a continuation,

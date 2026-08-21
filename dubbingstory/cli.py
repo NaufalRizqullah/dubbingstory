@@ -639,6 +639,7 @@ def cmd_summary(args, cfg):
         getattr(cfg, "narration_languages", ["id", "en"])
     style = args.style if hasattr(args, "style") and args.style else \
         getattr(cfg, "narration_style", "viral_fb")
+    print(f"   Languages: {languages}")
 
     narration = script_writer.generate_summary_narration(
         storyboard=storyboard,
