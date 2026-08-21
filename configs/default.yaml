@@ -46,8 +46,8 @@ vision:
   # Browse models: https://huggingface.co/models?pipeline_tag=image-text-to-text&sort=trending
   openai_model: "Qwen/Qwen3-VL-2B-Instruct"
   openai_base_url: "http://127.0.0.1:8000/v1"
-  openai_max_tokens: 2048
-  openai_temperature: 0.2
+  openai_max_tokens: 640
+  openai_temperature: 0.0
   # --- Shared settings ---
   analysis_mode: "keyframes"        # "keyframes" | "video_upload" (gemini only)
   domain_hint: ""                   # e.g., "workshop", "cooking", "repair"

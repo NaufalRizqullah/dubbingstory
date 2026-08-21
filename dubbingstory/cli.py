@@ -454,6 +454,11 @@ def cmd_run(args, cfg):
     """Run the full pipeline end-to-end."""
     mode = getattr(args, "mode", "full")
 
+    # Propagate the CLI pipeline mode into cfg before cmd_analyze().
+    # scene_understanding.run_analysis() reads cfg.mode to decide whether to
+    # run the summary two-pass flow (cheap screening -> deep analysis).
+    cfg.mode = mode
+
     print("=" * 70)
     print(f"🚀 DubbingStory v{__version__} — Full Pipeline (mode: {mode})")
     print("=" * 70)

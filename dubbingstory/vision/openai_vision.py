@@ -217,7 +217,6 @@ class OpenAIVisionAnalyzer:
         self,
         messages: list[dict],
         max_tokens_override: int | None = None,
-        retry_max_tokens: int | None = None,
     ) -> dict | list:
         """
         Call the OpenAI-compatible API with smart retry logic.
@@ -264,8 +263,6 @@ class OpenAIVisionAnalyzer:
                 # temporal analysis which is text-only and needs large output),
                 # otherwise cap at self.max_tokens (safe for vision calls).
                 effective_max = max_tokens_override if max_tokens_override else self.max_tokens
-                if retry_max_tokens:
-                    effective_max = max(effective_max, retry_max_tokens)
                 call_max_tokens = min(int(effective_max), int(allowed_output))
 
                 print(
@@ -286,7 +283,22 @@ class OpenAIVisionAnalyzer:
                 text = choice.message.content or ""
                 finish_reason = choice.finish_reason
 
+                usage = getattr(response, "usage", None)
+                if usage is not None:
+                    print(
+                        "      [Vision] usage "
+                        f"prompt={getattr(usage, 'prompt_tokens', '?')} "
+                        f"completion={getattr(usage, 'completion_tokens', '?')} "
+                        f"total={getattr(usage, 'total_tokens', '?')}"
+                    )
+
                 print(f"      [Vision] finish_reason={finish_reason} chars={len(text)}")
+                if finish_reason == "length":
+                    # A per-scene JSON should normally be only a few hundred
+                    # characters. Preserve enough raw output to diagnose model
+                    # repetition/runaway generation without dumping megabytes.
+                    print("      [Vision] LENGTH RAW HEAD:", repr(text[:600]))
+                    print("      [Vision] LENGTH RAW TAIL:", repr(text[-1200:]))
 
                 try:
                     obj = _extract_json_from_text(text)
@@ -361,8 +373,16 @@ class OpenAIVisionAnalyzer:
         content.append({"type": "text", "text": prompt})
         messages = [{"role": "user", "content": content}]
 
+        # Per-scene extraction has a small, fixed JSON schema. Do not allow a
+        # runaway generation to consume the entire model context. Temporal
+        # analysis below has its own larger (4096-token) override.
+        scene_max_tokens = min(int(self.max_tokens), 640)
+
         try:
-            return self._call_with_retry(messages)
+            return self._call_with_retry(
+                messages,
+                max_tokens_override=scene_max_tokens,
+            )
         except RuntimeError as exc:
             err_msg = str(exc).lower()
             is_token_issue = (
@@ -370,19 +390,28 @@ class OpenAIVisionAnalyzer:
                 or "prompt too large" in err_msg
                 or "context length" in err_msg
             )
-            # Only retry with fewer images if we had more than 1
+            # On truncation/context trouble, retry once with one representative
+            # (middle) frame and an even tighter output contract. Reducing image
+            # input must NOT be paired with a larger output budget.
             if is_token_issue and len(keyframe_paths) > 1:
-                reduced = keyframe_paths[:1]
+                reduced = [keyframe_paths[len(keyframe_paths) // 2]]
+                rescue_prompt = (
+                    prompt
+                    + "\n\nRETRY MODE: Only one representative frame is provided. "
+                    + "Return the requested JSON immediately. Keep total JSON under "
+                    + "500 characters, use at most 8 visible_objects, keep every "
+                    + "string under 20 words, and never repeat text."
+                )
                 print(
-                    f"      [Vision] Retrying with {len(reduced)} image(s) "
-                    f"(reduced from {len(keyframe_paths)}) to fit context..."
+                    f"      [Vision] Retrying with {len(reduced)} representative image(s) "
+                    f"(reduced from {len(keyframe_paths)}), max_tokens=384..."
                 )
                 content = self._build_image_content(reduced)
-                content.append({"type": "text", "text": prompt})
+                content.append({"type": "text", "text": rescue_prompt})
                 messages = [{"role": "user", "content": content}]
                 return self._call_with_retry(
                     messages,
-                    retry_max_tokens=max(3072, self.max_tokens),
+                    max_tokens_override=min(scene_max_tokens, 384),
                 )
             raise
 
