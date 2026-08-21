@@ -53,16 +53,44 @@ vision:
   domain_hint: ""                   # e.g., "workshop", "cooking", "repair"
   batch_size: 4                     # Number of keyframes sent per API call
 
+# ── Global Story Understanding (V2) ─────────────────────────────────────────
+story:
+  enabled: true                     # Build scene_cards/story_plan/story_memory after vision
+  model: "gemini-2.5-flash"         # Text reasoning only; vision remains on configured provider
+  prompt_max_chars: 60000           # Conservative global-plan prompt budget
+
+# ── Summary / Story-aware Selection ──────────────────────────────────────────
+summary:
+  target_duration: null             # null = auto (~60-120s); CLI can override
+  max_scenes: null                  # null = auto
+  min_scene_score: 0.30
+  analysis_candidates: 32           # Deep-analyze enough candidates before final selection
+  duration_tolerance: 1.05          # Never intentionally exceed target by old 20% allowance
+
 # ── Narration ────────────────────────────────────────────────────────────────
 narration:
   style: "viral_fb"                 # "viral_fb" | "documentary" | "technical" | "calm_educational"
   languages: ["id", "en"]           # Languages to generate
-  max_words_per_scene: 50           # Approximate max words per scene narration
+  max_words_per_scene: 50           # Legacy ceiling; V2 uses duration-aware budgets
   hedging_threshold: 0.5            # Below this confidence, use hedging language
+  model: "gemini-2.5-flash"
+  target_wpm: 160                   # Initial Indonesian/English storytelling target
+  min_wpm: 135
+  max_wpm: 175
+  speech_coverage: 0.84             # Aim for useful narration across most of the recap
+  group_scenes: true                # Multiple adjacent shots can become one narration thought
+  target_beat_duration: 11.0        # Prefer human-sized narration thoughts across visual cuts
+  max_beat_duration: 18.0
+  plan_llm_refine: true             # Let Gemini refine intent/continuity, not timing budgets
+  auto_rewrite: true                # One QA rewrite when narration is sparse/repetitive/hype-heavy
 
 # ── TTS ──────────────────────────────────────────────────────────────────────
 tts:
-  engine: "edge"                    # "edge" (default, free, high quality) | "piper" (offline) | "voxcpm2" (GPU)
+  engine: "edge"                    # "edge" | "piper" | "chirp" (Google Cloud Chirp 3 HD)
+  use_timeline_scheduler: true       # V2: do not pad every short sentence to full scene length
+  max_speedup: 1.12                 # Gentle safety fit; rewrite text instead of extreme speed
+  min_gap: 0.20                     # Minimum separation between adjacent narration beats
+  normalize_loudness: true          # Normalize final voice track around -16 LUFS
   # Edge-TTS voices (Microsoft Neural TTS, free, no API key needed)
   edge_voices:
     id: "id-ID-ArdiNeural"          # Indonesian male narrator
@@ -71,12 +99,16 @@ tts:
   voices:
     id: "id_ID-news_tts-medium"
     en: "en_US-lessac-medium"
+  # Google Cloud Chirp 3 HD (requires Application Default Credentials / ADC)
+  chirp_voices:
+    id: "id-ID-Chirp3-HD-Charon"
+    en: "en-US-Chirp3-HD-Charon"
   speaking_rate: 1.0                # Speed multiplier
 
 # ── Render ───────────────────────────────────────────────────────────────────
 render:
   ratios: ["16:9"]                  # Output ratios: "16:9", "9:16", or both
-  audio_strategy: "duck"            # "duck" | "replace" | "mute_original"
+  audio_strategy: "dynamic_duck"    # "dynamic_duck" | "duck" | "replace" | "mute_original"
   original_volume: 0.15             # Volume level for original audio when ducking
   burn_subtitles: false             # Burn subtitles into video
   video_quality_crf: 20

@@ -291,12 +291,8 @@ class OpenAIVisionAnalyzer:
                         f"completion={getattr(usage, 'completion_tokens', '?')} "
                         f"total={getattr(usage, 'total_tokens', '?')}"
                     )
-
                 print(f"      [Vision] finish_reason={finish_reason} chars={len(text)}")
                 if finish_reason == "length":
-                    # A per-scene JSON should normally be only a few hundred
-                    # characters. Preserve enough raw output to diagnose model
-                    # repetition/runaway generation without dumping megabytes.
                     print("      [Vision] LENGTH RAW HEAD:", repr(text[:600]))
                     print("      [Vision] LENGTH RAW TAIL:", repr(text[-1200:]))
 
@@ -368,21 +364,16 @@ class OpenAIVisionAnalyzer:
         dict
             Structured scene analysis (JSON).
         """
-        # Build multimodal content: images + text
+        # Per-scene JSON should be small.  A hard cap prevents Qwen3-VL
+        # repetition/runaway generations from consuming thousands of output tokens.
+        scene_max_tokens = min(int(self.max_tokens), 640)
+
         content = self._build_image_content(keyframe_paths)
         content.append({"type": "text", "text": prompt})
         messages = [{"role": "user", "content": content}]
 
-        # Per-scene extraction has a small, fixed JSON schema. Do not allow a
-        # runaway generation to consume the entire model context. Temporal
-        # analysis below has its own larger (4096-token) override.
-        scene_max_tokens = min(int(self.max_tokens), 640)
-
         try:
-            return self._call_with_retry(
-                messages,
-                max_tokens_override=scene_max_tokens,
-            )
+            return self._call_with_retry(messages, max_tokens_override=scene_max_tokens)
         except RuntimeError as exc:
             err_msg = str(exc).lower()
             is_token_issue = (
@@ -390,29 +381,23 @@ class OpenAIVisionAnalyzer:
                 or "prompt too large" in err_msg
                 or "context length" in err_msg
             )
-            # On truncation/context trouble, retry once with one representative
-            # (middle) frame and an even tighter output contract. Reducing image
-            # input must NOT be paired with a larger output budget.
             if is_token_issue and len(keyframe_paths) > 1:
-                reduced = [keyframe_paths[len(keyframe_paths) // 2]]
+                middle = keyframe_paths[len(keyframe_paths) // 2]
                 rescue_prompt = (
                     prompt
-                    + "\n\nRETRY MODE: Only one representative frame is provided. "
-                    + "Return the requested JSON immediately. Keep total JSON under "
-                    + "500 characters, use at most 8 visible_objects, keep every "
-                    + "string under 20 words, and never repeat text."
+                    + "\n\nRESCUE MODE: Return the requested JSON object immediately. "
+                    "Keep total JSON under 500 characters when possible. "
+                    "Use at most 8 visible_objects. Keep every string under 20 words. "
+                    "Do not repeat keys, sentences, or explanations."
                 )
                 print(
-                    f"      [Vision] Retrying with {len(reduced)} representative image(s) "
-                    f"(reduced from {len(keyframe_paths)}), max_tokens=384..."
+                    "      [Vision] Retrying one representative middle frame "
+                    f"after token/runaway failure ({len(keyframe_paths)} -> 1 image)..."
                 )
-                content = self._build_image_content(reduced)
+                content = self._build_image_content([middle])
                 content.append({"type": "text", "text": rescue_prompt})
                 messages = [{"role": "user", "content": content}]
-                return self._call_with_retry(
-                    messages,
-                    max_tokens_override=min(scene_max_tokens, 384),
-                )
+                return self._call_with_retry(messages, max_tokens_override=384)
             raise
 
     def analyze_temporal_flow(

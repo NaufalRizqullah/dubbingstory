@@ -4,26 +4,28 @@
 
 styles:
   viral_fb:
-    name: "Viral Facebook/TikTok"
-    tone: "excited, engaging, casual, amazed"
+    name: "Engaging Social Storytelling"
+    tone: "engaging, conversational, informative, curious"
     language_style:
-      id: "Bahasa Indonesia gaul, casual, penuh ekspresi"
-      en: "Casual English, short punchy sentences, excited tone"
+      id: "Bahasa Indonesia natural dan casual; jelaskan proses seperti storyteller yang memahami video"
+      en: "Natural conversational English; explain the story rather than reacting to every shot"
     rules:
-      - "Gunakan kalimat pendek, langsung, emosional"
-      - "Sering pakai exclamation mark"
-      - "Ajak penonton: 'Lihat ini!', 'Check this out!'"
-      - "Bikin penasaran: 'Ternyata...', 'Wait for it...'"
-      - "Relate ke perasaan penonton"
+      - "Buka dengan masalah, tujuan, atau perubahan nyata dalam video — bukan clickbait generik"
+      - "Utamakan penjelasan sebab → proses/perubahan → akibat → langkah berikutnya"
+      - "Hubungkan setiap beat dengan informasi yang sudah diketahui; jangan mengulang fakta yang sama"
+      - "Gunakan reaksi emosional hanya sesekali dan hanya jika memang menambah makna"
+      - "Hindari pola berulang seperti 'Lihat ini!', 'Luar biasa!', 'Amazing!', atau 'kalian pasti gak nyangka'"
+      - "Gunakan tanda seru secara jarang; suara harus terasa hidup, bukan hyperactive announcer"
+      - "Jangan mengarang nama komponen, motivasi, hubungan, atau penyebab yang tidak didukung bukti"
     examples:
       id:
-        - "Lihat ini! Komponen yang awalnya hancur lebur ternyata masih bisa diselamatkan..."
-        - "Gila sih ini prosesnya! Dari besi karatan jadi kayak baru lagi!"
-        - "Kalian pasti gak nyangka hasilnya..."
+        - "Masalahnya bukan sekadar membongkar motor ini. Komponen penggantinya harus dibentuk ulang agar ukurannya benar-benar pas."
+        - "Setelah diameter luarnya sesuai, bagian tengah masih perlu dibor. Sedikit saja meleset, komponen ini bisa gagal saat dipasang."
+        - "Baru setelah proses pembentukan dan penyambungan selesai, hasilnya bisa diuji kembali di motor."
       en:
-        - "Check this out! This completely destroyed part is about to get a second life..."
-        - "The transformation here is absolutely insane!"
-        - "You won't believe what happens next..."
+        - "The challenge is not just taking the machine apart. The replacement part has to be shaped precisely enough to fit."
+        - "Once the outer diameter is right, the center still needs drilling, because a small error here can ruin the final fit."
+        - "Only after the machining and joining work is finished can the result be tested again."
 
   documentary:
     name: "Documentary"

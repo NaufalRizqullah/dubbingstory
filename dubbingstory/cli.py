@@ -305,6 +305,23 @@ def cmd_analyze(args, cfg):
     with open(storyboard_path, "w", encoding="utf-8") as f:
         json.dump(storyboard, f, ensure_ascii=False, indent=2)
 
+    # V2: transform local scene facts into persistent global story artifacts.
+    # This runs after vision so narration/selection can reason over the whole
+    # story instead of independently describing one scene at a time.
+    try:
+        from dubbingstory.story.story_planner import generate_story_artifacts
+
+        generate_story_artifacts(
+            storyboard,
+            subtitle_context=subtitle_context,
+            cfg=cfg,
+            project_dir=project_dir,
+        )
+        print("   🧠 Story artifacts: scene_cards.json, story_plan.json, story_memory.json")
+    except Exception as exc:
+        # Analysis remains usable even if the optional global planner fails.
+        print(f"   ⚠️ Story artifact generation failed; narration will use fallback context: {exc}")
+
     print(f"\n✅ Visual analysis selesai!")
     print(f"   Storyboard: {storyboard_path}")
 
@@ -316,8 +333,11 @@ def cmd_analyze(args, cfg):
 # ==============================================================================
 
 def cmd_narrate(args, cfg):
-    """Generate narration scripts."""
+    """Generate continuity-aware narration scripts."""
     from dubbingstory.story import script_writer, subtitle_gen
+    from dubbingstory.story.narration_planner import build_narration_plan
+    from dubbingstory.story.narration_qa import evaluate_narration
+    from dubbingstory.story.story_planner import load_story_artifacts
 
     project_name = _resolve_project_name(args)
     project_dir = _setup_project_dir(cfg, project_name)
@@ -326,10 +346,9 @@ def cmd_narrate(args, cfg):
     print(f"📝 DubbingStory v{__version__} — Narration")
     print("=" * 70)
 
-    # Load storyboard
     storyboard_path = os.path.join(project_dir, "storyboard.json")
     if not os.path.exists(storyboard_path):
-        print(f"❌ Storyboard not found. Jalankan 'dubbingstory analyze' dulu.")
+        print("❌ Storyboard not found. Jalankan 'dubbingstory analyze' dulu.")
         sys.exit(1)
 
     with open(storyboard_path, "r", encoding="utf-8") as f:
@@ -343,34 +362,70 @@ def cmd_narrate(args, cfg):
     print(f"   Style: {style}")
     print(f"   Languages: {languages}")
 
-    # Generate narration
+    story_plan, story_memory = load_story_artifacts(project_dir, storyboard)
+    scenes = storyboard.get("scenes", []) or []
+    narration_plan = build_narration_plan(
+        storyboard,
+        scenes,
+        story_plan=story_plan,
+        story_memory=story_memory,
+        cfg=cfg,
+        mode="full",
+    )
+    plan_path = os.path.join(project_dir, "narration_plan.json")
+    with open(plan_path, "w", encoding="utf-8") as f:
+        json.dump(narration_plan, f, ensure_ascii=False, indent=2)
+    print(f"   🧭 Narration plan: {plan_path}")
+
     narration = script_writer.generate_narration(
         storyboard=storyboard,
         languages=languages,
         style=style,
         cfg=cfg,
+        story_plan=story_plan,
+        story_memory=story_memory,
+        narration_plan=narration_plan,
     )
 
-    # Save scripts
     scripts_dir = os.path.join(project_dir, "scripts")
     os.makedirs(scripts_dir, exist_ok=True)
+    qa_by_language = {}
 
     for lang, segments in narration.items():
-        # Save text script
         script_path = os.path.join(scripts_dir, f"script_{lang}.txt")
         with open(script_path, "w", encoding="utf-8") as f:
             for seg in segments:
                 f.write(f"[{seg['scene_id']}] {seg['text']}\n\n")
 
-        # Save SRT
+        # Structured copy is consumed by the V2 TTS timeline scheduler.
+        structured_path = os.path.join(scripts_dir, f"script_{lang}.json")
+        with open(structured_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "mode": "full",
+                    "language": lang,
+                    "total_duration": narration_plan.get("total_duration", 0),
+                    "target_wpm": narration_plan.get("target_wpm", 160),
+                    "segments": segments,
+                },
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
+
         srt_path = os.path.join(scripts_dir, f"script_{lang}.srt")
         subtitle_gen.generate_srt(segments, srt_path)
+        qa_by_language[lang] = evaluate_narration(segments, narration_plan, language=lang)
 
         print(f"   📄 {script_path}")
+        print(f"   📄 {structured_path}")
         print(f"   📄 {srt_path}")
 
-    print(f"\n✅ Narration selesai!")
-
+    qa_path = os.path.join(project_dir, "narration_qa.json")
+    with open(qa_path, "w", encoding="utf-8") as f:
+        json.dump(qa_by_language, f, ensure_ascii=False, indent=2)
+    print(f"   🧪 Narration QA: {qa_path}")
+    print("\n✅ Narration selesai!")
     return narration
 
 
@@ -453,10 +508,7 @@ def cmd_render(args, cfg):
 def cmd_run(args, cfg):
     """Run the full pipeline end-to-end."""
     mode = getattr(args, "mode", "full")
-
-    # Propagate the CLI pipeline mode into cfg before cmd_analyze().
-    # scene_understanding.run_analysis() reads cfg.mode to decide whether to
-    # run the summary two-pass flow (cheap screening -> deep analysis).
+    # scene_understanding reads cfg.mode to activate summary two-pass analysis.
     cfg.mode = mode
 
     print("=" * 70)
@@ -477,43 +529,6 @@ def cmd_run(args, cfg):
     print("\n" + "=" * 70)
     print(f"✅ Pipeline selesai! (mode: {mode})")
     print("=" * 70)
-    
-    _package_debug_logs(_setup_project_dir(cfg, _resolve_project_name(args)))
-
-
-def _package_debug_logs(project_dir: str):
-    """Package all text, json, and log files into a zip file for easy downloading."""
-    import zipfile
-    import glob
-    
-    zip_path = os.path.join(project_dir, "debug_logs.zip")
-    print(f"\n   📦 Packaging debug logs to {zip_path}...")
-    
-    try:
-        target_prefixes = (
-            "video_metadata",
-            "summary_source",
-            "summary_manifest",
-            "storyboard",
-            "segment_manifest",
-            "ingest_manifest",
-            "failed_vision",
-            "failed_tts",
-            "summary_script_",
-            "pipeline",
-            "vllm_server",
-            "mereska-dubbingstory",
-        )
-        
-        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for ext in ["*.txt", "*.json", "*.log"]:
-                for file_path in glob.glob(os.path.join(project_dir, ext)):
-                    basename = os.path.basename(file_path)
-                    if basename.startswith(target_prefixes):
-                        zipf.write(file_path, arcname=basename)
-        print(f"   ✅ Debug logs packaged successfully!")
-    except Exception as e:
-        print(f"   ⚠️ Failed to package debug logs: {e}")
 
 
 # ==============================================================================
@@ -521,39 +536,45 @@ def _package_debug_logs(project_dir: str):
 # ==============================================================================
 
 def cmd_summary(args, cfg):
-    """Generate a highlight recap video from the most important scenes."""
+    """Generate a story-aware highlight recap with timeline-scheduled TTS."""
     from dubbingstory.story import script_writer, subtitle_gen, scene_selector
+    from dubbingstory.story.narration_planner import build_narration_plan
+    from dubbingstory.story.narration_qa import evaluate_narration
+    from dubbingstory.story.story_planner import load_story_artifacts
     from dubbingstory.render import video_cutter, video_render
     from dubbingstory.tts import voice_manager
+    import copy
+    import shutil
 
     project_name = _resolve_project_name(args)
     project_dir = _setup_project_dir(cfg, project_name)
 
     print("=" * 70)
-    print(f"📋 DubbingStory v{__version__} — Summary Mode (Highlight Recap)")
+    print(f"📋 DubbingStory v{__version__} — Summary Mode (Story Recap)")
     print("=" * 70)
 
-    # ── Step 1: Load storyboard ──────────────────────────────────────────
     storyboard_path = os.path.join(project_dir, "storyboard.json")
     if not os.path.exists(storyboard_path):
-        print(f"❌ Storyboard not found. Jalankan 'dubbingstory analyze' dulu.")
+        print("❌ Storyboard not found. Jalankan 'dubbingstory analyze' dulu.")
         sys.exit(1)
-
     with open(storyboard_path, "r", encoding="utf-8") as f:
         storyboard = json.load(f)
 
-    # ── Step 2: Select best scenes ───────────────────────────────────────
+    story_plan, story_memory = load_story_artifacts(project_dir, storyboard)
+
+    # 1) Select story + bridge beats under a strict duration budget.
     target_duration = getattr(cfg, "summary_target_duration", None)
     max_scenes = getattr(cfg, "summary_max_scenes", None)
     min_score = getattr(cfg, "summary_min_scene_score", 0.3)
-
+    duration_tolerance = float(getattr(cfg, "summary_duration_tolerance", 1.05) or 1.05)
     selected = scene_selector.select_scenes(
         storyboard=storyboard,
         target_duration=target_duration,
         max_scenes=max_scenes,
         min_score=min_score,
+        story_plan=story_plan,
+        duration_tolerance=duration_tolerance,
     )
-
     if not selected:
         print("❌ Tidak ada scene yang terpilih. Pipeline dihentikan.")
         sys.exit(1)
@@ -566,7 +587,8 @@ def cmd_summary(args, cfg):
     )
     print(f"   📄 Summary manifest: {manifest_path}")
 
-    # ── Step 3: Cut & concat video ───────────────────────────────────────
+    # 2) Cut the selected footage first.  Narration uses the real extracted
+    # durations, not idealized source timestamps, to prevent cumulative drift.
     source_video = os.path.join(project_dir, "source.mp4")
     if not os.path.exists(source_video):
         print(f"❌ Source video not found: {source_video}")
@@ -579,19 +601,13 @@ def cmd_summary(args, cfg):
         output_path=summary_video,
     )
 
-    # Use the durations of the clips that actually made it into the concat.
-    # This accounts for frame rounding and removes failed extractions before
-    # narration, SRT, and TTS alignment are generated.
     durations_path = summary_video + ".durations.json"
     if os.path.exists(durations_path):
         with open(durations_path, "r", encoding="utf-8") as f:
             actual_durations = json.load(f)
-        selected = [
-            scene for scene in selected
-            if scene["scene_id"] in actual_durations
-        ]
+        selected = [scene for scene in selected if scene["scene_id"] in actual_durations]
         for scene in selected:
-            scene["duration"] = actual_durations[scene["scene_id"]]
+            scene["duration"] = float(actual_durations[scene["scene_id"]])
         print(f"   🧭 Using actual durations for {len(selected)} summary clips")
         manifest_path = scene_selector.save_summary_manifest(
             selected_scenes=selected,
@@ -600,7 +616,25 @@ def cmd_summary(args, cfg):
             target_duration=target_duration,
         )
 
-    # ── Step 4: Generate summary narration ────────────────────────────────
+    # 3) Plan narration after footage selection.  The plan creates a target word
+    # budget from time, so the writer fills the recap rather than leaving 60-70%
+    # dead air and TTS does not have to guess pacing.
+    narration_plan = build_narration_plan(
+        storyboard,
+        selected,
+        story_plan=story_plan,
+        story_memory=story_memory,
+        cfg=cfg,
+        mode="summary",
+    )
+    plan_path = os.path.join(project_dir, "narration_plan.json")
+    with open(plan_path, "w", encoding="utf-8") as f:
+        json.dump(narration_plan, f, ensure_ascii=False, indent=2)
+    print(
+        f"   🧭 Narration plan: {narration_plan.get('total_target_words', 0)} target words / "
+        f"{narration_plan.get('total_duration', 0):.1f}s"
+    )
+
     languages = args.lang if hasattr(args, "lang") and args.lang else \
         getattr(cfg, "narration_languages", ["id", "en"])
     style = args.style if hasattr(args, "style") and args.style else \
@@ -612,31 +646,50 @@ def cmd_summary(args, cfg):
         languages=languages,
         style=style,
         cfg=cfg,
+        story_plan=story_plan,
+        story_memory=story_memory,
+        narration_plan=narration_plan,
     )
 
-    # Save base text scripts (without remapped timestamps yet, just for TTS)
     scripts_dir = os.path.join(project_dir, "scripts")
     os.makedirs(scripts_dir, exist_ok=True)
-
+    qa_by_language = {}
     for lang, segments in narration.items():
-        script_path = os.path.join(scripts_dir, f"summary_script_{lang}.txt")
-        with open(script_path, "w", encoding="utf-8") as f:
+        txt_path = os.path.join(scripts_dir, f"summary_script_{lang}.txt")
+        with open(txt_path, "w", encoding="utf-8") as f:
             for seg in segments:
-                f.write(
-                    f"[{seg['scene_id']}] "
-                    f"{seg['text']}\n\n"
-                )
-        print(f"   📄 {script_path}")
+                f.write(f"[{seg['scene_id']}] {seg['text']}\n\n")
 
-    # ── Step 5: TTS dubbing ──────────────────────────────────────────────
+        json_path = os.path.join(scripts_dir, f"summary_script_{lang}.json")
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "mode": "summary",
+                    "language": lang,
+                    "total_duration": narration_plan.get("total_duration", 0),
+                    "target_wpm": narration_plan.get("target_wpm", 160),
+                    "segments": segments,
+                },
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
+        qa_by_language[lang] = evaluate_narration(segments, narration_plan, language=lang)
+        print(f"   📄 {txt_path}")
+        print(f"   📄 {json_path}")
+
+    qa_path = os.path.join(project_dir, "narration_qa.json")
+    with open(qa_path, "w", encoding="utf-8") as f:
+        json.dump(qa_by_language, f, ensure_ascii=False, indent=2)
+    print(f"   🧪 Narration QA: {qa_path}")
+
+    # 4) TTS.  The JSON script makes voice_manager use its timeline scheduler:
+    # speech is placed on one video-length canvas; short sentences are NOT padded
+    # independently to full scene length.
     engine_name = args.engine if hasattr(args, "engine") and args.engine else \
         getattr(cfg, "tts_engine", "edge")
-
     audio_dir = os.path.join(project_dir, "audio")
     os.makedirs(audio_dir, exist_ok=True)
-
-    # Generate audio from summary scripts
-    # audio_results: dict[lang, dict("concat_path", "durations")]
     audio_results = voice_manager.generate_all_audio(
         scripts_dir=scripts_dir,
         audio_dir=audio_dir,
@@ -644,106 +697,82 @@ def cmd_summary(args, cfg):
         cfg=cfg,
         script_prefix="summary_script_",
         audio_prefix="summary_audio_",
-        segment_durations={
-            scene["scene_id"]: scene["duration"]
-            for scene in selected
-        },
     )
 
-    # Backup summary TTS audio
-    import glob
-    import shutil
-    import copy
-    summary_audio_files = glob.glob(os.path.join(audio_dir, "summary_audio_*.wav"))
-    for audio_path in summary_audio_files:
-        basename = os.path.basename(audio_path)
-        lang = basename.replace("summary_audio_", "").replace(".wav", "")
+    for lang, audio_info in audio_results.items():
         backup_path = os.path.join(project_dir, f"backup_tts_summary_{lang}.wav")
-        shutil.copy2(audio_path, backup_path)
-        print(f"   💾 Summary TTS Backup saved to: {backup_path}")
+        shutil.copy2(audio_info["concat_path"], backup_path)
+        print(
+            f"   💾 Summary TTS Backup: {backup_path} "
+            f"(coverage={audio_info.get('speech_coverage', 0) * 100:.1f}%)"
+        )
 
-    # ── Step 6: Render final summary video ───────────────────────────────
+    # 5) Render. Timeline TTS may flow across scene cuts, so per-scene TTS length
+    # must no longer trigger video recutting. Legacy audio keeps the old safety.
     ratios = getattr(cfg, "render_ratios", ["16:9"])
-    audio_strategy = getattr(cfg, "render_audio_strategy", "mute_original")
+    audio_strategy = getattr(cfg, "render_audio_strategy", "dynamic_duck")
     burn_subs = getattr(cfg, "render_burn_subtitles", False)
+    original_volume = float(getattr(cfg, "render_original_volume", 0.15) or 0.15)
 
     for lang, audio_info in audio_results.items():
         audio_path = audio_info["concat_path"]
-        audio_durations = audio_info["durations"]
-
-        print(f"\n   🎬 Processing Final Video for: {lang.upper()} ...")
-
-        # 1. Determine if we need to rebuild the video to fit longer audio
-        needs_rebuild = False
         lang_selected = copy.deepcopy(selected)
-        
-        print(f"   📊 [Tracking] Checking audio vs video lengths for {lang.upper()}:")
-        
-        for scene in lang_selected:
-            sid = scene["scene_id"]
-            if sid in audio_durations:
-                tts_dur = audio_durations[sid]
-                vid_dur = scene["duration"]
-                
-                if tts_dur > vid_dur + 0.05:
-                    # Add 0.5s padding so the voice doesn't get cut off abruptly
-                    new_dur = tts_dur + 0.5
-                    print(f"      [Tracking] {sid}: Video ({vid_dur:.2f}s) < TTS ({tts_dur:.2f}s) -> Extending to {new_dur:.2f}s (+0.5s pad)")
-                    scene["duration"] = new_dur
-                    needs_rebuild = True
-                else:
-                    print(f"      [Tracking] {sid}: Video ({vid_dur:.2f}s) >= TTS ({tts_dur:.2f}s) -> OK")
-            else:
-                print(f"      [Tracking] {sid}: No TTS audio found -> OK")
+        lang_summary_video = summary_video
 
-        if needs_rebuild:
-            print(f"   🚀 Dynamic Video Extension: Recutting video to fit {lang.upper()} voiceover naturally...")
-            lang_summary_video = os.path.join(project_dir, f"summary_source_{lang}.mp4")
-            video_cutter.cut_and_concat(
-                source_video=source_video,
-                selected_scenes=lang_selected,
-                output_path=lang_summary_video,
+        if not audio_info.get("timeline_scheduled"):
+            # Backward-compatible emergency path for plain-text/legacy scripts.
+            needs_rebuild = False
+            for scene in lang_selected:
+                sid = scene["scene_id"]
+                tts_dur = float(audio_info.get("durations", {}).get(sid, 0) or 0)
+                if tts_dur > float(scene.get("duration", 0) or 0) + 0.05:
+                    scene["duration"] = tts_dur + 0.35
+                    needs_rebuild = True
+            if needs_rebuild:
+                lang_summary_video = os.path.join(project_dir, f"summary_source_{lang}.mp4")
+                video_cutter.cut_and_concat(
+                    source_video=source_video,
+                    selected_scenes=lang_selected,
+                    output_path=lang_summary_video,
+                )
+        elif float(audio_info.get("overflow_seconds", 0) or 0) > 0.05:
+            print(
+                f"   ⚠️ {lang.upper()} voiceover overflows video by "
+                f"{audio_info['overflow_seconds']:.2f}s; inspect narration_qa.json / TTS pacing."
             )
-            
-            # 1b. Load actual durations of the rebuilt video to prevent SRT/Audio desync
-            durations_path = lang_summary_video + ".durations.json"
-            if os.path.exists(durations_path):
-                with open(durations_path, "r", encoding="utf-8") as f:
-                    actual_durations = json.load(f)
-                
-                print("   🧭 [Tracking] Adjusting timeline to actual FFmpeg extracted durations:")
-                for scene in lang_selected:
-                    sid = scene["scene_id"]
-                    if sid in actual_durations:
-                        old_dur = scene["duration"]
-                        new_dur = actual_durations[sid]
-                        if abs(old_dur - new_dur) > 0.05:
-                            print(f"      [Tracking] {sid}: {old_dur:.2f}s -> {new_dur:.2f}s (FFmpeg drift)")
-                        scene["duration"] = new_dur
-        else:
-            lang_summary_video = summary_video
-            
-        # 2. Build language-specific SRT based on the final video duration
-        lang_timeline = {}
-        cumulative = 0.0
-        for scene in lang_selected:
-            sid = scene["scene_id"]
-            lang_timeline[sid] = {
-                "start": cumulative,
-                "end": cumulative + scene["duration"],
-            }
-            cumulative += scene["duration"]
-            
+
+        # Use actual speech placements for subtitle timing in V2.
         segments = narration.get(lang, [])
-        for seg in segments:
-            sid = seg.get("scene_id", "")
-            if sid in lang_timeline:
-                seg["start_time"] = lang_timeline[sid]["start"]
-                seg["end_time"] = lang_timeline[sid]["end"]
-                
-        # Save Scripts & SRT with correct timestamps
-        script_path = os.path.join(scripts_dir, f"summary_script_{lang}.txt")
-        with open(script_path, "w", encoding="utf-8") as f:
+        placement_map = {
+            item["scene_id"]: item
+            for item in audio_info.get("placements", [])
+            if item.get("scene_id")
+        }
+        if placement_map:
+            for seg in segments:
+                placement = placement_map.get(seg.get("scene_id"))
+                if placement:
+                    seg["start_time"] = placement["actual_start"]
+                    seg["end_time"] = placement["actual_end"]
+        else:
+            cumulative = 0.0
+            timeline = {}
+            for scene in lang_selected:
+                timeline[scene["scene_id"]] = (cumulative, cumulative + scene["duration"])
+                cumulative += scene["duration"]
+            for seg in segments:
+                if seg.get("scene_id") in timeline:
+                    seg["start_time"], seg["end_time"] = timeline[seg["scene_id"]]
+
+        srt_path = os.path.join(scripts_dir, f"summary_script_{lang}.srt")
+        if segments:
+            subtitle_gen.generate_srt(segments, srt_path)
+        else:
+            srt_path = None
+
+        # Refresh human-readable script with final speech timestamps.
+        txt_path = os.path.join(scripts_dir, f"summary_script_{lang}.txt")
+        with open(txt_path, "w", encoding="utf-8") as f:
             for seg in segments:
                 f.write(
                     f"[{seg['scene_id']}] "
@@ -752,21 +781,10 @@ def cmd_summary(args, cfg):
                     f"{seg['text']}\n\n"
                 )
 
-        srt_path = os.path.join(scripts_dir, f"summary_script_{lang}.srt")
-        if segments:
-            subtitle_gen.generate_srt(segments, srt_path)
-            print(f"   📄 {script_path}")
-            print(f"   📄 {srt_path}")
-        else:
-            srt_path = None
-        
-        # 3. Render Final
         for ratio in ratios:
             ratio_label = ratio.replace(":", "x")
             output_path = os.path.join(project_dir, f"final_summary_{lang}_{ratio_label}.mp4")
-
             print(f"   🎬 Rendering Summary: {lang.upper()} ({ratio})...")
-
             try:
                 video_render.render_final(
                     source_video=lang_summary_video,
@@ -774,16 +792,15 @@ def cmd_summary(args, cfg):
                     output_path=output_path,
                     subtitle_path=srt_path if (srt_path and os.path.exists(srt_path)) else None,
                     audio_strategy=audio_strategy,
-                    original_volume=0.1,
+                    original_volume=original_volume,
                     burn_subs=burn_subs,
                     target_ratio=ratio if ratio != "16:9" else None,
                 )
                 print(f"   ✅ {output_path}")
-            except Exception as e:
-                print(f"   ❌ Summary render failed: {e}")
+            except Exception as exc:
+                print(f"   ❌ Summary render failed: {exc}")
 
-    print(f"\n✅ Summary pipeline selesai!")
-    _package_debug_logs(project_dir)
+    print("\n✅ Summary pipeline selesai!")
 
 
 # ==============================================================================
@@ -809,7 +826,7 @@ def main():
     p_run.add_argument("--style", type=str, default=None,
                         choices=["viral_fb", "documentary", "technical", "calm_educational"])
     p_run.add_argument("--lang", nargs="+", default=None, help="Languages (e.g., id en)")
-    p_run.add_argument("--engine", type=str, default=None, choices=["edge", "piper"], help="TTS engine (default: edge)")
+    p_run.add_argument("--engine", type=str, default=None, choices=["edge", "piper", "chirp"], help="TTS engine (default: edge)")
     p_run.add_argument("--voice-id", type=str, default=None, help="Specific voice name/ID for Indonesian (e.g., id-ID-ArdiNeural or id_ID-news_tts-medium)")
     p_run.add_argument("--voice-en", type=str, default=None, help="Specific voice name/ID for English")
     p_run.add_argument("--ratio", nargs="+", default=None, help="Output ratios (16:9, 9:16)")
@@ -983,7 +1000,7 @@ def main():
     # ── dub ───────────────────────────────────────────────────────────────
     p_dub = subparsers.add_parser("dub", help="Generate TTS audio")
     p_dub.add_argument("--project", "-p", type=str, required=True)
-    p_dub.add_argument("--engine", type=str, default=None, choices=["edge", "piper"], help="TTS engine (default: edge)")
+    p_dub.add_argument("--engine", type=str, default=None, choices=["edge", "piper", "chirp"], help="TTS engine (default: edge)")
     p_dub.add_argument("--voice-id", type=str, default=None, help="Specific voice name/ID for Indonesian")
     p_dub.add_argument("--voice-en", type=str, default=None, help="Specific voice name/ID for English")
 

@@ -191,6 +191,11 @@ def run_analysis(
         time_range = f"{scene['start_time']:.1f}s - {scene['end_time']:.1f}s"
         
         kf_paths = keyframes_data.get(scene_id, [])
+        scene_subtitle, scene_words = _get_subtitle_for_scene(
+            subtitle_entries,
+            scene["start_time"],
+            scene["end_time"],
+        )
         if is_cheap:
             if len(kf_paths) > 2:
                 kf_paths = [kf_paths[0], kf_paths[-1]]
@@ -199,14 +204,12 @@ def run_analysis(
                 time_range=time_range,
                 n_frames=len(kf_paths),
                 domain=domain_hint or "general",
+                subtitle_text=scene_subtitle,
             )
+            # Cheap pass keeps text context for story-aware candidate selection
+            # but does not carry word-level timing into temporal analysis.
             scene_words = []
         else:
-            scene_subtitle, scene_words = _get_subtitle_for_scene(
-                subtitle_entries,
-                scene["start_time"],
-                scene["end_time"],
-            )
             prompt = build_scene_prompt(
                 scene_id=scene_id,
                 time_range=time_range,
@@ -269,8 +272,10 @@ def run_analysis(
             analysis["start_time"] = scene["start_time"]
             analysis["end_time"] = scene["end_time"]
             analysis["duration"] = scene["duration"]
-            if not is_cheap and scene_words:
-                analysis["words"] = scene_words
+            if not is_cheap:
+                analysis["transcript_text"] = scene_subtitle
+                if scene_words:
+                    analysis["words"] = scene_words
 
             with open(cache_path, "w", encoding="utf-8") as f:
                 json.dump(analysis, f, ensure_ascii=False, indent=2)
@@ -311,22 +316,57 @@ def run_analysis(
     mode = getattr(cfg, "mode", "full")
 
     if mode == "summary":
-        print(f"   🔍 Pass A: Screening {len(scenes)} scenes...")
+        print(f"   🔍 Pass A: Screening {len(scenes)} scenes with visual + transcript relevance...")
         with ThreadPoolExecutor(max_workers=workers) as pool:
             cheap_analyses = list(pool.map(lambda s: analyze_scene(s, is_cheap=True), scenes))
-            
-        summary_max_scenes = getattr(cfg, "summary_max_scenes", 20)
-        if not summary_max_scenes:
-            summary_max_scenes = 20
+
+        final_max_scenes = getattr(cfg, "summary_max_scenes", None)
+        base_candidates = int(getattr(cfg, "summary_analysis_candidates", 32) or 32)
+        if final_max_scenes:
+            base_candidates = max(base_candidates, int(final_max_scenes) * 2)
+        candidate_count = min(len(scenes), max(8, base_candidates))
 
         for scene, analysis in zip(scenes, cheap_analyses):
-            scene["_salience"] = analysis.get("salience", 0.0)
-            
-        selected_scenes = sorted(scenes, key=lambda x: x.get("_salience", 0.0), reverse=True)[:summary_max_scenes]
-        selected_scenes = sorted(selected_scenes, key=lambda x: x.get("scene_id", ""))
+            salience = float(analysis.get("salience", 0.0) or 0.0)
+            story_rel = float(analysis.get("story_relevance", salience) or salience)
+            confidence = float(analysis.get("confidence", 0.5) or 0.5)
+            scene["_screen_score"] = max(0.0, min(1.0, 0.35 * salience + 0.55 * story_rel + 0.10 * confidence))
+
+        # Preserve timeline coverage in the expensive pass.  Selecting only the
+        # global top visual scores can erase quiet bridge/problem scenes before
+        # the story-aware selector ever gets a chance to evaluate them.
+        by_time = sorted(scenes, key=lambda item: item.get("start_time", 0))
+        selected_scenes = []
+        selected_ids = set()
+        if by_time and candidate_count:
+            timeline_end = max(float(item.get("end_time", 0) or 0) for item in by_time)
+            window_count = min(candidate_count, len(by_time))
+            window_size = timeline_end / max(1, window_count)
+            for index in range(window_count):
+                start = index * window_size
+                end = timeline_end if index == window_count - 1 else (index + 1) * window_size
+                options = [
+                    item for item in by_time
+                    if item["scene_id"] not in selected_ids
+                    and start <= float(item.get("start_time", 0) or 0) < end
+                ]
+                if not options:
+                    continue
+                best = max(options, key=lambda item: item.get("_screen_score", 0.0))
+                selected_scenes.append(best)
+                selected_ids.add(best["scene_id"])
+
+        for scene in sorted(scenes, key=lambda item: item.get("_screen_score", 0.0), reverse=True):
+            if len(selected_scenes) >= candidate_count:
+                break
+            if scene["scene_id"] not in selected_ids:
+                selected_scenes.append(scene)
+                selected_ids.add(scene["scene_id"])
+
+        selected_scenes.sort(key=lambda item: item.get("start_time", 0))
         selected_ids = {s["scene_id"] for s in selected_scenes}
 
-        print(f"   🎯 Pass B: Deep analysis on {len(selected_scenes)} selected scenes...")
+        print(f"   🎯 Pass B: Deep analysis on {len(selected_scenes)} story candidates...")
         with ThreadPoolExecutor(max_workers=workers) as pool:
             deep_analyses = list(pool.map(lambda s: analyze_scene(s, is_cheap=False), selected_scenes))
             
@@ -497,6 +537,13 @@ def _build_storyboard(
                 "changes": analysis.get("changes", ""),
                 "environment": analysis.get("environment", ""),
                 "likely_context": analysis.get("likely_context", ""),
+                "character_goal": analysis.get("character_goal", ""),
+                "state_before": analysis.get("state_before", ""),
+                "state_after": analysis.get("state_after", ""),
+                "cause": analysis.get("cause", ""),
+                "effect": analysis.get("effect", ""),
+                "unresolved_question": analysis.get("unresolved_question", ""),
+                "transcript_text": analysis.get("transcript_text", ""),
                 "text_visible": analysis.get("text_visible", []),
                 "confidence": analysis.get("confidence", 0),
                 # Add word-level data if available (from ASR)
@@ -505,6 +552,8 @@ def _build_storyboard(
             "narrative": {
                 "role": enrichment.get("narrative_role", "process"),
                 "importance": enrichment.get("narration_importance", 0.5),
+                "causal_importance": enrichment.get("causal_importance", 0.0),
+                "bridge_importance": enrichment.get("bridge_importance", 0.0),
                 "cue": enrichment.get("narration_cue", ""),
                 "connects_to_next": enrichment.get("connects_to_next", ""),
             },

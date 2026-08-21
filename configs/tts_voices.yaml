@@ -31,3 +31,11 @@ voxcpm2:
     # VoxCPM2 supports generating voices from text descriptions
     # Example: "warm and gentle male voice" or "energetic young female narrator"
     default_description: "warm and clear narrator voice, professional tone"
+# Google Cloud Text-to-Speech Chirp 3 HD (online; requires ADC credentials)
+chirp:
+  id:
+    voice_id: "id-ID-Chirp3-HD-Charon"
+    description: "Indonesian Chirp 3 HD male narration"
+  en:
+    voice_id: "en-US-Chirp3-HD-Charon"
+    description: "US English Chirp 3 HD male narration"

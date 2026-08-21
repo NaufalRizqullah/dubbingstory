@@ -11,6 +11,11 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.5.0] - 2026-08-21
+
+### Added
+- **DubbingStory V2**: Began implementation of the next-generation project architecture and feature set for version 2.
+
 ## [0.4.13] - 2026-08-21
 
 ### Fixed

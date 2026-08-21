@@ -1,98 +1,115 @@
-"""
-dubbingstory.story.scene_selector — Select most important scenes for summary mode
+"""Story-aware scene selection for summary mode.
 
-Scores and ranks scenes from storyboard.json, then selects the top scenes
-that fit within a target duration to create a highlight recap.
+The selector no longer asks only "which scenes are visually strong?".  It also
+uses global story-plan metadata to preserve causal beats and bridge scenes, while
+respecting the requested duration much more strictly.
 """
+
+from __future__ import annotations
 
 import json
 import os
+from typing import Any
 
 
-# Narrative roles ranked by importance for summary
 ROLE_WEIGHTS = {
-    "introduction": 0.9,
-    "setup": 0.6,
-    "process": 0.4,
-    "climax": 1.0,
-    "result": 0.9,
-    "conclusion": 0.8,
+    "introduction": 0.85,
+    "setup": 0.78,
+    "problem": 0.95,
+    "process": 0.58,
+    "bridge": 0.62,
+    "context": 0.45,
+    "complication": 0.90,
+    "turning_point": 0.98,
+    "climax": 1.00,
+    "result": 0.92,
+    "resolution": 0.92,
+    "conclusion": 0.88,
 }
 
 
-def _score_scene(scene: dict, total_scenes: int) -> float:
-    """
-    Calculate a composite importance score for a single scene.
+def _clamp01(value: Any, default: float = 0.0) -> float:
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return default
 
-    Scoring formula:
-        score = (narration_importance * 0.4) +
-                (confidence * 0.2) +
-                (narrative_role_weight * 0.2) +
-                (duration_fitness * 0.1) +
-                (position_bonus * 0.1)
 
-    Parameters
-    ----------
-    scene : dict
-        A scene entry from storyboard.json.
-    total_scenes : int
-        Total number of scenes in the video.
+def _story_role_map(story_plan: dict | None) -> dict[str, dict]:
+    result: dict[str, dict] = {}
+    for item in (story_plan or {}).get("scene_roles", []) or []:
+        if isinstance(item, dict) and item.get("scene_id"):
+            result[str(item["scene_id"])] = item
+    return result
 
-    Returns
-    -------
-    float
-        Score between 0.0 and 1.0.
-    """
-    analysis = scene.get("analysis", {})
-    narrative = scene.get("narrative", {})
 
-    # 1. Narration importance (from temporal flow analysis)
-    importance = narrative.get("importance", 0.5)
+def _score_scene(scene: dict, total_scenes: int, story_meta: dict | None = None) -> float:
+    analysis = scene.get("analysis", {}) or {}
+    narrative = scene.get("narrative", {}) or {}
+    story_meta = story_meta or {}
 
-    # 2. Vision confidence
-    confidence = analysis.get("confidence", 0.5)
+    temporal_importance = _clamp01(narrative.get("importance", 0.5), 0.5)
+    confidence = _clamp01(analysis.get("confidence", 0.5), 0.5)
+    role = str(story_meta.get("role", narrative.get("role", "process")) or "process")
+    role_weight = ROLE_WEIGHTS.get(role, 0.5)
+    story_importance = _clamp01(story_meta.get("story_importance", temporal_importance), temporal_importance)
+    causal_importance = _clamp01(
+        story_meta.get("causal_importance", narrative.get("causal_importance", 0.0)), 0.0
+    )
+    bridge_importance = _clamp01(
+        story_meta.get("bridge_importance", narrative.get("bridge_importance", 0.0)), 0.0
+    )
 
-    # 3. Narrative role weight
-    role = narrative.get("role", "process")
-    role_weight = ROLE_WEIGHTS.get(role, 0.4)
-
-    # 4. Duration fitness — penalize very short (<3s) or very long (>30s) scenes
-    duration = scene.get("duration", 5.0)
-    if duration < 3.0:
-        duration_fitness = 0.3
-    elif duration > 30.0:
-        duration_fitness = 0.5
+    duration = float(scene.get("duration", 5.0) or 5.0)
+    if duration < 2.0:
+        duration_fitness = 0.35
+    elif duration > 25.0:
+        duration_fitness = 0.55
     else:
         duration_fitness = 1.0
 
-    # 5. Position bonus — first and last scenes get a bonus
-    scene_index = scene.get("scene_index", 0) if "scene_index" in scene else 0
-    # Try to extract index from scene_id
-    if scene_index == 0 and scene.get("scene_id", "").startswith("scene_"):
+    scene_index = 0
+    scene_id = str(scene.get("scene_id", ""))
+    if scene_id.startswith("scene_"):
         try:
-            scene_index = int(scene["scene_id"].split("_")[1]) - 1
+            scene_index = int(scene_id.split("_")[1]) - 1
         except (IndexError, ValueError):
-            pass
+            scene_index = 0
+    position_bonus = 0.45
+    if total_scenes:
+        if scene_index == 0:
+            position_bonus = 0.85
+        elif scene_index == total_scenes - 1:
+            position_bonus = 0.80
 
-    position_bonus = 0.5
-    if total_scenes > 0:
-        if scene_index == 0:  # First scene
-            position_bonus = 0.9
-        elif scene_index == total_scenes - 1:  # Last scene
-            position_bonus = 0.8
-        elif scene_index == 1:  # Second scene (often setup)
-            position_bonus = 0.6
-
-    # Composite score
+    # Story and causal importance dominate. Vision confidence prevents broken
+    # analyses from winning, but does not determine narrative value by itself.
     score = (
-        importance * 0.4
-        + confidence * 0.2
-        + role_weight * 0.2
-        + duration_fitness * 0.1
-        + position_bonus * 0.1
+        temporal_importance * 0.14
+        + confidence * 0.08
+        + role_weight * 0.14
+        + story_importance * 0.27
+        + causal_importance * 0.18
+        + bridge_importance * 0.10
+        + duration_fitness * 0.05
+        + position_bonus * 0.04
     )
+    if bool(story_meta.get("must_keep", False)):
+        score = min(1.0, score + 0.12)
+    return round(_clamp01(score), 4)
 
-    return round(min(max(score, 0.0), 1.0), 4)
+
+def _is_valid_scene(scene: dict) -> bool:
+    analysis = scene.get("analysis", {}) or {}
+    confidence = _clamp01(analysis.get("confidence", 1.0), 1.0)
+    action_text = str(analysis.get("action", "") or "").lower()
+    if confidence < 0.1:
+        return False
+    return not any(marker in action_text for marker in ("failed to analyze", "unable to analyze", "skipped in summary"))
+
+
+def _fits(current: float, scene: dict, limit: float) -> bool:
+    return current + float(scene.get("duration", 0) or 0) <= limit + 1e-6
 
 
 def select_scenes(
@@ -100,165 +117,156 @@ def select_scenes(
     target_duration: int | None = None,
     max_scenes: int | None = None,
     min_score: float = 0.3,
+    *,
+    story_plan: dict | None = None,
+    duration_tolerance: float = 1.05,
 ) -> list[dict]:
-    """
-    Select the most important scenes for a video summary.
-
-    Strategy:
-    1. Score all scenes
-    2. Filter by minimum score
-    3. Sort by score (descending)
-    4. Pick top scenes that fit within target_duration
-    5. Re-sort by timestamp (chronological order)
-
-    Parameters
-    ----------
-    storyboard : dict
-        Full storyboard data from vision analysis.
-    target_duration : int | None
-        Target summary duration in seconds. If None, auto-calculate
-        (~10-15% of original, clamped to 60-120s range).
-    max_scenes : int | None
-        Maximum number of scenes. If None, auto-determine.
-    min_score : float
-        Minimum score to consider a scene (0.0-1.0).
-
-    Returns
-    -------
-    list[dict]
-        Selected scenes with added 'summary_score' key, in chronological order.
-    """
-    scenes = storyboard.get("scenes", [])
+    """Select a causally coherent set of scenes under a duration budget."""
+    scenes = storyboard.get("scenes", []) or []
     total_scenes = len(scenes)
-    total_duration = storyboard.get("total_duration", 0)
-
+    total_duration = float(storyboard.get("total_duration", 0) or 0)
     if not scenes:
         return []
 
-    # Auto-calculate target duration if not specified
     if target_duration is None:
-        # ~10-15% of original, clamped to 60-120s
-        auto_target = total_duration * 0.12
-        target_duration = int(max(60, min(auto_target, 120)))
-
-    # Auto-calculate max scenes if not specified
+        target_duration = int(max(60, min(total_duration * 0.12, 120)))
     if max_scenes is None:
-        # Roughly 1 scene per 8-12 seconds of target
-        max_scenes = max(3, min(target_duration // 10, 15))
+        max_scenes = max(3, min(int(target_duration // 10), 18))
 
-    print(f"   📊 Scene selection:")
-    print(f"      Original: {total_scenes} scenes, {total_duration:.0f}s total")
-    print(f"      Target:   ~{target_duration}s, max {max_scenes} scenes")
+    duration_tolerance = max(1.0, min(float(duration_tolerance or 1.0), 1.15))
+    hard_limit = float(target_duration) * duration_tolerance
+    role_map = _story_role_map(story_plan)
 
-    # Score all scenes
-    scored = []
+    print("   📊 Story-aware scene selection:")
+    print(f"      Original: {total_scenes} scenes, {total_duration:.0f}s")
+    print(f"      Target:   {target_duration}s (hard limit {hard_limit:.0f}s), max {max_scenes} scenes")
+
+    scored: list[dict] = []
     for scene in scenes:
-        score = _score_scene(scene, total_scenes)
-        entry = {**scene, "summary_score": score}
+        sid = str(scene.get("scene_id", ""))
+        story_meta = role_map.get(sid, {})
+        entry = {
+            **scene,
+            "summary_score": _score_scene(scene, total_scenes, story_meta),
+            "story_role": story_meta.get("role", scene.get("narrative", {}).get("role", "process")),
+            "story_importance": _clamp01(story_meta.get("story_importance", 0.5), 0.5),
+            "causal_importance": _clamp01(story_meta.get("causal_importance", 0.0), 0.0),
+            "bridge_importance": _clamp01(story_meta.get("bridge_importance", 0.0), 0.0),
+            "must_keep": bool(story_meta.get("must_keep", False)),
+        }
         scored.append(entry)
 
-    # Filter by minimum score and valid analysis
-    candidates = []
-    for s in scored:
-        if s["summary_score"] < min_score:
-            continue
-            
-        analysis = s.get("analysis", {})
-        confidence = analysis.get("confidence", 1.0)
-        action_text = analysis.get("action", "").lower()
-        
-        # Exclude scenes that failed vision analysis
-        if confidence < 0.1 or "failed to analyze" in action_text or "skipped" in action_text:
-            print(f"      ⚠️ Excluding {s.get('scene_id')} (failed analysis/low confidence)")
-            continue
-            
-        candidates.append(s)
-        
-    print(f"      Candidates (valid & score >= {min_score}): {len(candidates)}/{total_scenes}")
-
+    valid = [s for s in scored if _is_valid_scene(s)]
+    candidates = [s for s in valid if s["summary_score"] >= min_score]
     if not candidates:
-        # Fallback: take top 5 scenes regardless of min_score
-        candidates = sorted(scored, key=lambda s: s["summary_score"], reverse=True)[:5]
-        print(f"      ⚠️ No scenes above threshold, using top {len(candidates)} fallback")
+        candidates = sorted(valid or scored, key=lambda s: s["summary_score"], reverse=True)[: max_scenes]
+        print(f"      ⚠️ No candidates above threshold; fallback to top {len(candidates)}")
+    print(f"      Candidates: {len(candidates)}/{total_scenes}")
 
-    # Pick the best candidate from evenly spaced time windows first. A pure
-    # score sort tends to select adjacent scenes from one strong section and
-    # loses the beginning, middle, or ending of the story.
-    candidates_by_time = sorted(candidates, key=lambda s: s.get("start_time", 0))
-    timeline_end = max(
-        total_duration,
-        max((s.get("end_time", 0) for s in candidates_by_time), default=0),
-    )
-    window_count = min(max_scenes, len(candidates_by_time))
-    window_size = timeline_end / window_count if window_count else 0
+    by_time = sorted(candidates, key=lambda s: float(s.get("start_time", 0) or 0))
+    selected: list[dict] = []
+    selected_ids: set[str] = set()
+    current = 0.0
 
-    selected = []
-    selected_ids = set()
-    cumulative_duration = 0.0
+    def add(scene: dict) -> bool:
+        nonlocal current
+        sid = str(scene.get("scene_id", ""))
+        if sid in selected_ids or len(selected) >= max_scenes:
+            return False
+        if not _fits(current, scene, hard_limit):
+            return False
+        selected.append(scene)
+        selected_ids.add(sid)
+        current += float(scene.get("duration", 0) or 0)
+        return True
 
-    # Always preserve the opening and closing beats when they have valid
-    # analysis. A recap that omits either end cannot explain the full arc.
-    anchors = [candidates_by_time[0]]
-    if len(candidates_by_time) > 1:
-        anchors.append(candidates_by_time[-1])
-    for scene in anchors:
-        if scene["scene_id"] in selected_ids:
-            continue
-        if cumulative_duration + scene["duration"] <= target_duration * 1.2:
-            selected.append(scene)
-            selected_ids.add(scene["scene_id"])
-            cumulative_duration += scene["duration"]
-
-    for window_index in range(window_count):
-        window_start = window_index * window_size
-        window_end = timeline_end if window_index == window_count - 1 else (window_index + 1) * window_size
-        window_candidates = [
-            scene
-            for scene in candidates_by_time
-            if scene["scene_id"] not in selected_ids
-            and window_start <= scene.get("start_time", 0) < window_end
-        ]
-        if not window_candidates:
-            continue
-
-        scene = max(window_candidates, key=lambda item: item["summary_score"])
-        if cumulative_duration + scene["duration"] <= target_duration * 1.2:
-            selected.append(scene)
-            selected_ids.add(scene["scene_id"])
-            cumulative_duration += scene["duration"]
-
-    # Fill unused slots with the strongest remaining scenes while preserving
-    # the duration limit. This keeps coverage without wasting available time.
-    remaining = sorted(
-        (scene for scene in candidates_by_time if scene["scene_id"] not in selected_ids),
-        key=lambda scene: scene["summary_score"],
+    # 1) Mandatory global-story anchors first, strongest first.  We still obey
+    # the hard duration budget; "must_keep" is a priority, not a license to
+    # overshoot by 20% like the old selector.
+    mandatory = sorted(
+        [s for s in by_time if s.get("must_keep")],
+        key=lambda s: (s["summary_score"], s.get("story_importance", 0)),
         reverse=True,
     )
-    for scene in remaining:
+    for scene in mandatory:
+        add(scene)
+
+    # 2) Ensure broad story-arc coverage.  One representative per meaningful
+    # role prevents a recap from collapsing into several adjacent machining
+    # shots while losing the problem or payoff.
+    role_order = [
+        "setup", "problem", "process", "complication", "turning_point",
+        "climax", "resolution",
+    ]
+    for role in role_order:
+        options = [
+            s for s in by_time
+            if s["story_role"] == role and str(s.get("scene_id")) not in selected_ids
+        ]
+        if options:
+            add(max(options, key=lambda s: (s["summary_score"], s.get("causal_importance", 0))))
+
+    # 3) Timeline windows provide coverage even when story-role labels are weak.
+    remaining_slots = max(0, max_scenes - len(selected))
+    if remaining_slots and by_time:
+        timeline_end = max(total_duration, max(float(s.get("end_time", 0) or 0) for s in by_time))
+        window_count = min(max_scenes, len(by_time))
+        window_size = timeline_end / max(1, window_count)
+        for index in range(window_count):
+            if len(selected) >= max_scenes:
+                break
+            start = index * window_size
+            end = timeline_end if index == window_count - 1 else (index + 1) * window_size
+            options = [
+                s for s in by_time
+                if str(s.get("scene_id")) not in selected_ids
+                and start <= float(s.get("start_time", 0) or 0) < end
+            ]
+            if options:
+                add(max(options, key=lambda s: s["summary_score"]))
+
+    # 4) Fill with high-value scenes.
+    for scene in sorted(by_time, key=lambda s: s["summary_score"], reverse=True):
         if len(selected) >= max_scenes:
             break
-        if cumulative_duration + scene["duration"] > target_duration * 1.2:
-            continue
-        selected.append(scene)
-        selected_ids.add(scene["scene_id"])
-        cumulative_duration += scene["duration"]
+        add(scene)
 
-    # Re-sort by start_time (chronological)
-    selected.sort(key=lambda s: s.get("start_time", 0))
+    # 5) Bridge repair: when two selected beats are far apart, prefer inserting
+    # a high bridge/causal scene between them if it fits.  This is deliberately
+    # conservative so it cannot blow the duration budget.
+    selected.sort(key=lambda s: float(s.get("start_time", 0) or 0))
+    changed = True
+    while changed and len(selected) < max_scenes:
+        changed = False
+        for left, right in zip(selected, selected[1:]):
+            gap_candidates = [
+                s for s in by_time
+                if str(s.get("scene_id")) not in selected_ids
+                and float(left.get("end_time", 0) or 0) <= float(s.get("start_time", 0) or 0)
+                and float(s.get("end_time", 0) or 0) <= float(right.get("start_time", 0) or 0)
+                and (s.get("bridge_importance", 0) >= 0.55 or s.get("causal_importance", 0) >= 0.70)
+            ]
+            if not gap_candidates:
+                continue
+            bridge = max(
+                gap_candidates,
+                key=lambda s: (s.get("bridge_importance", 0) + s.get("causal_importance", 0), s["summary_score"]),
+            )
+            if add(bridge):
+                selected.sort(key=lambda s: float(s.get("start_time", 0) or 0))
+                changed = True
+                break
 
-    summary_duration = sum(s["duration"] for s in selected)
-    print(f"      Selected: {len(selected)} scenes, {summary_duration:.0f}s total")
-
-    # Print selection details
-    for s in selected:
-        role = s.get("narrative", {}).get("role", "?")
+    selected.sort(key=lambda s: float(s.get("start_time", 0) or 0))
+    summary_duration = sum(float(s.get("duration", 0) or 0) for s in selected)
+    print(f"      Selected: {len(selected)} scenes, {summary_duration:.1f}s")
+    for scene in selected:
         print(
-            f"         {s['scene_id']}: "
-            f"{s['start_time']:.1f}s-{s['end_time']:.1f}s "
-            f"({s['duration']:.1f}s) "
-            f"score={s['summary_score']:.2f} role={role}"
+            f"         {scene['scene_id']}: {scene.get('start_time', 0):.1f}s-"
+            f"{scene.get('end_time', 0):.1f}s ({scene.get('duration', 0):.1f}s) "
+            f"score={scene['summary_score']:.2f} role={scene.get('story_role')} "
+            f"causal={scene.get('causal_importance', 0):.2f} bridge={scene.get('bridge_importance', 0):.2f}"
         )
-
     return selected
 
 
@@ -268,16 +276,7 @@ def save_summary_manifest(
     project_dir: str,
     target_duration: int | None = None,
 ) -> str:
-    """
-    Save the summary scene selection to a manifest file.
-
-    Returns
-    -------
-    str
-        Path to the saved manifest.
-    """
-    summary_duration = sum(s["duration"] for s in selected_scenes)
-
+    summary_duration = sum(float(s.get("duration", 0) or 0) for s in selected_scenes)
     manifest = {
         "mode": "summary",
         "original_scenes": storyboard.get("total_scenes", 0),
@@ -294,17 +293,18 @@ def save_summary_manifest(
                 "start_time": s["start_time"],
                 "end_time": s["end_time"],
                 "duration": s["duration"],
-                "summary_score": s["summary_score"],
-                "narrative_role": s.get("narrative", {}).get("role", ""),
+                "summary_score": s.get("summary_score", 0),
+                "story_role": s.get("story_role", s.get("narrative", {}).get("role", "")),
+                "story_importance": s.get("story_importance", 0),
+                "causal_importance": s.get("causal_importance", 0),
+                "bridge_importance": s.get("bridge_importance", 0),
                 "action": s.get("analysis", {}).get("action", ""),
                 "likely_context": s.get("analysis", {}).get("likely_context", ""),
             }
             for s in selected_scenes
         ],
     }
-
     manifest_path = os.path.join(project_dir, "summary_manifest.json")
-    with open(manifest_path, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, ensure_ascii=False, indent=2)
-
+    with open(manifest_path, "w", encoding="utf-8") as handle:
+        json.dump(manifest, handle, ensure_ascii=False, indent=2)
     return manifest_path
