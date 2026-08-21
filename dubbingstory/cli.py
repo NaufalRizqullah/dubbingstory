@@ -477,6 +477,43 @@ def cmd_run(args, cfg):
     print("\n" + "=" * 70)
     print(f"✅ Pipeline selesai! (mode: {mode})")
     print("=" * 70)
+    
+    _package_debug_logs(_setup_project_dir(cfg, _resolve_project_name(args)))
+
+
+def _package_debug_logs(project_dir: str):
+    """Package all text, json, and log files into a zip file for easy downloading."""
+    import zipfile
+    import glob
+    
+    zip_path = os.path.join(project_dir, "debug_logs.zip")
+    print(f"\n   📦 Packaging debug logs to {zip_path}...")
+    
+    try:
+        target_prefixes = (
+            "video_metadata",
+            "summary_source",
+            "summary_manifest",
+            "storyboard",
+            "segment_manifest",
+            "ingest_manifest",
+            "failed_vision",
+            "failed_tts",
+            "summary_script_",
+            "pipeline",
+            "vllm_server",
+            "mereska-dubbingstory",
+        )
+        
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for ext in ["*.txt", "*.json", "*.log"]:
+                for file_path in glob.glob(os.path.join(project_dir, ext)):
+                    basename = os.path.basename(file_path)
+                    if basename.startswith(target_prefixes):
+                        zipf.write(file_path, arcname=basename)
+        print(f"   ✅ Debug logs packaged successfully!")
+    except Exception as e:
+        print(f"   ⚠️ Failed to package debug logs: {e}")
 
 
 # ==============================================================================
@@ -746,6 +783,7 @@ def cmd_summary(args, cfg):
                 print(f"   ❌ Summary render failed: {e}")
 
     print(f"\n✅ Summary pipeline selesai!")
+    _package_debug_logs(project_dir)
 
 
 # ==============================================================================
