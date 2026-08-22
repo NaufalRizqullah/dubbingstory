@@ -50,10 +50,23 @@ vision:
   openai_model: "Qwen/Qwen3-VL-2B-Instruct"
   openai_base_url: "http://127.0.0.1:8000/v1"
   openai_max_tokens: 640
-  openai_temperature: 0.0
+  # Qwen3-VL official VL sampling baseline. Avoid temperature=0 greedy decoding:
+  # greedy can keep choosing a legal "continue" token inside structured output.
+  openai_temperature: 0.7
+  openai_top_p: 0.8
+  openai_top_k: 20
+  openai_presence_penalty: 1.5
+  openai_repetition_penalty: 1.0
   openai_structured_outputs: true   # vLLM decode-time JSON Schema guardrail
   openai_allow_schema_fallback: false # Do not silently weaken schema on local vLLM
-  openai_repetition_penalty: 1.05   # Secondary guard; schema is primary
+  # Qwen3-VL image budget uses dimensions/32 grid when dimensions are available.
+  # This value is only the fallback for unknown/unreadable images/non-Qwen models.
+  openai_image_token_cost: 512
+  # Error-specific recovery budgets. Normal scene calls stay capped at 640.
+  openai_truncation_retry_tokens: 896
+  openai_runaway_rescue_tokens: 448
+  openai_temporal_truncation_retry_tokens: 6144
+  openai_runaway_threshold: 0.35
   concurrency: 2                    # Match local vLLM replicas where practical
   # --- Shared settings ---
   analysis_mode: "keyframes"        # "keyframes" | "video_upload" (gemini only)

@@ -176,6 +176,35 @@ def build_config(
         except ValueError:
             pass
 
+    float_env_overrides = {
+        "OPENAI_VISION_TEMPERATURE": "vision_openai_temperature",
+        "OPENAI_VISION_TOP_P": "vision_openai_top_p",
+        "OPENAI_VISION_PRESENCE_PENALTY": "vision_openai_presence_penalty",
+        "OPENAI_VISION_RUNAWAY_THRESHOLD": "vision_openai_runaway_threshold",
+    }
+    for env_name, config_name in float_env_overrides.items():
+        raw = os.getenv(env_name, "")
+        if raw:
+            try:
+                flat[config_name] = float(raw)
+            except ValueError:
+                pass
+
+    int_env_overrides = {
+        "OPENAI_VISION_TOP_K": "vision_openai_top_k",
+        "OPENAI_VISION_IMAGE_TOKEN_COST": "vision_openai_image_token_cost",
+        "OPENAI_VISION_TRUNCATION_RETRY_TOKENS": "vision_openai_truncation_retry_tokens",
+        "OPENAI_VISION_RUNAWAY_RESCUE_TOKENS": "vision_openai_runaway_rescue_tokens",
+        "OPENAI_VISION_TEMPORAL_TRUNCATION_RETRY_TOKENS": "vision_openai_temporal_truncation_retry_tokens",
+    }
+    for env_name, config_name in int_env_overrides.items():
+        raw = os.getenv(env_name, "")
+        if raw:
+            try:
+                flat[config_name] = int(raw)
+            except ValueError:
+                pass
+
     env_vision_concurrency = os.getenv("VISION_CONCURRENCY", "")
     if env_vision_concurrency:
         try:

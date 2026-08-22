@@ -23,3 +23,6 @@ torchaudio
 # ASR (transcribe audio when no subtitles exist).
 faster-whisper
 tqdm
+
+# Client-side validation for structured vision responses
+jsonschema>=4.21

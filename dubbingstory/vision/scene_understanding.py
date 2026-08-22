@@ -70,13 +70,23 @@ def _create_analyzer(cfg):
         )
         base_url = getattr(cfg, "vision_openai_base_url", "http://127.0.0.1:8000/v1")
         model = getattr(cfg, "vision_openai_model", "Qwen/Qwen3-VL-2B-Instruct")
-        temperature = getattr(cfg, "vision_openai_temperature", 0.2)
-        max_tokens = getattr(cfg, "vision_openai_max_tokens", 1024)
+        temperature = getattr(cfg, "vision_openai_temperature", 0.7)
+        max_tokens = getattr(cfg, "vision_openai_max_tokens", 640)
         model_max_context = getattr(cfg, "vision_openai_model_max_context", None)
         image_mode = getattr(cfg, "vision_openai_image_mode", "data")
         structured_outputs = getattr(cfg, "vision_openai_structured_outputs", True)
         allow_schema_fallback = getattr(cfg, "vision_openai_allow_schema_fallback", False)
-        repetition_penalty = getattr(cfg, "vision_openai_repetition_penalty", 1.05)
+        repetition_penalty = getattr(cfg, "vision_openai_repetition_penalty", 1.0)
+        top_p = getattr(cfg, "vision_openai_top_p", 0.8)
+        top_k = getattr(cfg, "vision_openai_top_k", 20)
+        presence_penalty = getattr(cfg, "vision_openai_presence_penalty", 1.5)
+        image_token_cost = getattr(cfg, "vision_openai_image_token_cost", 512)
+        truncation_retry_tokens = getattr(cfg, "vision_openai_truncation_retry_tokens", 896)
+        runaway_rescue_tokens = getattr(cfg, "vision_openai_runaway_rescue_tokens", 448)
+        temporal_truncation_retry_tokens = getattr(
+            cfg, "vision_openai_temporal_truncation_retry_tokens", 6144
+        )
+        runaway_threshold = getattr(cfg, "vision_openai_runaway_threshold", 0.35)
 
         return OpenAIVisionAnalyzer(
             api_key=api_key,
@@ -89,6 +99,14 @@ def _create_analyzer(cfg):
             structured_outputs=structured_outputs,
             allow_schema_fallback=allow_schema_fallback,
             repetition_penalty=repetition_penalty,
+            top_p=top_p,
+            top_k=top_k,
+            presence_penalty=presence_penalty,
+            image_token_cost=image_token_cost,
+            truncation_retry_tokens=truncation_retry_tokens,
+            runaway_rescue_tokens=runaway_rescue_tokens,
+            temporal_truncation_retry_tokens=temporal_truncation_retry_tokens,
+            runaway_threshold=runaway_threshold,
         )
 
     elif provider == "gemini":
