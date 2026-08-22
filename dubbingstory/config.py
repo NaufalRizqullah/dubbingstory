@@ -161,6 +161,28 @@ def build_config(
         except Exception:
             flat["vision_openai_model_max_context"] = env_model_max_context
 
+    env_structured = os.getenv("OPENAI_VISION_STRUCTURED_OUTPUTS", "")
+    if env_structured:
+        flat["vision_openai_structured_outputs"] = env_structured.strip().lower() not in {"0", "false", "no", "off"}
+
+    env_schema_fallback = os.getenv("OPENAI_VISION_ALLOW_SCHEMA_FALLBACK", "")
+    if env_schema_fallback:
+        flat["vision_openai_allow_schema_fallback"] = env_schema_fallback.strip().lower() in {"1", "true", "yes", "on"}
+
+    env_repetition_penalty = os.getenv("OPENAI_VISION_REPETITION_PENALTY", "")
+    if env_repetition_penalty:
+        try:
+            flat["vision_openai_repetition_penalty"] = float(env_repetition_penalty)
+        except ValueError:
+            pass
+
+    env_vision_concurrency = os.getenv("VISION_CONCURRENCY", "")
+    if env_vision_concurrency:
+        try:
+            flat["vision_concurrency"] = max(1, int(env_vision_concurrency))
+        except ValueError:
+            pass
+
     # Inject project root
     flat["project_root"] = str(PROJECT_ROOT)
     flat["configs_dir"] = str(CONFIGS_DIR)
@@ -176,4 +198,3 @@ def build_config(
     flat.setdefault("temporal_chunk_size", 15)
 
     return SimpleNamespace(**flat)
-

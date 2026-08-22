@@ -139,8 +139,10 @@ def extract_keyframes_from_source(
     scenes: list[dict],
     output_dir: str,
     strategy: str = "distributed",
+    interval_seconds: float = 2.0,
     max_per_scene: int = 7,
-    max_edge: int = 640,
+    max_edge: int = 768,
+    jpeg_quality: int = 88,
 ) -> dict[str, list[str]]:
     """Extract keyframes directly from the source video using timestamps."""
     import numpy as np
@@ -165,8 +167,21 @@ def extract_keyframes_from_source(
         a = start + margin
         b = max(a, end - margin)
         
-        count = max_per_scene
-        timestamps = np.linspace(a, b, count)
+        duration = max(0.0, b - a)
+        # Very short scenes do not need duplicate near-identical frames.
+        count = max(1, int(max_per_scene))
+        if duration <= 6.0:
+            count = min(count, 2)
+
+        if strategy == "interval" and interval_seconds > 0:
+            timestamps = np.arange(a, b + 1e-6, float(interval_seconds), dtype=float)
+            if len(timestamps) == 0 or timestamps[-1] < b - 1e-3:
+                timestamps = np.append(timestamps, b)
+            if len(timestamps) > count:
+                idx = np.linspace(0, len(timestamps) - 1, count).round().astype(int)
+                timestamps = timestamps[idx]
+        else:
+            timestamps = np.linspace(a, b, count)
         
         paths = []
         for i, ts in enumerate(timestamps):
@@ -185,7 +200,7 @@ def extract_keyframes_from_source(
 
             path = os.path.join(output_dir, sid, f"{sid}_kf{i:02d}.jpg")
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            cv2.imwrite(path, frame, [cv2.IMWRITE_JPEG_QUALITY, 82])
+            cv2.imwrite(path, frame, [cv2.IMWRITE_JPEG_QUALITY, int(jpeg_quality)])
             paths.append(path)
             
         all_keyframes[sid] = paths
@@ -203,6 +218,8 @@ def extract_all_scenes(
     interval_seconds: float = 2.0,
     max_per_scene: int = 7,
     source_video: str = "",
+    max_edge: int = 768,
+    jpeg_quality: int = 88,
 ) -> dict[str, list[str]]:
     """
     Extract keyframes for all scenes.
@@ -233,7 +250,10 @@ def extract_all_scenes(
             scenes=scenes,
             output_dir=output_dir,
             strategy=strategy,
+            interval_seconds=interval_seconds,
             max_per_scene=max_per_scene,
+            max_edge=max_edge,
+            jpeg_quality=jpeg_quality,
         )
 
     os.makedirs(output_dir, exist_ok=True)

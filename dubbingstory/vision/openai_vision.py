@@ -22,6 +22,14 @@ import re
 import time
 from typing import Optional
 
+from dubbingstory.vision.schemas import (
+    CHEAP_SCENE_SCHEMA,
+    DEEP_SCENE_SCHEMA,
+    VISION_SCHEMA_VERSION,
+    build_temporal_flow_schema,
+    normalize_scene_analysis,
+)
+
 try:
     from openai import OpenAI
 except ImportError:
@@ -172,6 +180,9 @@ class OpenAIVisionAnalyzer:
         max_tokens: int = 1024,
         model_max_context: int | None = None,
         image_mode: str = "data",
+        structured_outputs: bool = True,
+        allow_schema_fallback: bool = False,
+        repetition_penalty: float = 1.05,
     ):
         if OpenAI is None:
             raise ImportError(
@@ -191,11 +202,40 @@ class OpenAIVisionAnalyzer:
         #   "file"  → file:// path (efficient, but requires vLLM flag
         #             --allowed-local-media-path)
         self.image_mode = image_mode or "data"
+        # vLLM can enforce JSON Schema during decoding. This is the primary
+        # protection against array repetition/runaway output.
+        self.structured_outputs = bool(structured_outputs)
+        self.allow_schema_fallback = bool(allow_schema_fallback)
+        self.repetition_penalty = float(repetition_penalty or 1.0)
         # Estimated token cost per image for Qwen3-VL vision models.
         # Qwen3-VL-2B typically uses ~1300-2600 tokens per image depending
         # on resolution. This is used for token budgeting to avoid context
         # overflow errors that the text-only estimation misses entirely.
         self.image_token_cost = 1300
+
+    def cache_fingerprint(self) -> dict:
+        """Settings that materially affect deterministic vision-cache output."""
+        return {
+            "schema_version": VISION_SCHEMA_VERSION,
+            "structured_outputs": self.structured_outputs,
+            "allow_schema_fallback": self.allow_schema_fallback,
+            "repetition_penalty": self.repetition_penalty,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "model_max_context": self.model_max_context,
+            "image_mode": self.image_mode,
+        }
+
+    @staticmethod
+    def _response_format_for_schema(schema: dict, schema_name: str) -> dict:
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": schema_name,
+                "strict": True,
+                "schema": schema,
+            },
+        }
 
     def _build_image_content(self, image_paths: list[str]) -> list[dict]:
         """Build OpenAI Vision API content parts from image file paths."""
@@ -217,18 +257,19 @@ class OpenAIVisionAnalyzer:
         self,
         messages: list[dict],
         max_tokens_override: int | None = None,
+        response_schema: dict | None = None,
+        schema_name: str = "vision_response",
+        trace_id: str = "request",
     ) -> dict | list:
-        """
-        Call the OpenAI-compatible API with smart retry logic.
-        """
+        """Call the OpenAI-compatible API with bounded structured output."""
         last_exc = None
         format_retries_left = 1
         network_retries_left = 3
+        schema_enabled = bool(response_schema is not None and self.structured_outputs)
+        prefix = f"[Vision {trace_id}]"
 
         while format_retries_left >= 0 and network_retries_left >= 0:
             try:
-                # Estimate prompt/input token usage to avoid exceeding model
-                # context when combined with requested output.
                 text_parts = []
                 n_images = 0
                 for m in messages:
@@ -236,11 +277,11 @@ class OpenAIVisionAnalyzer:
                     if isinstance(content, str):
                         text_parts.append(content)
                     elif isinstance(content, list):
-                        for p in content:
-                            if isinstance(p, dict):
-                                if p.get("type") == "text":
-                                    text_parts.append(p.get("text", ""))
-                                elif p.get("type") == "image_url":
+                        for part in content:
+                            if isinstance(part, dict):
+                                if part.get("type") == "text":
+                                    text_parts.append(part.get("text", ""))
+                                elif part.get("type") == "image_url":
                                     n_images += 1
                 prompt_text = "\n".join(text_parts)
 
@@ -251,7 +292,6 @@ class OpenAIVisionAnalyzer:
                 allowed_output = self.model_max_context - input_tokens - safety_margin
 
                 if allowed_output <= 0:
-                    # Prompt is already too large for the model — fail fast with guidance
                     raise RuntimeError(
                         f"Prompt too large for model context ({self.model_max_context}): "
                         f"estimated input tokens={input_tokens} "
@@ -259,84 +299,99 @@ class OpenAIVisionAnalyzer:
                         f"Summarize or trim scene_analyses before calling temporal analysis."
                     )
 
-                # Allocate output tokens: use override if provided (e.g. for
-                # temporal analysis which is text-only and needs large output),
-                # otherwise cap at self.max_tokens (safe for vision calls).
                 effective_max = max_tokens_override if max_tokens_override else self.max_tokens
                 call_max_tokens = min(int(effective_max), int(allowed_output))
-
                 print(
-                    f"      [Vision] token_budget text={text_tokens} images={n_images}×{self.image_token_cost}={image_tokens} "
+                    f"      {prefix} token_budget text={text_tokens} images={n_images}×{self.image_token_cost}={image_tokens} "
                     f"total_input={input_tokens} model_max={self.model_max_context} "
-                    f"allowed_output={allowed_output} using_max_tokens={call_max_tokens}"
+                    f"allowed_output={allowed_output} using_max_tokens={call_max_tokens} "
+                    f"schema={'on' if schema_enabled else 'json_object'}"
                 )
+
+                response_format = (
+                    self._response_format_for_schema(response_schema, schema_name)
+                    if schema_enabled and response_schema is not None
+                    else {"type": "json_object"}
+                )
+                extra_body = {"request_id": trace_id}
+                if self.repetition_penalty != 1.0:
+                    extra_body["repetition_penalty"] = self.repetition_penalty
 
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
                     temperature=self.temperature,
                     max_tokens=call_max_tokens,
-                    response_format={"type": "json_object"},
+                    response_format=response_format,
+                    extra_body=extra_body,
                 )
 
                 choice = response.choices[0]
                 text = choice.message.content or ""
                 finish_reason = choice.finish_reason
-
                 usage = getattr(response, "usage", None)
                 if usage is not None:
                     print(
-                        "      [Vision] usage "
+                        f"      {prefix} usage "
                         f"prompt={getattr(usage, 'prompt_tokens', '?')} "
                         f"completion={getattr(usage, 'completion_tokens', '?')} "
                         f"total={getattr(usage, 'total_tokens', '?')}"
                     )
-                print(f"      [Vision] finish_reason={finish_reason} chars={len(text)}")
+                print(f"      {prefix} finish_reason={finish_reason} chars={len(text)}")
                 if finish_reason == "length":
-                    print("      [Vision] LENGTH RAW HEAD:", repr(text[:600]))
-                    print("      [Vision] LENGTH RAW TAIL:", repr(text[-1200:]))
+                    print(f"      {prefix} LENGTH RAW HEAD:", repr(text[:600]))
+                    print(f"      {prefix} LENGTH RAW TAIL:", repr(text[-1200:]))
 
                 try:
                     obj = _extract_json_from_text(text)
                     if finish_reason == "length":
-                        print(f"      [Tracking] 🚀 Successfully rescued valid JSON from truncated output! (chars={len(text)})")
+                        print(f"      {prefix} parsed valid JSON despite length stop (chars={len(text)})")
                     return obj
-                except json.JSONDecodeError as e:
+                except json.JSONDecodeError as exc:
                     if finish_reason == "length":
-                        # If it failed to parse AND hit length limit, it was genuinely truncated.
-                        # Throw the specific RuntimeError to trigger context reduction in outer layers.
-                        print(f"      [Tracking] ❌ Failed to rescue JSON from truncated output. Triggering context reduction.")
-                        raise RuntimeError("finish_reason=length") from e
-                    
-                    # Otherwise, it's just a format error
-                    print("      [Vision] RAW HEAD:", repr(text[:400]))
-                    print("      [Vision] RAW TAIL:", repr(text[-800:]))
-                    raise e
+                        print(f"      {prefix} truncated JSON; triggering context reduction/rescue")
+                        raise RuntimeError("finish_reason=length") from exc
+                    print(f"      {prefix} RAW HEAD:", repr(text[:400]))
+                    print(f"      {prefix} RAW TAIL:", repr(text[-800:]))
+                    raise
 
             except json.JSONDecodeError as exc:
                 last_exc = exc
                 format_retries_left -= 1
                 if format_retries_left < 0:
                     break
-                print(f"      [Vision] Format error, retrying... ({format_retries_left} left)")
+                print(f"      {prefix} format error, retrying ({format_retries_left} left)")
             except Exception as exc:
                 last_exc = exc
+                msg = str(exc).lower()
+
+                # Some third-party OpenAI-compatible servers do not implement
+                # json_schema. vLLM does. Fallback is opt-in so the local target
+                # keeps the hard decoder constraint instead of silently weakening it.
+                if (
+                    schema_enabled
+                    and self.allow_schema_fallback
+                    and getattr(exc, "status_code", None) == 400
+                    and any(term in msg for term in ("json_schema", "response_format", "structured"))
+                ):
+                    schema_enabled = False
+                    print(f"      {prefix} server rejected json_schema; falling back to json_object")
+                    continue
+
                 if str(exc) == "finish_reason=length":
-                    print("      [Vision] Output truncated (finish_reason=length), not retrying.")
+                    print(f"      {prefix} output truncated (finish_reason=length), not retrying same payload")
                     break
                 if getattr(exc, "status_code", None) == 400:
-                    print(f"      [Vision] HTTP 400 Context Length error, not retrying: {exc}")
+                    print(f"      {prefix} HTTP 400, not retrying: {exc}")
                     break
-                
                 if not _is_retryable(exc):
                     break
-                
+
                 network_retries_left -= 1
                 if network_retries_left < 0:
                     break
-                
                 wait = INITIAL_WAIT_SECONDS
-                print(f"      [Vision] Network error {str(exc)[:120]} | Retrying in {wait}s...")
+                print(f"      {prefix} network error {str(exc)[:120]} | retrying in {wait}s")
                 time.sleep(wait)
 
         raise RuntimeError(f"Vision analysis failed. Last error: {last_exc}") from last_exc
@@ -345,35 +400,27 @@ class OpenAIVisionAnalyzer:
         self,
         keyframe_paths: list[str],
         prompt: str,
+        analysis_kind: str = "deep",
+        trace_id: str = "scene",
     ) -> dict:
-        """
-        Analyze a scene using its keyframe images.
-
-        If the first attempt fails due to token limits (finish_reason=length
-        or context overflow), automatically retries with fewer images.
-
-        Parameters
-        ----------
-        keyframe_paths : list[str]
-            Paths to keyframe images.
-        prompt : str
-            Analysis prompt.
-
-        Returns
-        -------
-        dict
-            Structured scene analysis (JSON).
-        """
-        # Per-scene JSON should be small.  A hard cap prevents Qwen3-VL
-        # repetition/runaway generations from consuming thousands of output tokens.
+        """Analyze one scene with strict bounded JSON when supported."""
         scene_max_tokens = min(int(self.max_tokens), 640)
+        schema = CHEAP_SCENE_SCHEMA if analysis_kind == "cheap" else DEEP_SCENE_SCHEMA
+        schema_name = "cheap_scene_analysis" if analysis_kind == "cheap" else "deep_scene_analysis"
 
         content = self._build_image_content(keyframe_paths)
         content.append({"type": "text", "text": prompt})
         messages = [{"role": "user", "content": content}]
 
         try:
-            return self._call_with_retry(messages, max_tokens_override=scene_max_tokens)
+            result = self._call_with_retry(
+                messages,
+                max_tokens_override=scene_max_tokens,
+                response_schema=schema,
+                schema_name=schema_name,
+                trace_id=trace_id,
+            )
+            return normalize_scene_analysis(result, kind=analysis_kind)
         except RuntimeError as exc:
             err_msg = str(exc).lower()
             is_token_issue = (
@@ -386,53 +433,47 @@ class OpenAIVisionAnalyzer:
                 rescue_prompt = (
                     prompt
                     + "\n\nRESCUE MODE: Return the requested JSON object immediately. "
-                    "Keep total JSON under 500 characters when possible. "
-                    "Use at most 8 visible_objects. Keep every string under 20 words. "
-                    "Do not repeat keys, sentences, or explanations."
+                    "visible_objects must contain at most 8 unique items; text_visible at most 4 unique literal strings. "
+                    "If text is not clearly legible use an empty text_visible array. "
+                    "Do not infer object names as visible text. Do not repeat keys, array items, sentences, or explanations."
                 )
                 print(
-                    "      [Vision] Retrying one representative middle frame "
-                    f"after token/runaway failure ({len(keyframe_paths)} -> 1 image)..."
+                    f"      [Vision {trace_id}] retrying one representative middle frame "
+                    f"after token/runaway failure ({len(keyframe_paths)} -> 1 image)"
                 )
                 content = self._build_image_content([middle])
                 content.append({"type": "text", "text": rescue_prompt})
                 messages = [{"role": "user", "content": content}]
-                return self._call_with_retry(messages, max_tokens_override=384)
+                result = self._call_with_retry(
+                    messages,
+                    max_tokens_override=384,
+                    response_schema=schema,
+                    schema_name=schema_name,
+                    trace_id=f"{trace_id}-rescue",
+                )
+                return normalize_scene_analysis(result, kind=analysis_kind)
             raise
 
     def analyze_temporal_flow(
         self,
         scene_analyses: list[dict],
         prompt: str,
+        trace_id: str = "temporal",
     ) -> dict:
-        """
-        Analyze the temporal flow across all scenes.
-
-        This is a text-only call (no images) — uses the same model
-        to understand relationships between scenes.
-
-        Parameters
-        ----------
-        scene_analyses : list[dict]
-            Per-scene analysis results.
-        prompt : str
-            Temporal flow prompt.
-
-        Returns
-        -------
-        dict
-            Enriched scene data with narrative context.
-        """
+        """Analyze temporal flow with a schema bounded to the current chunk."""
         messages = [{"role": "user", "content": prompt}]
-
-        # Temporal analysis is text-only (no images) and needs a large output
-        # to fit narrative data for all scenes in the chunk. Use the full
-        # allowed output budget instead of the default max_tokens (which is
-        # tuned for per-scene vision calls and usually only 2048).
-        return self._call_with_retry(
+        scene_ids = [str(item.get("scene_id", "")) for item in scene_analyses if item.get("scene_id")]
+        schema = build_temporal_flow_schema(scene_ids)
+        result = self._call_with_retry(
             messages,
             max_tokens_override=min(self.model_max_context, 4096),
+            response_schema=schema,
+            schema_name="temporal_flow_analysis",
+            trace_id=trace_id,
         )
+        if not isinstance(result, dict):
+            raise ValueError("Temporal vision response must be a JSON object")
+        return result
 
     def health_check(self) -> bool:
         """Check if the vision server is reachable and serving the expected model."""

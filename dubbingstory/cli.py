@@ -215,6 +215,7 @@ def cmd_segment(args, cfg):
             detector=getattr(cfg, "segment_detector", "adaptive"),
             threshold=getattr(cfg, "segment_adaptive_threshold", 3.0),
             min_duration=getattr(cfg, "segment_min_scene_duration", 2.0),
+            max_duration=getattr(cfg, "segment_max_scene_duration", 15.0),
             merge_short=getattr(cfg, "segment_merge_short_scenes", True),
         )
     else:
@@ -226,6 +227,7 @@ def cmd_segment(args, cfg):
             detector=getattr(cfg, "segment_detector", "adaptive"),
             threshold=getattr(cfg, "segment_adaptive_threshold", 3.0),
             min_duration=getattr(cfg, "segment_min_scene_duration", 2.0),
+            max_duration=getattr(cfg, "segment_max_scene_duration", 15.0),
             merge_short=getattr(cfg, "segment_merge_short_scenes", True),
         )
 
@@ -236,8 +238,11 @@ def cmd_segment(args, cfg):
         scenes_dir=os.path.join(project_dir, "scenes"),
         output_dir=keyframes_dir,
         strategy=getattr(cfg, "keyframes_strategy", "distributed"),
+        interval_seconds=getattr(cfg, "keyframes_interval_seconds", 2.0),
         max_per_scene=getattr(cfg, "keyframes_max_per_scene", 7),
         source_video=video_path,
+        max_edge=getattr(cfg, "keyframes_max_edge", 768),
+        jpeg_quality=getattr(cfg, "keyframes_jpeg_quality", 88),
     )
 
     # Save segment manifest
@@ -862,6 +867,10 @@ def main():
         help="Vision max output tokens (default: 2048)"
     )
     p_run.add_argument(
+        "--vision-concurrency", type=int, default=None,
+        help="Parallel per-scene vision requests. Match local data-parallel replicas when possible."
+    )
+    p_run.add_argument(
         "--quality", "-q", type=str, default=None,
         choices=["720", "1080", "2k", "4k", "max"],
         help="Download quality (default: 1080). Options: 720, 1080, 2k, 4k, max"
@@ -903,6 +912,10 @@ def main():
         "--min-scene-duration", type=float, default=None,
         help="Minimum scene duration in seconds (default: 2.0). "
              "Higher = fewer scenes = faster. Recommended: 4-6 for speed."
+    )
+    p_run.add_argument(
+        "--max-scene-duration", type=float, default=None,
+        help="Split long continuous shots into bounded analysis windows (recommended: 12-18s)."
     )
     p_run.add_argument(
         "--scene-threshold", type=float, default=None,
@@ -964,6 +977,10 @@ def main():
         help="Minimum scene duration in seconds (default: 2.0). Higher = fewer scenes."
     )
     p_segment.add_argument(
+        "--max-scene-duration", type=float, default=None,
+        help="Split long detected shots into bounded analysis/selectable windows."
+    )
+    p_segment.add_argument(
         "--scene-threshold", type=float, default=None,
         help="Scene detection sensitivity (default: 3.0). Higher = fewer scenes."
     )
@@ -989,6 +1006,10 @@ def main():
     p_analyze.add_argument(
         "--vision-max-tokens", type=int, default=None,
         help="Vision max output tokens (default: 2048)"
+    )
+    p_analyze.add_argument(
+        "--vision-concurrency", type=int, default=None,
+        help="Parallel per-scene vision requests."
     )
 
     # ── narrate ───────────────────────────────────────────────────────────
@@ -1036,6 +1057,8 @@ def main():
         cfg.vision_openai_base_url = args.vision_base_url
     if hasattr(args, "vision_max_tokens") and args.vision_max_tokens is not None:
         cfg.vision_openai_max_tokens = args.vision_max_tokens
+    if hasattr(args, "vision_concurrency") and args.vision_concurrency is not None:
+        cfg.vision_concurrency = max(1, int(args.vision_concurrency))
 
     # Summary mode overrides
     if hasattr(args, "summary_duration") and args.summary_duration is not None:
@@ -1048,6 +1071,8 @@ def main():
         cfg.keyframes_max_per_scene = args.max_keyframes
     if hasattr(args, "min_scene_duration") and args.min_scene_duration is not None:
         cfg.segment_min_scene_duration = args.min_scene_duration
+    if hasattr(args, "max_scene_duration") and args.max_scene_duration is not None:
+        cfg.segment_max_scene_duration = args.max_scene_duration
     if hasattr(args, "scene_threshold") and args.scene_threshold is not None:
         cfg.segment_adaptive_threshold = args.scene_threshold
 

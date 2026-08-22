@@ -26,13 +26,16 @@ segment:
   detector: "adaptive"              # "adaptive" | "content" | "threshold"
   adaptive_threshold: 3.0
   min_scene_duration: 2.0           # Minimum scene length in seconds
+  max_scene_duration: 15.0          # Split very long continuous shots into analysis/selectable windows
   merge_short_scenes: true          # Merge scenes shorter than min_scene_duration
 
 # ── Keyframe Extraction ──────────────────────────────────────────────────────
 keyframes:
   strategy: "distributed"           # "distributed" (start,25%,50%,75%,end) | "interval"
   interval_seconds: 2.0             # For "interval" strategy
-  max_per_scene: 7                  # Max keyframes per scene
+  max_per_scene: 7                  # Upper bound; notebook speed preset can override to 3
+  max_edge: 768                     # Deep vision keeps more fine detail/OCR than the old 640px path
+  jpeg_quality: 88                  # Source-frame JPEG quality
 
 # ── Vision (Scene Understanding) ────────────────────────────────────────────
 # Provider "gemini" uses Google Gemini API (needs GOOGLE_API_KEY)
@@ -48,6 +51,10 @@ vision:
   openai_base_url: "http://127.0.0.1:8000/v1"
   openai_max_tokens: 640
   openai_temperature: 0.0
+  openai_structured_outputs: true   # vLLM decode-time JSON Schema guardrail
+  openai_allow_schema_fallback: false # Do not silently weaken schema on local vLLM
+  openai_repetition_penalty: 1.05   # Secondary guard; schema is primary
+  concurrency: 2                    # Match local vLLM replicas where practical
   # --- Shared settings ---
   analysis_mode: "keyframes"        # "keyframes" | "video_upload" (gemini only)
   domain_hint: ""                   # e.g., "workshop", "cooking", "repair"

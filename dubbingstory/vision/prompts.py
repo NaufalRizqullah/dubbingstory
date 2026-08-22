@@ -11,7 +11,10 @@ CRITICAL RULES:
 - Subtitle/dialogue can clarify meaning, goals, or object purpose, but do not pretend
   those facts were visually observed.
 - If uncertain, use "unknown" or a short hedged phrase.
-- Keep every string to one short sentence; visible_objects/text_visible max 8 items.
+- Keep every string to one short sentence.
+- visible_objects: at most 8 UNIQUE items. Never repeat an item.
+- text_visible: at most 4 UNIQUE strings and ONLY literal text clearly legible in the image.
+  If no text is clearly legible, return []. Do not copy/infer object names into text_visible.
 - Do not write narration, hype, hooks, or audience reactions.
 
 {subtitle_context}
@@ -31,10 +34,8 @@ Extract:
 11. text_visible: useful visible text only
 12. confidence: 0.0 to 1.0
 
-Return ONLY valid JSON:
+Return ONLY valid JSON. Scene identity/timing are added by the pipeline, so do not output them:
 {{
-  "scene_id": "{scene_id}",
-  "time_range": "{time_range}",
   "visible_objects": ["object1"],
   "people": "brief stable description",
   "action": "concrete action",
@@ -61,9 +62,8 @@ Briefly identify the action and score how useful this scene may be for understan
 the complete process/story. Transcript/dialogue can raise story relevance even when
 the visuals are ordinary. Do not reward visual spectacle alone.
 
-Return ONLY valid JSON:
+Return ONLY valid JSON. Scene identity is added by the pipeline, so do not output it:
 {{
-  "scene_id": "{scene_id}",
   "action": "brief action",
   "visual_change": 0.0,
   "story_relevance": 0.0,

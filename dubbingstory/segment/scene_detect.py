@@ -29,6 +29,7 @@ def detect_scenes(
     detector: str = "adaptive",
     threshold: float = 3.0,
     min_duration: float = 2.0,
+    max_duration: float | None = None,
     merge_short: bool = True,
 ) -> list[dict]:
     """
@@ -85,10 +86,18 @@ def detect_scenes(
             "end_frame": end.get_frames(),
         })
 
-    # Merge short scenes
+    # Merge short scenes first, then split abnormally long continuous shots into
+    # bounded analysis/selectable windows. This preserves visual coverage for
+    # long takes without sending a huge frame set into one vision request.
     if merge_short and min_duration > 0:
         scenes = _merge_short_scenes(scenes, min_duration)
         print(f"   📊 Scenes after merging (min {min_duration}s): {len(scenes)}")
+
+    if max_duration and max_duration > 0:
+        before = len(scenes)
+        scenes = _split_long_scenes(scenes, float(max_duration))
+        if len(scenes) != before:
+            print(f"   📊 Scenes after long-shot windowing (max {max_duration:.1f}s): {len(scenes)}")
 
     return scenes
 
@@ -130,6 +139,55 @@ def _merge_short_scenes(scenes: list[dict], min_duration: float) -> list[dict]:
         scene["scene_index"] = i
 
     return merged
+
+
+
+
+def _split_long_scenes(scenes: list[dict], max_duration: float) -> list[dict]:
+    """Split long detected shots into near-equal windows no longer than max_duration."""
+    import math
+
+    if not scenes or max_duration <= 0:
+        return scenes
+
+    result: list[dict] = []
+    for source in scenes:
+        duration = float(source.get("duration", 0.0) or 0.0)
+        if duration <= max_duration:
+            item = dict(source)
+            item.setdefault("source_scene_id", source.get("scene_id"))
+            result.append(item)
+            continue
+
+        parts = max(2, int(math.ceil(duration / max_duration)))
+        start = float(source["start_time"])
+        end = float(source["end_time"])
+        start_frame = int(source.get("start_frame", 0) or 0)
+        end_frame = int(source.get("end_frame", start_frame) or start_frame)
+        frame_span = max(0, end_frame - start_frame)
+
+        for part in range(parts):
+            a_ratio = part / parts
+            b_ratio = (part + 1) / parts
+            a = start + duration * a_ratio
+            b = end if part == parts - 1 else start + duration * b_ratio
+            item = dict(source)
+            item.update({
+                "start_time": round(a, 3),
+                "end_time": round(b, 3),
+                "duration": round(b - a, 3),
+                "start_frame": start_frame + int(round(frame_span * a_ratio)),
+                "end_frame": end_frame if part == parts - 1 else start_frame + int(round(frame_span * b_ratio)),
+                "source_scene_id": source.get("scene_id"),
+                "source_scene_part": part + 1,
+                "source_scene_parts": parts,
+            })
+            result.append(item)
+
+    for i, scene in enumerate(result):
+        scene["scene_id"] = f"scene_{i + 1:03d}"
+        scene["scene_index"] = i
+    return result
 
 
 def split_video(
@@ -205,6 +263,7 @@ def detect_and_split(
     detector: str = "adaptive",
     threshold: float = 3.0,
     min_duration: float = 2.0,
+    max_duration: float | None = None,
     merge_short: bool = True,
 ) -> list[dict]:
     """
@@ -217,6 +276,7 @@ def detect_and_split(
         detector=detector,
         threshold=threshold,
         min_duration=min_duration,
+        max_duration=max_duration,
         merge_short=merge_short,
     )
 

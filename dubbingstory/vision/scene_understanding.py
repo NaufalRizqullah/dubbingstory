@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dubbingstory.vision.gemini_analyzer import GeminiVideoAnalyzer
 from dubbingstory.vision.openai_vision import OpenAIVisionAnalyzer, _estimate_tokens
 from dubbingstory.vision.prompts import build_scene_prompt, build_temporal_prompt, build_cheap_scene_prompt
+from dubbingstory.vision.schemas import VISION_SCHEMA_VERSION
 
 
 def _get_subtitle_for_scene(
@@ -73,6 +74,9 @@ def _create_analyzer(cfg):
         max_tokens = getattr(cfg, "vision_openai_max_tokens", 1024)
         model_max_context = getattr(cfg, "vision_openai_model_max_context", None)
         image_mode = getattr(cfg, "vision_openai_image_mode", "data")
+        structured_outputs = getattr(cfg, "vision_openai_structured_outputs", True)
+        allow_schema_fallback = getattr(cfg, "vision_openai_allow_schema_fallback", False)
+        repetition_penalty = getattr(cfg, "vision_openai_repetition_penalty", 1.05)
 
         return OpenAIVisionAnalyzer(
             api_key=api_key,
@@ -82,6 +86,9 @@ def _create_analyzer(cfg):
             max_tokens=max_tokens,
             model_max_context=model_max_context,
             image_mode=image_mode,
+            structured_outputs=structured_outputs,
+            allow_schema_fallback=allow_schema_fallback,
+            repetition_penalty=repetition_penalty,
         )
 
     elif provider == "gemini":
@@ -220,9 +227,18 @@ def run_analysis(
             )
 
         # Version-aware cache key
+        analyzer_fingerprint = {}
+        if hasattr(analyzer, "cache_fingerprint"):
+            try:
+                analyzer_fingerprint = analyzer.cache_fingerprint()
+            except Exception:
+                analyzer_fingerprint = {}
         payload = {
             "scene_id": scene_id,
+            "analysis_kind": "cheap" if is_cheap else "deep",
+            "vision_schema_version": VISION_SCHEMA_VERSION,
             "model": getattr(analyzer, "model", "gemini"),
+            "analyzer_config": analyzer_fingerprint,
             "prompt": prompt,
             "keyframes": [
                 {
@@ -264,11 +280,23 @@ def run_analysis(
                     prompt=prompt,
                 )
             else:
-                analysis = analyzer.analyze_scene_from_frames(
-                    keyframe_paths=kf_paths,
-                    prompt=prompt,
-                )
+                if isinstance(analyzer, OpenAIVisionAnalyzer):
+                    analysis = analyzer.analyze_scene_from_frames(
+                        keyframe_paths=kf_paths,
+                        prompt=prompt,
+                        analysis_kind="cheap" if is_cheap else "deep",
+                        trace_id=scene_id,
+                    )
+                else:
+                    analysis = analyzer.analyze_scene_from_frames(
+                        keyframe_paths=kf_paths,
+                        prompt=prompt,
+                    )
 
+            # Scene identity/timing are deterministic pipeline facts. Never trust
+            # the model to reproduce them, especially under concurrent requests.
+            analysis["scene_id"] = scene_id
+            analysis["time_range"] = time_range
             analysis["start_time"] = scene["start_time"]
             analysis["end_time"] = scene["end_time"]
             analysis["duration"] = scene["duration"]
@@ -312,8 +340,9 @@ def run_analysis(
                 "error": str(e),
             }
 
-    workers = getattr(cfg, "vision_concurrency", 2)
+    workers = max(1, int(getattr(cfg, "vision_concurrency", 2) or 1))
     mode = getattr(cfg, "mode", "full")
+    print(f"   ⚙️ Vision concurrency: {workers} worker(s)")
 
     if mode == "summary":
         print(f"   🔍 Pass A: Screening {len(scenes)} scenes with visual + transcript relevance...")
@@ -424,10 +453,17 @@ def run_analysis(
         print(f"   [Tokens] temporal_prompt_tokens~{temporal_tokens} for chunk {i//temporal_chunk_size + 1}")
 
         try:
-            chunk_data = analyzer.analyze_temporal_flow(
-                scene_analyses=chunk,
-                prompt=temporal_prompt,
-            )
+            if isinstance(analyzer, OpenAIVisionAnalyzer):
+                chunk_data = analyzer.analyze_temporal_flow(
+                    scene_analyses=chunk,
+                    prompt=temporal_prompt,
+                    trace_id=f"temporal-{i//temporal_chunk_size + 1}",
+                )
+            else:
+                chunk_data = analyzer.analyze_temporal_flow(
+                    scene_analyses=chunk,
+                    prompt=temporal_prompt,
+                )
             enriched_scenes_all.extend(chunk_data.get("scenes_enriched", []))
             if chunk_data.get("video_summary"):
                 video_summaries.append(chunk_data["video_summary"])
@@ -450,10 +486,17 @@ def run_analysis(
                         domain=domain_hint or "general",
                         subtitle_context=full_subtitle_context,
                     )
-                    retry_data = analyzer.analyze_temporal_flow(
-                        scene_analyses=retry_chunk,
-                        prompt=retry_prompt,
-                    )
+                    if isinstance(analyzer, OpenAIVisionAnalyzer):
+                        retry_data = analyzer.analyze_temporal_flow(
+                            scene_analyses=retry_chunk,
+                            prompt=retry_prompt,
+                            trace_id=f"temporal-{i//temporal_chunk_size + 1}-retry-{retry_index}",
+                        )
+                    else:
+                        retry_data = analyzer.analyze_temporal_flow(
+                            scene_analyses=retry_chunk,
+                            prompt=retry_prompt,
+                        )
                     enriched_scenes_all.extend(retry_data.get("scenes_enriched", []))
                     if retry_data.get("video_summary"):
                         video_summaries.append(retry_data["video_summary"])
