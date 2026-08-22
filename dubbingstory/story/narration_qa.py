@@ -6,6 +6,8 @@ import re
 from collections import Counter
 from typing import Any
 
+from dubbingstory.story.language_guard import narration_language_issue
+
 
 REACTIVE_PHRASES = {
     "id": [
@@ -71,6 +73,10 @@ def evaluate_narration(
     if missing_ids:
         issues.append(f"missing_planned_scenes:{len(missing_ids)}")
 
+    language_issue = narration_language_issue(segments, language)
+    if language_issue:
+        issues.append(f"language_mismatch:expected_{language}")
+
     continuity_score = 1.0
     continuity_score -= min(0.35, len(missing_ids) * 0.05)
     continuity_score -= min(0.25, len(repeated_openers) * 0.05)
@@ -87,6 +93,7 @@ def evaluate_narration(
         "reactive_phrase_hits": reactive_hits,
         "repeated_sentence_openers": repeated_openers,
         "missing_scene_ids": missing_ids,
+        "language_issue": language_issue,
         "continuity_score": continuity_score,
         "issues": issues,
         "needs_rewrite": bool(issues),

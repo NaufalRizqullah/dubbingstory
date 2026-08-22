@@ -12,7 +12,8 @@ frames. Explain what is happening, why it matters, what changes, and how the
 current beat connects to what came before. Use only supplied evidence.
 
 MODE: {mode}
-LANGUAGE: {language_label}
+OUTPUT_LANGUAGE_CODE: {language_code}
+OUTPUT_LANGUAGE_NAME: {language_label}
 STYLE NAME: {style_name}
 STYLE TONE: {tone}
 
@@ -29,9 +30,16 @@ SCENES + NARRATION PLAN, in final playback order:
 {scenes_json}
 
 HARD RULES:
-0. Every `text` value MUST be written entirely in {language_label}. Do not
-    answer in English when the requested language is Bahasa Indonesia. Translate
-    supplied English evidence into the requested language; never copy its wording.
+0. LANGUAGE CONTRACT IS NON-NEGOTIABLE. The required output language is
+   {language_label} with code `{language_code}`. Every `text` value MUST be written
+   entirely in that language. Source evidence, titles, story-plan fields, or retry
+   context may be English; they are INPUT ONLY and MUST NOT change the output language.
+   If the required language is Bahasa Indonesia (`id`), translate English evidence
+   into natural Bahasa Indonesia instead of copying English sentences. Proper nouns,
+   brand names, model numbers, and literal on-screen text may remain unchanged.
+   On retries, NEVER infer the language from a previous response; always obey
+   OUTPUT_LANGUAGE_CODE/OUTPUT_LANGUAGE_NAME above. Before returning JSON, verify
+   every narration `text` field follows this language contract.
 1. Return one narration item for every supplied NARRATION BEAT scene_id, in the same order.
    A beat may cover multiple visual scene IDs; narrate them as one thought.
 2. Tell one continuous story. A later segment must sound like a continuation,
@@ -71,7 +79,18 @@ Return ONLY a valid JSON array:
 
 REWRITE_PROMPT = """You are revising an existing video narration after QA.
 
-LANGUAGE: {language_label}
+OUTPUT_LANGUAGE_CODE: {language_code}
+OUTPUT_LANGUAGE_NAME: {language_label}
+
+LANGUAGE CONTRACT (NON-NEGOTIABLE):
+- Rewrite every narration `text` field entirely in {language_label} (`{language_code}`).
+- CURRENT NARRATION may contain the wrong language because of a failed prior attempt;
+  do not preserve that mistake. Translate/rewrite it into the required output language.
+- Story plan, QA details, source evidence, and retry context are INPUT ONLY and must
+  never override OUTPUT_LANGUAGE_CODE/OUTPUT_LANGUAGE_NAME.
+- Proper nouns, model numbers, brands, and literal on-screen text may remain unchanged.
+- Before returning JSON, verify every `text` field follows the required language.
+
 QA ISSUES:
 {issues_json}
 
@@ -174,6 +193,7 @@ def build_v2_narration_prompt(
 
     return V2_NARRATION_PROMPT.format(
         mode=mode,
+        language_code=language,
         language_label=_language_label(language),
         style_name=style_config.get("name", style),
         tone=style_config.get("tone", "natural storytelling"),
@@ -194,6 +214,7 @@ def build_rewrite_prompt(
     language: str,
 ) -> str:
     return REWRITE_PROMPT.format(
+        language_code=language,
         language_label=_language_label(language),
         issues_json=json.dumps(qa.get("issues", []), ensure_ascii=False, indent=2),
         story_plan_json=json.dumps(story_plan, ensure_ascii=False, indent=2)[:22000],

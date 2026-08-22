@@ -23,6 +23,10 @@ WAIT_INCREMENT_SECONDS = 15
 RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 
+class _ResponseValidationError(ValueError):
+    """A semantic response error that should trigger a fresh generation attempt."""
+
+
 def _extract_status_code(exc: Exception):
     """Extract HTTP status code from various exception types."""
     for attr in ("status_code", "code", "status"):
@@ -37,7 +41,7 @@ def _extract_status_code(exc: Exception):
 
 def _is_retryable(exc: Exception) -> bool:
     """Check if an exception is retryable."""
-    if isinstance(exc, json.JSONDecodeError):
+    if isinstance(exc, (json.JSONDecodeError, _ResponseValidationError)):
         return True
     code = _extract_status_code(exc)
     if code in RETRYABLE_STATUS_CODES:
@@ -91,29 +95,42 @@ class GeminiVideoAnalyzer:
         self,
         contents: list,
         response_schema: str = "json",
-    ) -> dict:
-        """
-        Call Gemini with retry logic.
+        *,
+        temperature: float = 0.2,
+        response_validator=None,
+        task_name: str = "analysis",
+        model_override: str | None = None,
+    ) -> dict | list:
+        """Call Gemini with retry logic and optional semantic validation.
 
-        Adapted from clipping/engine.py _generate_json_with_retry.
+        ``response_validator`` receives the decoded JSON payload and returns either
+        ``None`` (accepted) or a human-readable error string (retry). This is used
+        by narration generation to reject a response written in the wrong language
+        without losing the original prompt/language contract on the next attempt.
         """
         config = types.GenerateContentConfig(
             response_mime_type="application/json",
-            temperature=0.2,  # Low temperature for more deterministic analysis
+            temperature=temperature,
         )
 
         last_exc = None
         status_code = None
+        base_contents = list(contents)
+        attempt_contents = list(base_contents)
+        primary_model = model_override or self.model
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
-            model = self.model if attempt <= MAX_ATTEMPTS - 1 else self.fallback_model
+            model = primary_model if attempt <= MAX_ATTEMPTS - 1 else self.fallback_model
 
             try:
-                print(f"      [Gemini] Attempt {attempt}/{MAX_ATTEMPTS} ({model})...")
+                print(
+                    f"      [Gemini:{task_name}] Attempt {attempt}/{MAX_ATTEMPTS} "
+                    f"({model})..."
+                )
 
                 response = self.client.models.generate_content(
                     model=model,
-                    contents=contents,
+                    contents=attempt_contents,
                     config=config,
                 )
 
@@ -121,7 +138,12 @@ class GeminiVideoAnalyzer:
                 if not text or not text.strip():
                     raise ValueError("Gemini returned empty response.")
 
-                return json.loads(text)
+                payload = json.loads(text)
+                if response_validator is not None:
+                    validation_error = response_validator(payload)
+                    if validation_error:
+                        raise _ResponseValidationError(str(validation_error))
+                return payload
 
             except Exception as exc:
                 last_exc = exc
@@ -129,21 +151,53 @@ class GeminiVideoAnalyzer:
                 retryable = _is_retryable(exc)
 
                 print(
-                    f"      [Gemini] Attempt {attempt} failed | "
-                    f"status={status_code} | error={str(exc)[:100]}"
+                    f"      [Gemini:{task_name}] Attempt {attempt} failed | "
+                    f"status={status_code} | error={str(exc)[:180]}"
                 )
 
                 if (not retryable) or attempt == MAX_ATTEMPTS:
                     break
 
+                # For semantic validation failures, keep the ORIGINAL request and
+                # add only a correction note. The original prompt contains the
+                # selected language code/name, so retry can never silently lose it.
+                if isinstance(exc, _ResponseValidationError):
+                    retry_note = (
+                        "RETRY VALIDATION FAILURE: The previous JSON response was rejected. "
+                        f"Reason: {exc}. Re-read and obey every original requirement, "
+                        "especially the required output language. Return a fresh complete JSON response."
+                    )
+                    if all(isinstance(item, str) for item in base_contents):
+                        attempt_contents = list(base_contents) + [retry_note]
+                    else:
+                        attempt_contents = list(base_contents)
+
                 wait = INITIAL_WAIT_SECONDS + ((attempt - 1) * WAIT_INCREMENT_SECONDS)
-                print(f"      [Gemini] Retrying in {wait}s...")
+                print(f"      [Gemini:{task_name}] Retrying in {wait}s...")
                 time.sleep(wait)
 
         raise RuntimeError(
-            f"Gemini analysis failed after {MAX_ATTEMPTS} attempts. "
+            f"Gemini {task_name} failed after {MAX_ATTEMPTS} attempts. "
             f"Last error: {last_exc}"
         ) from last_exc
+
+    def generate_json_with_retry(
+        self,
+        prompt: str,
+        *,
+        temperature: float = 0.2,
+        response_validator=None,
+        task_name: str = "json",
+        model: str | None = None,
+    ) -> dict | list:
+        """Generate text-only JSON while preserving the exact prompt across retries."""
+        return self._generate_with_retry(
+            [prompt],
+            temperature=temperature,
+            response_validator=response_validator,
+            task_name=task_name,
+            model_override=model,
+        )
 
     def analyze_scene_from_frames(
         self,

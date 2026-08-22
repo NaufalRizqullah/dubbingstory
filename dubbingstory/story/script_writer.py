@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from dubbingstory.story.language_guard import payload_language_mismatch_reason
 from dubbingstory.story.narration_planner import build_narration_plan
 from dubbingstory.story.narration_qa import evaluate_narration
 from dubbingstory.story.prompt_templates import build_rewrite_prompt, build_v2_narration_prompt
@@ -38,7 +39,40 @@ def _client(cfg):
     return GeminiVideoAnalyzer(api_key=api_key, model=model, fallback_model=fallback), model
 
 
-def _call_json(analyzer, model: str, prompt: str, *, temperature: float = 0.45) -> Any:
+def _call_json(
+    analyzer,
+    model: str,
+    prompt: str,
+    *,
+    temperature: float = 0.45,
+    language: str | None = None,
+    task_name: str = "narration",
+) -> Any:
+    """Generate JSON with retries while preserving the selected language.
+
+    Narration used to bypass ``GeminiVideoAnalyzer`` retry logic and call the
+    SDK directly. That meant a 503 immediately fell through to fallback, and
+    custom retry code could accidentally rebuild a prompt without ``language``.
+    The new path keeps one immutable prompt for all attempts and rejects an
+    obviously wrong-language response before it can reach TTS.
+    """
+
+    def response_validator(payload: Any) -> str | None:
+        if not language:
+            return None
+        return payload_language_mismatch_reason(payload, language)
+
+    if hasattr(analyzer, "generate_json_with_retry"):
+        return analyzer.generate_json_with_retry(
+            prompt,
+            temperature=temperature,
+            response_validator=response_validator if language else None,
+            task_name=f"{task_name}-{language or 'generic'}",
+            model=model,
+        )
+
+    # Backward-compatible one-shot path for custom analyzers. Keep the same
+    # semantic validation even though retry support is unavailable.
     from google.genai import types
 
     response = analyzer.client.models.generate_content(
@@ -52,7 +86,11 @@ def _call_json(analyzer, model: str, prompt: str, *, temperature: float = 0.45) 
     text = getattr(response, "text", None)
     if not text:
         raise ValueError("Empty response from Gemini")
-    return json.loads(text)
+    payload = json.loads(text)
+    validation_error = response_validator(payload)
+    if validation_error:
+        raise ValueError(validation_error)
+    return payload
 
 
 def _extract_segment_list(payload: Any) -> list[dict]:
@@ -96,7 +134,7 @@ def _validate_narration(
         covered_ids = [str(sid) for sid in planned.get("covers_scene_ids", [scene_id]) if sid]
         if not text:
             covered_scenes = [scene_map.get(sid, {}) for sid in covered_ids]
-            text = _fallback_beat_text(covered_scenes, language)
+            text = _fallback_beat_text(covered_scenes, language, planned)
 
         word_count = len(text.split())
         target_wpm = float(narration_plan.get("target_wpm", 160) or 160)
@@ -122,33 +160,134 @@ def _validate_narration(
     return validated
 
 
-def _fallback_text(scene: dict, language: str = "id") -> str:
-    analysis = scene.get("analysis", {}) or {}
-    action = str(analysis.get("action", "") or "").strip()
-    context = str(analysis.get("likely_context", "") or "").strip()
-    changes = str(analysis.get("changes", "") or "").strip()
-    if language == "id":
-        return "Komponen sedang diperiksa dan dikerjakan untuk melanjutkan proses."
-    pieces = [p for p in [context, action, changes] if p and "unable to analyze" not in p.lower()]
-    if pieces:
-        return ". ".join(p.rstrip(".") for p in pieces[:2]) + "."
-    return "The process continues to the next step."
-
-
-def _fallback_beat_text(scenes: list[dict], language: str = "id") -> str:
-    if language == "id":
-        return "Komponen sedang diperiksa dan dikerjakan untuk melanjutkan proses."
-
-    pieces: list[str] = []
+def _fallback_signal_text(scenes: list[dict], planned: dict | None = None) -> str:
+    """Collect evidence only for fallback classification, never verbatim output."""
+    values: list[str] = []
     for scene in scenes:
         analysis = scene.get("analysis", {}) or {}
-        for value in (analysis.get("likely_context"), analysis.get("action"), analysis.get("changes")):
-            text = str(value or "").strip()
-            if text and "unable to analyze" not in text.lower() and text not in pieces:
-                pieces.append(text)
-    if pieces:
-        return ". ".join(item.rstrip(".") for item in pieces[:3]) + "."
-    return "Proses berlanjut ke tahap berikutnya." if language == "id" else "The process continues to the next step."
+        for key in ("action", "likely_context", "changes", "environment"):
+            value = str(analysis.get(key, "") or "").strip()
+            if value and "unable to analyze" not in value.lower():
+                values.append(value.lower())
+    if planned:
+        values.append(str(planned.get("intent", "") or "").lower())
+        values.extend(str(item or "").lower() for item in planned.get("must_explain", []) or [])
+    return " ".join(values)
+
+
+def _fallback_category(scenes: list[dict], planned: dict | None = None) -> str:
+    signal = _fallback_signal_text(scenes, planned)
+    keyword_groups = [
+        ("welding", ("weld", "welding", "arc", "torch")),
+        ("drilling", ("drill", "drilling", "hole", "boring")),
+        ("machining", ("lathe", "turning", "machine", "machining", "cutting", "shave", "grind")),
+        ("measurement", ("measure", "measurement", "inspect", "inspection", "caliper", "gauge", "check")),
+        ("assembly", ("assemble", "assembly", "install", "tighten", "wrench", "fit", "mount")),
+        ("repair", ("repair", "crack", "damaged", "damage", "fix", "restore")),
+    ]
+    for category, keywords in keyword_groups:
+        if any(keyword in signal for keyword in keywords):
+            return category
+    return "generic"
+
+
+def _fallback_beat_text(
+    scenes: list[dict],
+    language: str = "id",
+    planned: dict | None = None,
+) -> str:
+    """Return a language-safe deterministic fallback for one narration beat.
+
+    English visual evidence is used only to choose a broad action category. It is
+    never copied verbatim into an Indonesian fallback. This prevents both the old
+    repeated hard-coded sentence and accidental English leakage after retries fail.
+    """
+    planned = planned or {}
+    category = _fallback_category(scenes, planned)
+    role = str(planned.get("story_role", "process") or "process").lower()
+    scene_id = str(planned.get("scene_id", "") or "")
+    variant = sum(ord(ch) for ch in scene_id) % 2
+
+    id_by_category = {
+        "measurement": [
+            "Pekerjaan dimulai dengan memeriksa kondisi dan ukuran komponen sebelum tahap berikutnya dilakukan.",
+            "Komponen diperiksa lebih dulu agar posisi dan ukurannya sesuai sebelum proses dilanjutkan.",
+        ],
+        "welding": [
+            "Bagian yang bermasalah kemudian diperbaiki melalui proses penyambungan sebelum dirapikan kembali.",
+            "Perbaikan berlanjut dengan menyambung area yang perlu diperkuat agar dapat diproses lebih lanjut.",
+        ],
+        "drilling": [
+            "Tahap berikutnya membentuk atau merapikan lubang pada komponen dengan pengerjaan yang terkontrol.",
+            "Komponen kemudian diproses pada bagian lubangnya agar sesuai dengan kebutuhan pemasangan.",
+        ],
+        "machining": [
+            "Material dikikis sedikit demi sedikit untuk membentuk permukaan komponen sesuai kebutuhan pengerjaan.",
+            "Komponen diproses bertahap pada mesin untuk merapikan bentuk dan permukaannya.",
+        ],
+        "assembly": [
+            "Setelah pengerjaan utama, komponen dipasang dan disetel kembali untuk memastikan posisinya sesuai.",
+            "Tahap ini beralih ke pemasangan dan penyetelan agar komponen siap untuk pemeriksaan berikutnya.",
+        ],
+        "repair": [
+            "Fokus pengerjaan tetap pada memperbaiki bagian yang rusak sebelum hasilnya diperiksa kembali.",
+            "Bagian yang bermasalah ditangani bertahap agar komponen dapat kembali ke kondisi yang lebih baik.",
+        ],
+        "generic": [
+            "Pengerjaan berlanjut ke tahap berikutnya dengan memeriksa perubahan pada komponen secara bertahap.",
+            "Proses diteruskan sambil memastikan hasil pada komponen tetap sesuai sebelum langkah selanjutnya.",
+        ],
+    }
+    en_by_category = {
+        "measurement": [
+            "The work begins by checking the component's condition and dimensions before the next step.",
+            "The component is inspected first so its position and dimensions can be verified before processing continues.",
+        ],
+        "welding": [
+            "The damaged area is then joined and reinforced before the surface is refined again.",
+            "The repair continues by joining the area that needs reinforcement before further processing.",
+        ],
+        "drilling": [
+            "The next step forms or refines the hole in the component with controlled machining.",
+            "The component is then worked around the hole so it can meet the fitting requirement.",
+        ],
+        "machining": [
+            "Material is removed gradually to shape the component surface for the required fit.",
+            "The component is machined step by step to refine its shape and surface.",
+        ],
+        "assembly": [
+            "After the main work, the component is fitted and adjusted again to verify its position.",
+            "The process shifts to fitting and adjustment so the component is ready for the next check.",
+        ],
+        "repair": [
+            "The work remains focused on correcting the damaged area before the result is checked again.",
+            "The problem area is repaired in stages so the component can return to a usable condition.",
+        ],
+        "generic": [
+            "The work continues to the next step while the changes to the component are checked progressively.",
+            "The process moves forward while the result is verified before the following operation.",
+        ],
+    }
+
+    templates = id_by_category if language == "id" else en_by_category
+    text = templates.get(category, templates["generic"])[variant]
+
+    # Role-specific framing adds variation without inventing scene facts.
+    if language == "id":
+        if role in {"problem", "complication"} and category == "generic":
+            return "Pada tahap ini masih ada bagian yang perlu ditangani sebelum proses dapat dilanjutkan dengan aman."
+        if role in {"resolution", "result", "conclusion"} and category == "generic":
+            return "Setelah rangkaian pengerjaan, hasilnya diperiksa kembali untuk memastikan komponen siap digunakan."
+    else:
+        if role in {"problem", "complication"} and category == "generic":
+            return "At this stage, an area still needs attention before the process can continue safely."
+        if role in {"resolution", "result", "conclusion"} and category == "generic":
+            return "After the sequence of work, the result is checked again to confirm the component is ready to use."
+    return text
+
+
+def _fallback_text(scene: dict, language: str = "id") -> str:
+    return _fallback_beat_text([scene], language=language)
 
 
 def _fallback_narration(scenes: list[dict], narration_plan: dict, language: str) -> list[dict]:
@@ -160,7 +299,7 @@ def _fallback_narration(scenes: list[dict], narration_plan: dict, language: str)
         raw.append(
             {
                 "scene_id": planned.get("scene_id"),
-                "text": _fallback_beat_text(covered, language),
+                "text": _fallback_beat_text(covered, language, planned),
                 "importance": planned.get("story_importance", 0.5),
             }
         )
@@ -193,7 +332,16 @@ def _maybe_rewrite(
             story_plan=story_plan,
             language=language,
         )
-        revised_raw = _extract_segment_list(_call_json(analyzer, model, prompt, temperature=0.25))
+        revised_raw = _extract_segment_list(
+            _call_json(
+                analyzer,
+                model,
+                prompt,
+                temperature=0.25,
+                language=language,
+                task_name="narration-rewrite",
+            )
+        )
         revised = _validate_narration(revised_raw, scenes, narration_plan, language)
         revised_qa = evaluate_narration(revised, narration_plan, language=language)
 
@@ -237,7 +385,13 @@ def _generate(
     analyzer, model = _client(cfg)
     result: dict[str, list[dict]] = {}
 
-    for language in languages:
+    if isinstance(languages, str):
+        languages = [languages]
+
+    for raw_language in languages:
+        language = str(raw_language or "").strip().lower()
+        if language not in {"id", "en"}:
+            raise ValueError(f"Unsupported narration language: {raw_language!r}")
         print(f"\n   ✍️ Generating {language.upper()} {mode.upper()} narration (story-aware)...")
         prompt = build_v2_narration_prompt(
             scenes=scenes,
@@ -251,7 +405,16 @@ def _generate(
             mode=mode,
         )
         try:
-            raw = _extract_segment_list(_call_json(analyzer, model, prompt, temperature=0.45))
+            raw = _extract_segment_list(
+                _call_json(
+                    analyzer,
+                    model,
+                    prompt,
+                    temperature=0.45,
+                    language=language,
+                    task_name=f"{mode}-narration",
+                )
+            )
             narration = _validate_narration(raw, scenes, narration_plan, language)
             narration, qa = _maybe_rewrite(
                 narration,
@@ -263,6 +426,11 @@ def _generate(
                 cfg=cfg,
                 scenes=scenes,
             )
+            final_language_error = payload_language_mismatch_reason(narration, language)
+            if final_language_error:
+                raise ValueError(
+                    f"Final narration language gate rejected {language}: {final_language_error}"
+                )
             result[language] = narration
             print(
                 f"   ✅ {language.upper()}: {len(narration)} beats, "
