@@ -128,10 +128,7 @@ def _fallback_text(scene: dict, language: str = "id") -> str:
     context = str(analysis.get("likely_context", "") or "").strip()
     changes = str(analysis.get("changes", "") or "").strip()
     if language == "id":
-        pieces = [p for p in [context, action, changes] if p and "unable to analyze" not in p.lower()]
-        if pieces:
-            return ". ".join(p.rstrip(".") for p in pieces[:2]) + "."
-        return "Proses berlanjut ke tahap berikutnya."
+        return "Komponen sedang diperiksa dan dikerjakan untuk melanjutkan proses."
     pieces = [p for p in [context, action, changes] if p and "unable to analyze" not in p.lower()]
     if pieces:
         return ". ".join(p.rstrip(".") for p in pieces[:2]) + "."
@@ -139,6 +136,9 @@ def _fallback_text(scene: dict, language: str = "id") -> str:
 
 
 def _fallback_beat_text(scenes: list[dict], language: str = "id") -> str:
+    if language == "id":
+        return "Komponen sedang diperiksa dan dikerjakan untuk melanjutkan proses."
+
     pieces: list[str] = []
     for scene in scenes:
         analysis = scene.get("analysis", {}) or {}

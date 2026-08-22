@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from dubbingstory.story.scene_cards import build_scene_cards
 from dubbingstory.story.narration_planner import build_narration_plan
 from dubbingstory.story.narration_qa import evaluate_narration
+from dubbingstory.story.script_writer import _fallback_beat_text
 from dubbingstory.story.scene_selector import select_scenes
 from dubbingstory.tts.voice_manager import _get_audio_duration, _render_timeline_canvas
 from dubbingstory.render.audio_mix import mix_narration_with_original
@@ -106,6 +107,20 @@ class StorytellingV2Tests(unittest.TestCase):
         self.assertTrue(qa["needs_rewrite"])
         self.assertTrue(any(i.startswith("too_many_exclamations") for i in qa["issues"]))
         self.assertTrue(any(i.startswith("narration_too_sparse") for i in qa["issues"]))
+
+    def test_indonesian_fallback_does_not_copy_english_analysis(self):
+        fallback = _fallback_beat_text([
+            {
+                "analysis": {
+                    "likely_context": "Inspecting a mechanical part",
+                    "action": "The person is holding the component",
+                    "changes": "The component is placed on the ground",
+                }
+            }
+        ], "id")
+        self.assertNotIn("Inspecting", fallback)
+        self.assertNotIn("component", fallback)
+        self.assertIn("Komponen", fallback)
 
     @unittest.skipUnless(subprocess.call(["sh", "-c", "command -v ffmpeg >/dev/null && command -v ffprobe >/dev/null"]) == 0, "ffmpeg unavailable")
     def test_timeline_canvas_keeps_video_length_without_per_scene_padding(self):

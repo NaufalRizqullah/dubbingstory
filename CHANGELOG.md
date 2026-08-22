@@ -11,6 +11,12 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.5.1] - 2026-08-22
+
+### Fixed
+- **Indonesian Narration Fallback**: Prevented the `id` fallback script from copying English visual-analysis text when narration generation fails, such as after a Gemini `408 Request Timeout`.
+- **Fallback Regression Coverage**: Added a test ensuring Indonesian fallback narration does not contain copied English analysis text.
+
 ## [0.5.0] - 2026-08-21
 
 ### Added
