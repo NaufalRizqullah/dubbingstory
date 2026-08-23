@@ -99,6 +99,14 @@ def detect_scenes(
         if len(scenes) != before:
             print(f"   📊 Scenes after long-shot windowing (max {max_duration:.1f}s): {len(scenes)}")
 
+    # V2.1 identity contract. Keep the public scene_id stable while preserving
+    # which detected shot/window it came from for downstream continuity/matching.
+    for scene in scenes:
+        scene.setdefault("parent_scene_id", scene.get("source_scene_id") or scene.get("scene_id"))
+        scene.setdefault("window_index", max(0, int(scene.get("source_scene_part", 1) or 1) - 1))
+        scene.setdefault("window_count", max(1, int(scene.get("source_scene_parts", 1) or 1)))
+        scene.setdefault("source_scene_id", scene.get("parent_scene_id"))
+
     return scenes
 
 
@@ -156,6 +164,9 @@ def _split_long_scenes(scenes: list[dict], max_duration: float) -> list[dict]:
         if duration <= max_duration:
             item = dict(source)
             item.setdefault("source_scene_id", source.get("scene_id"))
+            item.setdefault("parent_scene_id", source.get("scene_id"))
+            item.setdefault("window_index", 0)
+            item.setdefault("window_count", 1)
             result.append(item)
             continue
 
@@ -181,6 +192,9 @@ def _split_long_scenes(scenes: list[dict], max_duration: float) -> list[dict]:
                 "source_scene_id": source.get("scene_id"),
                 "source_scene_part": part + 1,
                 "source_scene_parts": parts,
+                "parent_scene_id": source.get("scene_id"),
+                "window_index": part,
+                "window_count": parts,
             })
             result.append(item)
 

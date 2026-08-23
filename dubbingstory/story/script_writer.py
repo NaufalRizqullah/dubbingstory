@@ -131,6 +131,7 @@ def _validate_narration(
         scene = scene_map.get(scene_id, {})
         raw = supplied.get(scene_id, {})
         text = str(raw.get("text", "") or "").strip()
+        raw_claims = [str(v).strip() for v in raw.get("claims", []) or [] if str(v).strip()][:8]
         covered_ids = [str(sid) for sid in planned.get("covers_scene_ids", [scene_id]) if sid]
         if not text:
             covered_scenes = [scene_map.get(sid, {}) for sid in covered_ids]
@@ -144,6 +145,9 @@ def _validate_narration(
                 "scene_id": scene_id,
                 "covers_scene_ids": covered_ids,
                 "text": text,
+                "claims": raw_claims or [
+                    str(v).strip() for v in planned.get("must_explain", []) or [] if str(v).strip()
+                ][:8],
                 "word_count": word_count,
                 "estimated_duration": round(estimated, 3),
                 "start_time": float(planned.get("timeline_start", scene.get("start_time", 0)) or 0),
@@ -300,6 +304,7 @@ def _fallback_narration(scenes: list[dict], narration_plan: dict, language: str)
             {
                 "scene_id": planned.get("scene_id"),
                 "text": _fallback_beat_text(covered, language, planned),
+                "claims": [str(v).strip() for v in planned.get("must_explain", []) or [] if str(v).strip()][:8],
                 "importance": planned.get("story_importance", 0.5),
             }
         )
@@ -324,7 +329,12 @@ def _maybe_rewrite(
     try:
         prompt = build_rewrite_prompt(
             current_segments=[
-                {"scene_id": item["scene_id"], "text": item["text"], "importance": item.get("importance", 0.5)}
+                {
+                    "scene_id": item["scene_id"],
+                    "text": item["text"],
+                    "claims": item.get("claims", []),
+                    "importance": item.get("importance", 0.5),
+                }
                 for item in narration
             ],
             qa=qa,

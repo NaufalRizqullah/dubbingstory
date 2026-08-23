@@ -143,6 +143,7 @@ def extract_keyframes_from_source(
     max_per_scene: int = 7,
     max_edge: int = 768,
     jpeg_quality: int = 88,
+    shared_boundary_anchor: bool = True,
 ) -> dict[str, list[str]]:
     """Extract keyframes directly from the source video using timestamps."""
     import numpy as np
@@ -156,7 +157,23 @@ def extract_keyframes_from_source(
         return {}
         
     all_keyframes = {}
-    
+
+    # V2.1: adjacent analysis windows from the SAME detected parent shot share
+    # one exact timestamp at their internal boundary. Hard-cut neighbors never
+    # share frames, avoiding evidence contamination across shots.
+    start_anchors: dict[str, float] = {}
+    end_anchors: dict[str, float] = {}
+    if shared_boundary_anchor:
+        ordered = sorted(scenes, key=lambda item: float(item.get("start_time", 0) or 0))
+        for left, right in zip(ordered, ordered[1:]):
+            left_parent = str(left.get("parent_scene_id", left.get("source_scene_id", "")) or "")
+            right_parent = str(right.get("parent_scene_id", right.get("source_scene_id", "")) or "")
+            boundary = float(left.get("end_time", 0) or 0)
+            contiguous = abs(boundary - float(right.get("start_time", 0) or 0)) <= 0.05
+            if left_parent and left_parent == right_parent and contiguous:
+                end_anchors[str(left.get("scene_id"))] = boundary
+                start_anchors[str(right.get("scene_id"))] = boundary
+
     for scene in scenes:
         sid = scene["scene_id"]
         start = scene["start_time"]
@@ -182,7 +199,13 @@ def extract_keyframes_from_source(
                 timestamps = timestamps[idx]
         else:
             timestamps = np.linspace(a, b, count)
-        
+
+        if len(timestamps) >= 2 and shared_boundary_anchor:
+            if sid in start_anchors:
+                timestamps[0] = start_anchors[sid]
+            if sid in end_anchors:
+                timestamps[-1] = end_anchors[sid]
+
         paths = []
         for i, ts in enumerate(timestamps):
             cap.set(cv2.CAP_PROP_POS_MSEC, float(ts) * 1000.0)
@@ -220,6 +243,7 @@ def extract_all_scenes(
     source_video: str = "",
     max_edge: int = 768,
     jpeg_quality: int = 88,
+    shared_boundary_anchor: bool = True,
 ) -> dict[str, list[str]]:
     """
     Extract keyframes for all scenes.
@@ -254,6 +278,7 @@ def extract_all_scenes(
             max_per_scene=max_per_scene,
             max_edge=max_edge,
             jpeg_quality=jpeg_quality,
+            shared_boundary_anchor=shared_boundary_anchor,
         )
 
     os.makedirs(output_dir, exist_ok=True)

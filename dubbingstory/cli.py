@@ -243,6 +243,7 @@ def cmd_segment(args, cfg):
         source_video=video_path,
         max_edge=getattr(cfg, "keyframes_max_edge", 768),
         jpeg_quality=getattr(cfg, "keyframes_jpeg_quality", 88),
+        shared_boundary_anchor=bool(getattr(cfg, "keyframes_shared_boundary_anchor", True)),
     )
 
     # Save segment manifest
@@ -541,11 +542,23 @@ def cmd_run(args, cfg):
 # ==============================================================================
 
 def cmd_summary(args, cfg):
-    """Generate a story-aware highlight recap with timeline-scheduled TTS."""
+    """Generate a V2.1 evidence-aware recap with legacy-safe fallback."""
     from dubbingstory.story import script_writer, subtitle_gen, scene_selector
+    from dubbingstory.story.beat_planner import plan_story_beats
     from dubbingstory.story.narration_planner import build_narration_plan
     from dubbingstory.story.narration_qa import evaluate_narration
-    from dubbingstory.story.story_planner import load_story_artifacts
+    from dubbingstory.story.semantic_matcher import (
+        make_similarity_engine,
+        match_beats,
+        selected_scenes_from_report,
+        suggest_promotion_candidates,
+    )
+    from dubbingstory.story.semantic_verifier import verify_narration, repair_unsupported_beats
+    from dubbingstory.story.story_planner import (
+        load_evidence_artifacts,
+        load_story_artifacts,
+        rebuild_evidence_artifacts,
+    )
     from dubbingstory.render import video_cutter, video_render
     from dubbingstory.tts import voice_manager
     import copy
@@ -555,7 +568,7 @@ def cmd_summary(args, cfg):
     project_dir = _setup_project_dir(cfg, project_name)
 
     print("=" * 70)
-    print(f"📋 DubbingStory v{__version__} — Summary Mode (Story Recap)")
+    print(f"📋 DubbingStory v{__version__} — Summary Mode (V2.1 Evidence-Aware Recap)")
     print("=" * 70)
 
     storyboard_path = os.path.join(project_dir, "storyboard.json")
@@ -566,13 +579,21 @@ def cmd_summary(args, cfg):
         storyboard = json.load(f)
 
     story_plan, story_memory = load_story_artifacts(project_dir, storyboard)
+    _, _, signatures = load_evidence_artifacts(project_dir, storyboard)
 
-    # 1) Select story + bridge beats under a strict duration budget.
-    target_duration = getattr(cfg, "summary_target_duration", None)
-    max_scenes = getattr(cfg, "summary_max_scenes", None)
+    # Resolve the same automatic budgets as the legacy selector so shadow/active
+    # comparisons are apples-to-apples.
+    total_duration = float(storyboard.get("total_duration", 0) or 0)
+    requested_target = getattr(cfg, "summary_target_duration", None)
+    target_duration = int(requested_target) if requested_target is not None else int(max(60, min(total_duration * 0.12, 120)))
+    requested_max = getattr(cfg, "summary_max_scenes", None)
+    max_scenes = int(requested_max) if requested_max is not None else max(3, min(int(target_duration // 10), 18))
     min_score = getattr(cfg, "summary_min_scene_score", 0.3)
     duration_tolerance = float(getattr(cfg, "summary_duration_tolerance", 1.05) or 1.05)
-    selected = scene_selector.select_scenes(
+
+    # Legacy selection is intentionally preserved. It is both the A/B reference
+    # and the automatic safety path if semantic evidence is not strong enough.
+    legacy_selected = scene_selector.select_scenes(
         storyboard=storyboard,
         target_duration=target_duration,
         max_scenes=max_scenes,
@@ -580,9 +601,181 @@ def cmd_summary(args, cfg):
         story_plan=story_plan,
         duration_tolerance=duration_tolerance,
     )
-    if not selected:
+    if not legacy_selected:
         print("❌ Tidak ada scene yang terpilih. Pipeline dihentikan.")
         sys.exit(1)
+
+    semantic_enabled = bool(getattr(cfg, "semantic_match_enabled", True))
+    semantic_shadow = bool(getattr(cfg, "semantic_match_shadow_mode", False))
+    mode_override = getattr(args, "semantic_match", None) if hasattr(args, "semantic_match") else None
+    if mode_override == "off":
+        semantic_enabled = False
+    elif mode_override == "shadow":
+        semantic_enabled = True
+        semantic_shadow = True
+    elif mode_override == "active":
+        semantic_enabled = True
+        semantic_shadow = False
+
+    beats = []
+    match_report = {
+        "version": "v2.1.0",
+        "mode": "disabled",
+        "legacy_selected_scene_ids": [s.get("scene_id") for s in legacy_selected],
+        "selected_scene_ids": [s.get("scene_id") for s in legacy_selected],
+        "metrics": {"legacy_fallback_rate": 1.0},
+    }
+    selected = legacy_selected
+    semantic_active = False
+    engine = None
+
+    if semantic_enabled:
+        print(f"   🧩 V2.1 semantic matcher: {'SHADOW' if semantic_shadow else 'ACTIVE'}")
+        engine = make_similarity_engine(cfg, project_dir=project_dir)
+        beats = plan_story_beats(
+            story_plan=story_plan,
+            story_memory=story_memory,
+            signatures=signatures,
+            target_duration=target_duration,
+            cfg=cfg,
+        )
+        beats_path = os.path.join(project_dir, "beats.json")
+        with open(beats_path, "w", encoding="utf-8") as f:
+            json.dump(beats, f, ensure_ascii=False, indent=2)
+        print(f"   🧭 Story-first beats: {len(beats)} → {beats_path}")
+
+        if beats:
+            match_report = match_beats(
+                beats=beats,
+                signatures=signatures,
+                storyboard=storyboard,
+                story_plan=story_plan,
+                cfg=cfg,
+                target_duration=target_duration,
+                max_scenes=max_scenes,
+                project_dir=project_dir,
+                engine=engine,
+            )
+
+            # Weak beats may promote a small number of screening-only windows to
+            # deep Qwen analysis. The promotion reuses the existing vision stack,
+            # including structured schema and length/runaway recovery.
+            promoted_ids = []
+            promotion_proposals = {}
+            if bool(getattr(cfg, "semantic_match_on_demand_promotion", True)) and match_report.get("weak_beat_ids"):
+                promotion_proposals = suggest_promotion_candidates(
+                    beats=beats,
+                    match_report=match_report,
+                    storyboard=storyboard,
+                    cfg=cfg,
+                    project_dir=project_dir,
+                    engine=engine,
+                )
+                promotion_limit = max(0, int(getattr(cfg, "semantic_match_max_promotions", 6) or 6))
+                requested = []
+                for beat in beats:
+                    for sid in promotion_proposals.get(str(beat.get("beat_id")), []) or []:
+                        if sid not in requested:
+                            requested.append(sid)
+                        if len(requested) >= promotion_limit:
+                            break
+                    if len(requested) >= promotion_limit:
+                        break
+                if requested:
+                    from dubbingstory.vision.scene_understanding import promote_scenes_on_demand
+
+                    print(f"   🔎 Weak match recovery: promoting {len(requested)} scene window(s) to deep vision")
+                    storyboard, promoted_ids = promote_scenes_on_demand(
+                        project_dir=project_dir,
+                        storyboard=storyboard,
+                        scene_ids=requested,
+                        cfg=cfg,
+                        domain_hint=getattr(cfg, "vision_domain_hint", ""),
+                    )
+                    if promoted_ids:
+                        with open(storyboard_path, "w", encoding="utf-8") as f:
+                            json.dump(storyboard, f, ensure_ascii=False, indent=2)
+                        ingest_path = os.path.join(project_dir, "ingest_manifest.json")
+                        subtitle_context = None
+                        if os.path.exists(ingest_path):
+                            try:
+                                with open(ingest_path, "r", encoding="utf-8") as f:
+                                    subtitle_context = (json.load(f) or {}).get("subtitle_data")
+                            except Exception:
+                                subtitle_context = None
+                        _, _, signatures = rebuild_evidence_artifacts(
+                            storyboard,
+                            subtitle_context=subtitle_context,
+                            project_dir=project_dir,
+                        )
+                        match_report = match_beats(
+                            beats=beats,
+                            signatures=signatures,
+                            storyboard=storyboard,
+                            story_plan=story_plan,
+                            cfg=cfg,
+                            target_duration=target_duration,
+                            max_scenes=max_scenes,
+                            project_dir=project_dir,
+                            engine=engine,
+                        )
+            match_report["promotion_proposals"] = promotion_proposals
+            match_report["promoted_scene_ids"] = promoted_ids
+            match_report.setdefault("metrics", {})["on_demand_deep_promotions"] = len(promoted_ids)
+            match_report["legacy_selected_scene_ids"] = [s.get("scene_id") for s in legacy_selected]
+
+            proposed = selected_scenes_from_report(match_report, storyboard)
+            # Attach beat/match metadata to selected scene copies for the manifest.
+            scene_meta = {}
+            for beat_report in match_report.get("beats", []) or []:
+                for sid in beat_report.get("selected", []) or []:
+                    meta = scene_meta.setdefault(str(sid), {"beats": [], "score": 0.0})
+                    meta["beats"].append(str(beat_report.get("beat_id")))
+                    meta["score"] = max(meta["score"], float(beat_report.get("prewrite_score", 0) or 0))
+            enriched = []
+            for scene in proposed:
+                item = dict(scene)
+                meta = scene_meta.get(str(item.get("scene_id")), {})
+                item["matched_beat_ids"] = meta.get("beats", [])
+                item["semantic_match_score"] = round(float(meta.get("score", 0) or 0), 4)
+                enriched.append(item)
+            proposed = enriched
+
+            coverage = float(match_report.get("beat_coverage", 0) or 0)
+            proposed_duration = sum(float(s.get("duration", 0) or 0) for s in proposed)
+            min_coverage = float(getattr(cfg, "semantic_match_min_beat_coverage", 0.75) or 0.75)
+            min_duration_ratio = float(getattr(cfg, "semantic_match_min_duration_ratio", 0.60) or 0.60)
+            fallback_reason = None
+            if not proposed:
+                fallback_reason = "no_semantic_selection"
+            elif coverage < min_coverage:
+                fallback_reason = f"beat_coverage_{coverage:.2f}_below_{min_coverage:.2f}"
+            elif proposed_duration < target_duration * min_duration_ratio:
+                fallback_reason = f"duration_{proposed_duration:.1f}_below_min_ratio_{min_duration_ratio:.2f}"
+
+            if semantic_shadow:
+                match_report["activation"] = "shadow"
+                selected = legacy_selected
+            elif fallback_reason:
+                print(f"   ⚠️ Semantic selection fallback → legacy selector ({fallback_reason})")
+                match_report["activation"] = "legacy_fallback"
+                match_report["fallback_reason"] = fallback_reason
+                selected = legacy_selected
+            else:
+                match_report["activation"] = "active"
+                selected = proposed
+                semantic_active = True
+                print(
+                    f"   ✅ Semantic selection active: {len(selected)} scenes / "
+                    f"{proposed_duration:.1f}s, beat coverage={coverage:.0%}"
+                )
+
+            match_report.setdefault("metrics", {})["legacy_fallback_rate"] = 0.0 if semantic_active else 1.0
+
+    match_path = os.path.join(project_dir, "match_report.json")
+    with open(match_path, "w", encoding="utf-8") as f:
+        json.dump(match_report, f, ensure_ascii=False, indent=2)
+    print(f"   🧪 Match report: {match_path}")
 
     manifest_path = scene_selector.save_summary_manifest(
         selected_scenes=selected,
@@ -592,8 +785,7 @@ def cmd_summary(args, cfg):
     )
     print(f"   📄 Summary manifest: {manifest_path}")
 
-    # 2) Cut the selected footage first.  Narration uses the real extracted
-    # durations, not idealized source timestamps, to prevent cumulative drift.
+    # Cut only after beat->scene matching has fixed the footage assignment.
     source_video = os.path.join(project_dir, "source.mp4")
     if not os.path.exists(source_video):
         print(f"❌ Source video not found: {source_video}")
@@ -614,16 +806,15 @@ def cmd_summary(args, cfg):
         for scene in selected:
             scene["duration"] = float(actual_durations[scene["scene_id"]])
         print(f"   🧭 Using actual durations for {len(selected)} summary clips")
-        manifest_path = scene_selector.save_summary_manifest(
+        scene_selector.save_summary_manifest(
             selected_scenes=selected,
             storyboard=storyboard,
             project_dir=project_dir,
             target_duration=target_duration,
         )
 
-    # 3) Plan narration after footage selection.  The plan creates a target word
-    # budget from time, so the writer fills the recap rather than leaving 60-70%
-    # dead air and TTS does not have to guess pacing.
+    # Narration planner is now a scheduler. With active semantic matching it
+    # consumes the fixed beat->scene assignments instead of inventing new beats.
     narration_plan = build_narration_plan(
         storyboard,
         selected,
@@ -631,6 +822,8 @@ def cmd_summary(args, cfg):
         story_memory=story_memory,
         cfg=cfg,
         mode="summary",
+        story_beats=beats if semantic_active else None,
+        match_report=match_report if semantic_active else None,
     )
     plan_path = os.path.join(project_dir, "narration_plan.json")
     with open(plan_path, "w", encoding="utf-8") as f:
@@ -640,10 +833,8 @@ def cmd_summary(args, cfg):
         f"{narration_plan.get('total_duration', 0):.1f}s"
     )
 
-    languages = args.lang if hasattr(args, "lang") and args.lang else \
-        getattr(cfg, "narration_languages", ["id", "en"])
-    style = args.style if hasattr(args, "style") and args.style else \
-        getattr(cfg, "narration_style", "viral_fb")
+    languages = args.lang if hasattr(args, "lang") and args.lang else getattr(cfg, "narration_languages", ["id", "en"])
+    style = args.style if hasattr(args, "style") and args.style else getattr(cfg, "narration_style", "viral_fb")
     print(f"   Languages: {languages}")
 
     narration = script_writer.generate_summary_narration(
@@ -660,7 +851,46 @@ def cmd_summary(args, cfg):
     scripts_dir = os.path.join(project_dir, "scripts")
     os.makedirs(scripts_dir, exist_ok=True)
     qa_by_language = {}
-    for lang, segments in narration.items():
+    postwrite_by_language = {}
+    repair_by_language = {}
+    for lang, segments in list(narration.items()):
+        verification = None
+        repair_log = []
+        if semantic_active:
+            verification = verify_narration(
+                narration=segments,
+                narration_plan=narration_plan,
+                signatures=signatures,
+                match_report=match_report,
+                cfg=cfg,
+                language=lang,
+                project_dir=project_dir,
+                engine=engine,
+            )
+            repaired, repair_log = repair_unsupported_beats(
+                narration=segments,
+                verification=verification,
+                narration_plan=narration_plan,
+                signatures=signatures,
+                cfg=cfg,
+                language=lang,
+            )
+            if repair_log:
+                segments = repaired
+                narration[lang] = segments
+                verification = verify_narration(
+                    narration=segments,
+                    narration_plan=narration_plan,
+                    signatures=signatures,
+                    match_report=match_report,
+                    cfg=cfg,
+                    language=lang,
+                    project_dir=project_dir,
+                    engine=engine,
+                )
+            postwrite_by_language[lang] = verification
+            repair_by_language[lang] = repair_log
+
         txt_path = os.path.join(scripts_dir, f"summary_script_{lang}.txt")
         with open(txt_path, "w", encoding="utf-8") as f:
             for seg in segments:
@@ -680,9 +910,23 @@ def cmd_summary(args, cfg):
                 ensure_ascii=False,
                 indent=2,
             )
-        qa_by_language[lang] = evaluate_narration(segments, narration_plan, language=lang)
+        qa_by_language[lang] = evaluate_narration(
+            segments,
+            narration_plan,
+            language=lang,
+            semantic_report=verification,
+        )
         print(f"   📄 {txt_path}")
         print(f"   📄 {json_path}")
+
+    if semantic_enabled:
+        match_report["postwrite"] = postwrite_by_language
+        match_report["repairs"] = repair_by_language
+        match_report.setdefault("metrics", {})["repair_rate"] = round(
+            sum(len(v) for v in repair_by_language.values()) / max(1, len(beats)), 3
+        )
+        with open(match_path, "w", encoding="utf-8") as f:
+            json.dump(match_report, f, ensure_ascii=False, indent=2)
 
     qa_path = os.path.join(project_dir, "narration_qa.json")
     with open(qa_path, "w", encoding="utf-8") as f:
@@ -848,6 +1092,10 @@ def main():
     p_run.add_argument(
         "--summary-max-scenes", type=int, default=None,
         help="Maximum number of scenes to include in summary (default: auto)"
+    )
+    p_run.add_argument(
+        "--semantic-match", type=str, default=None, choices=["active", "shadow", "off"],
+        help="V2.1 summary matcher mode: active, shadow, or off (default from config)"
     )
     p_run.add_argument(
         "--vision-provider", type=str, default=None,

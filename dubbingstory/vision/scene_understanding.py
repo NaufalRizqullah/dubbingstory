@@ -253,6 +253,9 @@ def run_analysis(
                 analyzer_fingerprint = {}
         payload = {
             "scene_id": scene_id,
+            "parent_scene_id": scene.get("parent_scene_id", scene.get("source_scene_id", scene_id)),
+            "window_index": scene.get("window_index", max(0, int(scene.get("source_scene_part", 1) or 1) - 1)),
+            "window_count": scene.get("window_count", max(1, int(scene.get("source_scene_parts", 1) or 1))),
             "analysis_kind": "cheap" if is_cheap else "deep",
             "vision_schema_version": VISION_SCHEMA_VERSION,
             "model": getattr(analyzer, "model", "gemini"),
@@ -274,7 +277,18 @@ def run_analysis(
         if os.path.exists(cache_path):
             print(f"   ⏩ {scene_id}: cached, skip.")
             with open(cache_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                cached = json.load(f)
+            # Identity is deterministic pipeline metadata, so old cache entries
+            # are upgraded in memory instead of forcing an expensive reanalysis.
+            cached["scene_id"] = scene_id
+            cached["parent_scene_id"] = scene.get("parent_scene_id", scene.get("source_scene_id", scene_id))
+            cached["window_index"] = scene.get("window_index", max(0, int(scene.get("source_scene_part", 1) or 1) - 1))
+            cached["window_count"] = scene.get("window_count", max(1, int(scene.get("source_scene_parts", 1) or 1)))
+            cached["start_time"] = scene["start_time"]
+            cached["end_time"] = scene["end_time"]
+            cached["duration"] = scene["duration"]
+            cached.setdefault("analysis_kind", "cheap" if is_cheap else "deep")
+            return cached
 
 
 
@@ -314,10 +328,14 @@ def run_analysis(
             # Scene identity/timing are deterministic pipeline facts. Never trust
             # the model to reproduce them, especially under concurrent requests.
             analysis["scene_id"] = scene_id
+            analysis["parent_scene_id"] = scene.get("parent_scene_id", scene.get("source_scene_id", scene_id))
+            analysis["window_index"] = scene.get("window_index", max(0, int(scene.get("source_scene_part", 1) or 1) - 1))
+            analysis["window_count"] = scene.get("window_count", max(1, int(scene.get("source_scene_parts", 1) or 1)))
             analysis["time_range"] = time_range
             analysis["start_time"] = scene["start_time"]
             analysis["end_time"] = scene["end_time"]
             analysis["duration"] = scene["duration"]
+            analysis["analysis_kind"] = "cheap" if is_cheap else "deep"
             if not is_cheap:
                 analysis["transcript_text"] = scene_subtitle
                 if scene_words:
@@ -343,6 +361,9 @@ def run_analysis(
                 return {"scene_id": scene_id, "salience": 0.0}
             return {
                 "scene_id": scene_id,
+                "parent_scene_id": scene.get("parent_scene_id", scene.get("source_scene_id", scene_id)),
+                "window_index": scene.get("window_index", max(0, int(scene.get("source_scene_part", 1) or 1) - 1)),
+                "window_count": scene.get("window_count", max(1, int(scene.get("source_scene_parts", 1) or 1))),
                 "time_range": time_range,
                 "start_time": scene["start_time"],
                 "end_time": scene["end_time"],
@@ -418,21 +439,32 @@ def run_analysis(
             deep_analyses = list(pool.map(lambda s: analyze_scene(s, is_cheap=False), selected_scenes))
             
         deep_map = {a["scene_id"]: a for a in deep_analyses}
+        cheap_map = {a.get("scene_id"): a for a in cheap_analyses if a.get("scene_id")}
         for scene in scenes:
             sid = scene["scene_id"]
+            screening = cheap_map.get(sid, {}) or {}
             if sid in selected_ids:
                 analysis = deep_map.get(sid, {})
                 analysis["selected"] = True
+                analysis["screen_score"] = round(float(scene.get("_screen_score", 0) or 0), 4)
+                analysis["screening"] = screening
                 scene_analyses.append(analysis)
             else:
                 scene_analyses.append({
                     "scene_id": sid,
+                    "parent_scene_id": scene.get("parent_scene_id", scene.get("source_scene_id", sid)),
+                    "window_index": scene.get("window_index", max(0, int(scene.get("source_scene_part", 1) or 1) - 1)),
+                    "window_count": scene.get("window_count", max(1, int(scene.get("source_scene_parts", 1) or 1))),
                     "start_time": scene["start_time"],
                     "end_time": scene["end_time"],
                     "duration": scene["duration"],
                     "action": "Skipped in summary mode",
+                    "transcript_text": screening.get("transcript_text", ""),
                     "confidence": 0.0,
                     "selected": False,
+                    "analysis_kind": "screening_only",
+                    "screen_score": round(float(scene.get("_screen_score", 0) or 0), 4),
+                    "screening": screening,
                 })
     else:
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -588,6 +620,9 @@ def _build_storyboard(
 
         scene_entry = {
             "scene_id": scene_id,
+            "parent_scene_id": analysis.get("parent_scene_id", scene_id),
+            "window_index": int(analysis.get("window_index", 0) or 0),
+            "window_count": max(1, int(analysis.get("window_count", 1) or 1)),
             "start_time": analysis.get("start_time", 0),
             "end_time": analysis.get("end_time", 0),
             "duration": analysis.get("duration", 0),
@@ -607,6 +642,11 @@ def _build_storyboard(
                 "transcript_text": analysis.get("transcript_text", ""),
                 "text_visible": analysis.get("text_visible", []),
                 "confidence": analysis.get("confidence", 0),
+                "selected": bool(analysis.get("selected", True)),
+                "analysis_kind": analysis.get("analysis_kind", "deep" if analysis.get("selected", True) else "screening_only"),
+                "screen_score": analysis.get("screen_score", 0),
+                "screening": analysis.get("screening", {}) if isinstance(analysis.get("screening"), dict) else {},
+                "promoted_on_demand": bool(analysis.get("promoted_on_demand", False)),
                 # Add word-level data if available (from ASR)
                 "words": analysis.get("words", []),
             },
@@ -635,3 +675,85 @@ def _build_storyboard(
         "total_duration": round(total_duration, 2),
         "scenes": scenes,
     }
+
+def promote_scenes_on_demand(
+    *,
+    project_dir: str,
+    storyboard: dict,
+    scene_ids: list[str],
+    cfg,
+    domain_hint: str = "",
+) -> tuple[dict, list[str]]:
+    """Deep-analyze screening-only scenes and merge them back into storyboard.
+
+    This intentionally reuses ``run_analysis`` on a tiny subset instead of
+    introducing a second vision request implementation.  Therefore all current
+    Qwen schema/truncation/runaway safeguards remain active during promotion.
+    """
+    import copy
+
+    requested = [str(sid) for sid in scene_ids if str(sid)]
+    if not requested:
+        return storyboard, []
+
+    segment_path = os.path.join(project_dir, "segment_manifest.json")
+    if not os.path.exists(segment_path):
+        return storyboard, []
+    with open(segment_path, "r", encoding="utf-8") as handle:
+        segment_data = json.load(handle)
+
+    source_scenes = {str(s.get("scene_id")): s for s in segment_data.get("scenes", []) or []}
+    chosen = [source_scenes[sid] for sid in requested if sid in source_scenes]
+    if not chosen:
+        return storyboard, []
+
+    ingest_path = os.path.join(project_dir, "ingest_manifest.json")
+    subtitle_context = None
+    if os.path.exists(ingest_path):
+        try:
+            with open(ingest_path, "r", encoding="utf-8") as handle:
+                subtitle_context = (json.load(handle) or {}).get("subtitle_data")
+        except Exception:
+            subtitle_context = None
+
+    subset = {
+        "video_path": segment_data.get("video_path", ""),
+        "total_scenes": len(chosen),
+        "scenes": chosen,
+        "keyframes": {sid: (segment_data.get("keyframes", {}) or {}).get(sid, []) for sid in requested},
+        "status": "promotion",
+    }
+    promote_cfg = copy.copy(cfg)
+    promote_cfg.mode = "full"
+    promoted_board = run_analysis(
+        segment_data=subset,
+        project_dir=project_dir,
+        cfg=promote_cfg,
+        subtitle_context=subtitle_context,
+        domain_hint=domain_hint or getattr(cfg, "vision_domain_hint", ""),
+    )
+    promoted_map = {str(s.get("scene_id")): s for s in promoted_board.get("scenes", []) or []}
+
+    applied: list[str] = []
+    for scene in storyboard.get("scenes", []) or []:
+        sid = str(scene.get("scene_id", ""))
+        promoted = promoted_map.get(sid)
+        if not promoted:
+            continue
+        new_analysis = dict(promoted.get("analysis", {}) or {})
+        old_analysis = scene.get("analysis", {}) or {}
+        new_analysis["selected"] = True
+        new_analysis["analysis_kind"] = "deep_promoted"
+        new_analysis["promoted_on_demand"] = True
+        new_analysis["screening"] = old_analysis.get("screening", {})
+        new_analysis["screen_score"] = old_analysis.get("screen_score", 0)
+        scene["analysis"] = new_analysis
+        scene["parent_scene_id"] = promoted.get("parent_scene_id", scene.get("parent_scene_id", sid))
+        scene["window_index"] = promoted.get("window_index", scene.get("window_index", 0))
+        scene["window_count"] = promoted.get("window_count", scene.get("window_count", 1))
+        # Use promotion temporal enrichment when available; otherwise preserve old narrative.
+        if promoted.get("narrative"):
+            scene["narrative"] = promoted["narrative"]
+        applied.append(sid)
+
+    return storyboard, applied

@@ -290,6 +290,11 @@ def save_summary_manifest(
         "scenes": [
             {
                 "scene_id": s["scene_id"],
+                "parent_scene_id": s.get("parent_scene_id", s.get("source_scene_id", s.get("scene_id"))),
+                "window_index": s.get("window_index", 0),
+                "window_count": s.get("window_count", 1),
+                "matched_beat_ids": s.get("matched_beat_ids", []),
+                "semantic_match_score": s.get("semantic_match_score"),
                 "start_time": s["start_time"],
                 "end_time": s["end_time"],
                 "duration": s["duration"],

@@ -17,6 +17,9 @@ import os
 from typing import Any
 
 from dubbingstory.story.scene_cards import build_scene_cards, compact_scene_cards
+from dubbingstory.story.scene_continuity import build_scene_deltas
+from dubbingstory.story.scene_signature import build_scene_signatures
+from dubbingstory.story.gemini_json import generate_story_json
 
 
 STORY_PLANNER_PROMPT = """You are the global story planner for a video narration system.
@@ -248,18 +251,23 @@ def generate_story_artifacts(
 ) -> tuple[list[dict], dict, dict]:
     """Build scene cards + global story plan/memory and optionally persist them."""
     cards = build_scene_cards(storyboard, subtitle_context=subtitle_context)
+    deltas = build_scene_deltas(cards)
+    signatures = build_scene_signatures(cards, deltas)
     plan, memory = fallback_story_artifacts(storyboard)
 
     enabled = bool(getattr(cfg, "story_enabled", True))
     api_key = getattr(cfg, "api_key_gemini", "")
     if enabled and api_key:
-        from dubbingstory.vision.gemini_analyzer import GeminiVideoAnalyzer
-
-        model = getattr(cfg, "story_model", None) or getattr(cfg, "vision_gemini_model", "gemini-2.5-flash")
-        fallback_model = getattr(cfg, "vision_gemini_fallback_model", "gemini-2.0-flash")
-        analyzer = GeminiVideoAnalyzer(api_key=api_key, model=model, fallback_model=fallback_model)
-
         compact = compact_scene_cards(cards)
+        delta_map = {str(item.get("scene_id")): item for item in deltas if item.get("scene_id")}
+        for item in compact:
+            sid = str(item.get("scene_id", ""))
+            delta = delta_map.get(sid, {}) or {}
+            item["continuity"] = {
+                "relationship": delta.get("relationship", "uncertain"),
+                "new_information_only": delta.get("new_information_only", []),
+                "state_change": delta.get("state_change", {}),
+            }
         max_chars = int(getattr(cfg, "story_prompt_max_chars", 60000) or 60000)
         prompt = STORY_PLANNER_PROMPT.format(
             video_title=storyboard.get("video_title", ""),
@@ -271,20 +279,13 @@ def generate_story_artifacts(
         )
 
         try:
-            from google.genai import types
-
-            response = analyzer.client.models.generate_content(
-                model=model,
-                contents=[prompt],
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.15,
-                ),
+            raw = generate_story_json(
+                cfg,
+                prompt,
+                task_name="story-planner",
+                temperature=0.15,
+                model_attr="story_model",
             )
-            text = getattr(response, "text", None)
-            if not text:
-                raise ValueError("Empty story-planner response")
-            raw = json.loads(text)
             plan, memory = _normalize_story_artifacts(raw, storyboard)
             print("   🧠 Story planner: global story plan generated")
         except Exception as exc:
@@ -294,10 +295,45 @@ def generate_story_artifacts(
 
     if project_dir:
         _save_json(os.path.join(project_dir, "scene_cards.json"), cards)
+        _save_json(os.path.join(project_dir, "scene_delta.json"), deltas)
+        _save_json(os.path.join(project_dir, "scene_signatures.json"), signatures)
         _save_json(os.path.join(project_dir, "story_plan.json"), plan)
         _save_json(os.path.join(project_dir, "story_memory.json"), memory)
 
     return cards, plan, memory
+
+
+def rebuild_evidence_artifacts(
+    storyboard: dict,
+    *,
+    subtitle_context: dict | None,
+    project_dir: str,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Rebuild cards/deltas/signatures after on-demand vision promotion."""
+    cards = build_scene_cards(storyboard, subtitle_context=subtitle_context)
+    deltas = build_scene_deltas(cards)
+    signatures = build_scene_signatures(cards, deltas)
+    _save_json(os.path.join(project_dir, "scene_cards.json"), cards)
+    _save_json(os.path.join(project_dir, "scene_delta.json"), deltas)
+    _save_json(os.path.join(project_dir, "scene_signatures.json"), signatures)
+    return cards, deltas, signatures
+
+
+def load_evidence_artifacts(project_dir: str, storyboard: dict) -> tuple[list[dict], list[dict], list[dict]]:
+    """Load V2.1 evidence artifacts, rebuilding deterministically if missing."""
+    cards_path = os.path.join(project_dir, "scene_cards.json")
+    delta_path = os.path.join(project_dir, "scene_delta.json")
+    signature_path = os.path.join(project_dir, "scene_signatures.json")
+    cards = _load_json(cards_path, [])
+    deltas = _load_json(delta_path, [])
+    signatures = _load_json(signature_path, [])
+    if not cards:
+        cards = build_scene_cards(storyboard)
+    if not deltas:
+        deltas = build_scene_deltas(cards)
+    if not signatures:
+        signatures = build_scene_signatures(cards, deltas)
+    return cards, deltas, signatures
 
 
 def load_story_artifacts(project_dir: str, storyboard: dict) -> tuple[dict, dict]:

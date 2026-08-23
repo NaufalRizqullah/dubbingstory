@@ -26,3 +26,5 @@ tqdm
 
 # Client-side validation for structured vision responses
 jsonschema>=4.21
+# V2.1 multilingual beat/scene semantic matching (CPU by default)
+sentence-transformers>=3.0,<6

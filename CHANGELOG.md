@@ -11,6 +11,44 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.6.0] - 2026-08-23
+
+### Added
+- **DubbingStory V2.1 Evidence-Aware Summary Pipeline**: Added a story-first recap architecture that plans narrative beats before final footage selection, allowing the pipeline to choose scenes based on the facts each beat needs to prove.
+- **Scene Window Identity Contract**: Preserved `parent_scene_id`, `window_index`, and `window_count` metadata across downstream processing so split windows from the same long shot can be recognized and reasoned about consistently.
+- **Sibling Shared-Boundary Anchors**: Added continuity-aware shared keyframe boundaries for adjacent windows from the same parent scene while avoiding cross-shot contamination at hard cuts.
+- **Local Scene Continuity / Delta**: Added structured scene-to-scene continuity analysis to distinguish setup, continuation, progression, transition, result, reaction, parallel action, and new topics while emphasizing newly visible information and state changes.
+- **Normalized Scene Signatures**: Added retrieval-oriented scene signatures combining visual actions, objects, state changes, goals, continuity context, confidence, and useful transcript/audio evidence.
+- **Story-First Beat Planning**: Added structured narration beats with intent, required facts, forbidden claims, approximate timeline position, importance, and target duration before footage is fixed.
+- **Deterministic Beat Deduplication**: Added inexpensive duplicate-beat filtering before narration expansion to reduce repetitive recap content without requiring another LLM call.
+- **Top-K Semantic Footage Matching**: Added pre-write beat-to-scene retrieval and configurable composite reranking using semantic relevance, temporal position, continuity, state change, importance, visual confidence, reuse penalties, and parent-scene reuse penalties.
+- **Chronological Match Guard**: Added timeline-aware constraints so semantic matching normally progresses forward while still allowing explicitly justified backtracking.
+- **Multi-Window Beat Support**: A narration beat can now use multiple short scene windows when several clips are required to show one coherent process or progression.
+- **Evidence Quality Gate**: Added safeguards that avoid treating skipped, empty, or low-confidence scene evidence as reliable semantic-match candidates.
+- **On-Demand Deep Vision Promotion**: Weak semantic matches can promote promising Pass-A candidates to deep Qwen analysis and then retry matching instead of deep-analyzing the entire source video.
+- **Fixed Evidence Writing Contract**: Narration is generated against the scene evidence selected for each beat, preventing the writer from freely expanding beyond the visual facts assigned to that beat.
+- **Narration `claims[]` Output**: Added explicit factual claims alongside generated narration to make post-write evidence validation more precise and debuggable.
+- **Post-Write Semantic Verifier**: Added factual verification of narration against assigned scene evidence, including claim coverage, unsupported claims, entity compatibility, state-change compatibility, and continuity checks.
+- **Typed Per-Beat Repair**: Added surgical recovery paths for unsupported wording, incorrect footage matches, insufficient evidence, and continuity mismatches instead of relying primarily on whole-script rewrites.
+- **Semantic Match Rollout Modes**: Added `--semantic-match active|shadow|off`; `shadow` keeps legacy selection as the final output while generating V2.1 beat/match artifacts for safe A/B evaluation.
+- **V2.1 Debug Artifacts**: Added/expanded runtime artifacts such as `scene_delta.json`, `scene_signatures.json`, `beats.json`, and verbose `match_report.json` for matcher and evidence-level debugging.
+- **V2.1 Notebook Preflight**: Updated the universal Kaggle/Colab notebook with real source preflight checks for the existing Vision/language fixes and the new V2.1 modules instead of only printing a success message.
+
+### Changed
+- **Summary Pipeline Ordering**: Summary mode can now progress from story beats to semantic footage matching before cutting the final recap, instead of permanently selecting/cutting footage before the narration intent is known.
+- **Narration Planning Responsibilities**: Kept `narration_planner.py` focused on timing and word-budget scheduling while story intent is handled by the new beat-planning layer.
+- **QA Responsibility Split**: Preserved `narration_qa.py` for deterministic language/timing/repetition checks while factual scene-to-narration validation is handled by the semantic verifier.
+- **Legacy Scene Selector Role**: The existing selector is retained as a compatibility fallback and shadow-mode baseline rather than being removed.
+- **Summary Vision Strategy**: Preserved the efficient two-pass Vision architecture and added selective deep promotion for weak beats instead of requiring full-video deep analysis.
+
+### Fixed
+- **Window Lineage Loss**: Prevented downstream loss of parent-shot/window metadata after long scenes are split into bounded analysis windows.
+- **Unsafe Cross-Language Verifier Repair**: Prevented weak lexical fallback scores from automatically triggering factual narration repair when a reliable semantic backend is unavailable.
+
+### Tests
+- Added V2.1 regression coverage for scene/window continuity identity, beat deduplication, Top-K matching, fixed beat-to-scene narration scheduling, and safe `claims[]` / verifier degraded-mode behavior.
+- Verified the implementation with **5/5 V2.1 regression tests passing**, source compilation, CLI smoke tests, clean patch application, and tests rerun from the extracted implementation bundle.
+
 ## [0.5.1] - 2026-08-22
 
 ### Fixed

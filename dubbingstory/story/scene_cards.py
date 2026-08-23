@@ -57,11 +57,17 @@ def build_scene_cards(
 
         card = {
             "scene_id": scene.get("scene_id", f"scene_{index + 1:03d}"),
+            "parent_scene_id": scene.get("parent_scene_id", scene.get("scene_id", f"scene_{index + 1:03d}")),
+            "window_index": int(scene.get("window_index", 0) or 0),
+            "window_count": max(1, int(scene.get("window_count", 1) or 1)),
             "scene_index": index,
             "start_time": start,
             "end_time": end,
             "duration": float(scene.get("duration", max(0.0, end - start)) or 0),
             "selected_for_deep_analysis": bool(analysis.get("selected", True)),
+            "analysis_kind": analysis.get("analysis_kind", "deep" if analysis.get("selected", True) else "screening_only"),
+            "screen_score": float(analysis.get("screen_score", 0) or 0),
+            "promoted_on_demand": bool(analysis.get("promoted_on_demand", False)),
             "transcript": transcript_text,
             "visual": {
                 "people": analysis.get("people", ""),
@@ -111,6 +117,9 @@ def compact_scene_cards(
         compact.append(
             {
                 "scene_id": card.get("scene_id"),
+                "parent_scene_id": card.get("parent_scene_id"),
+                "window_index": card.get("window_index", 0),
+                "window_count": card.get("window_count", 1),
                 "start": round(float(card.get("start_time", 0) or 0), 2),
                 "duration": round(float(card.get("duration", 0) or 0), 2),
                 "transcript": transcript,
@@ -127,6 +136,8 @@ def compact_scene_cards(
                 "existing_role": existing.get("role", "process"),
                 "existing_importance": existing.get("importance", 0.5),
                 "confidence": card.get("confidence", 0),
+                "deep_evidence": bool(card.get("selected_for_deep_analysis", True)),
+                "screen_score": card.get("screen_score", 0),
             }
         )
     return compact

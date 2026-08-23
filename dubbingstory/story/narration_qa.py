@@ -26,6 +26,7 @@ def evaluate_narration(
     narration_plan: dict | None,
     *,
     language: str,
+    semantic_report: dict | None = None,
 ) -> dict[str, Any]:
     plan_segments = (narration_plan or {}).get("segments", []) or []
     plan_by_id = {str(p.get("scene_id")): p for p in plan_segments}
@@ -77,6 +78,13 @@ def evaluate_narration(
     if language_issue:
         issues.append(f"language_mismatch:expected_{language}")
 
+    semantic_metrics = (semantic_report or {}).get("metrics", {}) or {}
+    semantic_degraded = bool((semantic_report or {}).get("degraded", False))
+    unsupported_rate = float(semantic_metrics.get("unsupported_claim_rate", 0) or 0)
+    repair_beats = int(semantic_metrics.get("repair_beat_count", 0) or 0)
+    if semantic_report and not semantic_degraded and repair_beats:
+        issues.append(f"unsupported_claim_beats:{repair_beats}")
+
     continuity_score = 1.0
     continuity_score -= min(0.35, len(missing_ids) * 0.05)
     continuity_score -= min(0.25, len(repeated_openers) * 0.05)
@@ -94,6 +102,9 @@ def evaluate_narration(
         "repeated_sentence_openers": repeated_openers,
         "missing_scene_ids": missing_ids,
         "language_issue": language_issue,
+        "semantic_degraded": semantic_degraded,
+        "unsupported_claim_rate": round(unsupported_rate, 3),
+        "semantic_repair_beat_count": repair_beats,
         "continuity_score": continuity_score,
         "issues": issues,
         "needs_rewrite": bool(issues),

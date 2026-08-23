@@ -36,6 +36,7 @@ keyframes:
   max_per_scene: 7                  # Upper bound; notebook speed preset can override to 3
   max_edge: 768                     # Deep vision keeps more fine detail/OCR than the old 640px path
   jpeg_quality: 88                  # Source-frame JPEG quality
+  shared_boundary_anchor: true      # Share one anchor only between sibling windows of the same long shot
 
 # ── Vision (Scene Understanding) ────────────────────────────────────────────
 # Provider "gemini" uses Google Gemini API (needs GOOGLE_API_KEY)
@@ -47,7 +48,7 @@ vision:
   gemini_fallback_model: "gemini-2.0-flash"
   # --- OpenAI-compatible settings (for Qwen3-VL, HuggingFace, etc.) ---
   # Browse models: https://huggingface.co/models?pipeline_tag=image-text-to-text&sort=trending
-  openai_model: "Qwen/Qwen3-VL-2B-Instruct"
+  openai_model: "Qwen/Qwen3-VL-4B-Instruct"
   openai_base_url: "http://127.0.0.1:8000/v1"
   openai_max_tokens: 640
   # Qwen3-VL official VL sampling baseline. Avoid temperature=0 greedy decoding:
@@ -84,8 +85,47 @@ summary:
   target_duration: null             # null = auto (~60-120s); CLI can override
   max_scenes: null                  # null = auto
   min_scene_score: 0.30
-  analysis_candidates: 32           # Deep-analyze enough candidates before final selection
+  analysis_candidates: 32           # Deep evidence pool; weak beats can promote more windows on demand
   duration_tolerance: 1.05          # Never intentionally exceed target by old 20% allowance
+
+# ── V2.1 Beat -> Evidence Matching ───────────────────────────────────────────
+semantic_match:
+  enabled: true
+  shadow_mode: false                # true = generate reports but render legacy selection
+  embedding_model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+  embedding_device: "cpu"          # Preserve GPU VRAM for Qwen/vLLM
+  top_k: 5
+  time_window_ratio: 0.18           # approx_ratio is a soft temporal anchor
+  max_backtrack_ratio: 0.04
+  min_evidence_quality: 0.25
+  weak_threshold: 0.55
+  min_beat_coverage: 0.75           # Automatic fallback to legacy selector below this
+  min_duration_ratio: 0.60          # Avoid under-filled semantic recaps
+  target_beat_duration: 11.0
+  min_beats: 5
+  max_beats: 20
+  max_scenes_per_beat: 2
+  beat_planner_llm: true
+  beat_dedup_threshold: 0.90
+  on_demand_promotion: true
+  promotion_candidates_per_beat: 2
+  promotion_time_window_ratio: 0.24
+  max_promotions: 6
+  weight_semantic: 0.45
+  weight_temporal: 0.15
+  weight_continuity: 0.15
+  weight_state_change: 0.10
+  weight_importance: 0.05
+  weight_confidence: 0.10
+  reuse_penalty: 0.18
+  parent_reuse_penalty: 0.10
+  redundancy_penalty: 0.08
+
+# Post-write claim -> fixed evidence gate. In lexical fallback mode this becomes
+# telemetry-only to avoid unsafe cross-language automatic repair.
+semantic_verifier:
+  claim_threshold: 0.48
+  auto_repair: true
 
 # ── Narration ────────────────────────────────────────────────────────────────
 narration:

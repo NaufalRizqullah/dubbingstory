@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from dubbingstory.story.gemini_json import generate_story_json
 
 
 PLAN_REFINEMENT_PROMPT = """You are planning a coherent video narration, not writing the narration itself.
@@ -158,6 +159,28 @@ def _dominant_role(group: list[dict], roles: dict[str, dict]) -> tuple[str, floa
     _, importance, role = max(ranked)
     return role, max(_role_for_scene(scene, roles)[1] for scene in group)
 
+def _matched_group_specs(
+    scenes: list[dict],
+    story_beats: list[dict] | None,
+    match_report: dict | None,
+) -> list[tuple[list[dict], dict | None]]:
+    """Map story-first beats to their fixed matched scene windows."""
+    if not story_beats or not match_report:
+        return []
+    scene_map = {str(scene.get("scene_id")): scene for scene in scenes}
+    beat_map = {str(beat.get("beat_id")): beat for beat in story_beats if beat.get("beat_id")}
+    specs: list[tuple[list[dict], dict | None]] = []
+    for item in match_report.get("beats", []) or []:
+        beat_id = str(item.get("beat_id", ""))
+        beat = beat_map.get(beat_id)
+        if not beat:
+            continue
+        group = [scene_map[sid] for sid in item.get("selected", []) or [] if sid in scene_map]
+        if group:
+            specs.append((group, beat))
+    return specs
+
+
 def build_narration_plan(
     storyboard: dict,
     scenes: list[dict],
@@ -166,6 +189,8 @@ def build_narration_plan(
     story_memory: dict | None,
     cfg,
     mode: str,
+    story_beats: list[dict] | None = None,
+    match_report: dict | None = None,
 ) -> dict:
     """Return narration beats with timeline, continuity and explicit word budgets."""
     target_wpm = float(getattr(cfg, "narration_target_wpm", 160) or 160)
@@ -174,16 +199,24 @@ def build_narration_plan(
     max_wpm = float(getattr(cfg, "narration_max_wpm", 175) or 175)
 
     roles = _scene_role_map(story_plan)
-    groups = _group_scenes_into_beats(scenes, roles, cfg)
+    matched_specs = _matched_group_specs(scenes, story_beats, match_report) if mode == "summary" else []
+    if matched_specs:
+        group_specs = matched_specs
+    else:
+        group_specs = [(group, None) for group in _group_scenes_into_beats(scenes, roles, cfg)]
     entries: list[dict[str, Any]] = []
     cumulative = 0.0
 
-    for index, group in enumerate(groups):
+    for index, (group, story_beat) in enumerate(group_specs):
         first = group[0]
         last = group[-1]
         covered_ids = [str(scene.get("scene_id", "")) for scene in group]
-        beat_id = covered_ids[0] or f"beat_{index + 1:03d}"
-        role, importance = _dominant_role(group, roles)
+        beat_id = str((story_beat or {}).get("beat_id", "") or covered_ids[0] or f"beat_{index + 1:03d}")
+        if story_beat:
+            role = str(story_beat.get("story_role", "development") or "development")
+            importance = max(0.0, min(1.0, float(story_beat.get("importance", 0.6) or 0.6)))
+        else:
+            role, importance = _dominant_role(group, roles)
 
         if mode == "summary":
             duration = sum(max(0.1, float(scene.get("duration", 0) or 0.1)) for scene in group)
@@ -222,7 +255,16 @@ def build_narration_plan(
                 if value and value not in evidence_fallback:
                     evidence_fallback.append(value)
 
-        must_explain = (reasons or evidence_fallback)[:4]
+        if story_beat:
+            must_explain = [str(v) for v in story_beat.get("required_facts", []) or [] if str(v).strip()][:6]
+            if not must_explain:
+                must_explain = (reasons or evidence_fallback)[:4]
+            intent = str(story_beat.get("intent", "") or "").strip() or (reasons[0] if reasons else "Explain how this beat advances the story")
+            forbidden_claims = [str(v) for v in story_beat.get("forbidden_claims", []) or [] if str(v).strip()][:6]
+        else:
+            must_explain = (reasons or evidence_fallback)[:4]
+            intent = reasons[0] if reasons else "Explain how this beat advances the story"
+            forbidden_claims = []
         entries.append(
             {
                 "scene_id": beat_id,
@@ -237,22 +279,29 @@ def build_narration_plan(
                 "target_words": target_words,
                 "min_words": min_words,
                 "max_words": max_words,
-                "intent": reasons[0] if reasons else f"Explain how this beat advances the story",
+                "intent": intent,
                 "must_explain": must_explain,
+                "forbidden_claims": forbidden_claims,
+                "approx_ratio": (story_beat or {}).get("approx_ratio"),
+                "source_story_beat_id": (story_beat or {}).get("beat_id"),
                 "continuity_from_previous": "",
                 "transition_strategy": "progression" if index else "none",
                 "avoid_repeating": [],
             }
         )
 
-    _refine_plan_with_gemini(
-        entries,
-        scenes=scenes,
-        story_plan=story_plan or {},
-        story_memory=story_memory or {},
-        cfg=cfg,
-        mode=mode,
-    )
+    # Story-first beats already carry explicit intent/required facts. The legacy
+    # refinement remains for full mode and summary fallback, avoiding a second
+    # LLM from silently changing beat semantics after matching.
+    if not matched_specs:
+        _refine_plan_with_gemini(
+            entries,
+            scenes=scenes,
+            story_plan=story_plan or {},
+            story_memory=story_memory or {},
+            cfg=cfg,
+            mode=mode,
+        )
 
     if mode == "summary":
         total_duration = sum(float(e["available_duration"]) for e in entries)
@@ -266,7 +315,9 @@ def build_narration_plan(
         "total_duration": round(total_duration, 3),
         "total_target_words": total_target_words,
         "source_scene_count": len(scenes),
+        "source_story_beat_count": len(story_beats or []),
         "narration_beat_count": len(entries),
+        "semantic_match_active": bool(matched_specs),
         "segments": entries,
     }
 
@@ -311,24 +362,14 @@ def _refine_plan_with_gemini(
         scenes_json=json.dumps(compact_scenes, ensure_ascii=False, indent=2),
     )
 
-    from dubbingstory.vision.gemini_analyzer import GeminiVideoAnalyzer
-
-    model = getattr(cfg, "story_model", None) or getattr(cfg, "vision_gemini_model", "gemini-2.5-flash")
-    fallback_model = getattr(cfg, "vision_gemini_fallback_model", "gemini-2.0-flash")
-    analyzer = GeminiVideoAnalyzer(api_key=api_key, model=model, fallback_model=fallback_model)
-
     try:
-        from google.genai import types
-
-        response = analyzer.client.models.generate_content(
-            model=model,
-            contents=[prompt],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.2,
-            ),
+        raw = generate_story_json(
+            cfg,
+            prompt,
+            task_name="narration-plan-refine",
+            temperature=0.2,
+            model_attr="story_model",
         )
-        raw = json.loads(getattr(response, "text", "") or "[]")
         if not isinstance(raw, list):
             return
         by_id = {

@@ -65,12 +65,17 @@ HARD RULES:
     avoid translating English storytelling idioms literally.
 14. Do not repeat a fact listed in avoid_repeating unless needed for clarity.
 15. If confidence is below {hedging_threshold}, hedge only the uncertain fact.
+16. Add `claims`: a short list of atomic factual claims actually stated by the narration.
+    Every claim MUST be directly supported by the FIXED evidence for that beat. Do not
+    add facts to `claims` that are not present in `text`, and do not use `claims` to
+    smuggle in unsupported interpretation.
 
 Return ONLY a valid JSON array:
 [
   {{
     "scene_id": "scene_001",
     "text": "natural narration",
+    "claims": ["atomic evidence-supported claim"],
     "importance": 0.8
   }}
 ]
@@ -109,7 +114,10 @@ Reduce generic reactions, repeated sentence openings, and disconnected scene-by-
 scene commentary. Make cause/effect and process continuity explicit when the
 provided evidence supports it. Do not invent missing facts.
 
-Return ONLY the corrected JSON array with scene_id, text, importance.
+For every item, also return `claims`: atomic factual claims stated in the revised text,
+limited to what the fixed narration plan/evidence supports.
+
+Return ONLY the corrected JSON array with scene_id, text, claims, importance.
 """
 
 
@@ -165,6 +173,7 @@ def _beat_payload(scene_map: dict[str, dict], plan_entry: dict) -> dict:
         "continuity_from_previous": plan_entry.get("continuity_from_previous", ""),
         "transition_strategy": plan_entry.get("transition_strategy", ""),
         "must_explain": plan_entry.get("must_explain", []),
+        "forbidden_claims": plan_entry.get("forbidden_claims", []),
         "avoid_repeating": plan_entry.get("avoid_repeating", []),
         "min_words": plan_entry.get("min_words", 3),
         "target_words": plan_entry.get("target_words", 8),
