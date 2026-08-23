@@ -16,6 +16,11 @@ OUTPUT_LANGUAGE_CODE: {language_code}
 OUTPUT_LANGUAGE_NAME: {language_label}
 STYLE NAME: {style_name}
 STYLE TONE: {tone}
+LANGUAGE STYLE:
+{language_style}
+
+STYLE EXAMPLES (rhythm/structure reference only; never copy unsupported facts):
+{examples}
 
 GLOBAL STORY PLAN:
 {story_plan_json}
@@ -86,6 +91,16 @@ REWRITE_PROMPT = """You are revising an existing video narration after QA.
 
 OUTPUT_LANGUAGE_CODE: {language_code}
 OUTPUT_LANGUAGE_NAME: {language_label}
+STYLE NAME: {style_name}
+STYLE TONE: {tone}
+LANGUAGE STYLE:
+{language_style}
+
+STYLE RULES:
+{rules}
+
+STYLE EXAMPLES (rhythm/structure reference only; never copy unsupported facts):
+{examples}
 
 LANGUAGE CONTRACT (NON-NEGOTIABLE):
 - Rewrite every narration `text` field entirely in {language_label} (`{language_code}`).
@@ -132,6 +147,23 @@ def _language_label(language: str) -> str:
 
 def _rules(style_config: dict) -> str:
     return "\n".join(f"- {rule}" for rule in style_config.get("rules", []) or []) or "- Write naturally and accurately"
+
+
+def _language_style(style_config: dict, language: str) -> str:
+    value = style_config.get("language_style", {}) or {}
+    if isinstance(value, dict):
+        return str(value.get(language, "") or value.get("en", "") or "Write naturally and accurately").strip()
+    return str(value or "Write naturally and accurately").strip()
+
+
+def _examples(style_config: dict, language: str) -> str:
+    values = style_config.get("examples", {}) or {}
+    if isinstance(values, dict):
+        values = values.get(language, []) or []
+    if not isinstance(values, list):
+        values = [values]
+    rendered = [str(value).strip() for value in values if str(value).strip()]
+    return "\n".join(f"- {value}" for value in rendered[:4]) or "- No fixed example; follow the style rules."
 
 
 def _beat_payload(scene_map: dict[str, dict], plan_entry: dict) -> dict:
@@ -206,6 +238,8 @@ def build_v2_narration_prompt(
         language_label=_language_label(language),
         style_name=style_config.get("name", style),
         tone=style_config.get("tone", "natural storytelling"),
+        language_style=_language_style(style_config, language),
+        examples=_examples(style_config, language),
         story_plan_json=json.dumps(story_plan, ensure_ascii=False, indent=2)[:26000],
         story_memory_json=json.dumps(story_memory, ensure_ascii=False, indent=2)[:14000],
         rules=_rules(style_config),
@@ -221,10 +255,18 @@ def build_rewrite_prompt(
     narration_plan: dict,
     story_plan: dict,
     language: str,
+    style: str = "viral_fb",
+    style_config: dict | None = None,
 ) -> str:
+    style_config = style_config or {}
     return REWRITE_PROMPT.format(
         language_code=language,
         language_label=_language_label(language),
+        style_name=style_config.get("name", style),
+        tone=style_config.get("tone", "natural storytelling"),
+        language_style=_language_style(style_config, language),
+        rules=_rules(style_config),
+        examples=_examples(style_config, language),
         issues_json=json.dumps(qa.get("issues", []), ensure_ascii=False, indent=2),
         story_plan_json=json.dumps(story_plan, ensure_ascii=False, indent=2)[:22000],
         narration_plan_json=json.dumps(narration_plan, ensure_ascii=False, indent=2)[:26000],

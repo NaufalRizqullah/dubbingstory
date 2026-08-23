@@ -321,6 +321,8 @@ def _maybe_rewrite(
     model: str,
     cfg,
     scenes: list[dict],
+    style: str,
+    style_config: dict,
 ) -> tuple[list[dict], dict]:
     qa = evaluate_narration(narration, narration_plan, language=language)
     if not qa.get("needs_rewrite") or not bool(getattr(cfg, "narration_auto_rewrite", True)):
@@ -341,6 +343,8 @@ def _maybe_rewrite(
             narration_plan=narration_plan,
             story_plan=story_plan,
             language=language,
+            style=style,
+            style_config=style_config,
         )
         revised_raw = _extract_segment_list(
             _call_json(
@@ -435,6 +439,8 @@ def _generate(
                 model=model,
                 cfg=cfg,
                 scenes=scenes,
+                style=style,
+                style_config=style_config,
             )
             final_language_error = payload_language_mismatch_reason(narration, language)
             if final_language_error:

@@ -1074,9 +1074,9 @@ def main():
     p_run.add_argument("--i-have-rights", action="store_true", help="Confirm video rights")
     p_run.add_argument("--project", "-p", type=str, help="Project name")
     p_run.add_argument("--style", type=str, default=None,
-                        choices=["viral_fb", "documentary", "technical", "calm_educational"])
+                        choices=["viral_fb", "jozzr_social", "documentary", "technical", "calm_educational"])
     p_run.add_argument("--lang", nargs="+", default=None, help="Languages (e.g., id en)")
-    p_run.add_argument("--engine", type=str, default=None, choices=["edge", "piper", "chirp"], help="TTS engine (default: edge)")
+    p_run.add_argument("--engine", type=str, default=None, choices=["edge", "azure", "piper", "chirp"], help="TTS engine (default: edge)")
     p_run.add_argument("--voice-id", type=str, default=None, help="Specific voice name/ID for Indonesian (e.g., id-ID-ArdiNeural or id_ID-news_tts-medium)")
     p_run.add_argument("--voice-en", type=str, default=None, help="Specific voice name/ID for English")
     p_run.add_argument("--ratio", nargs="+", default=None, help="Output ratios (16:9, 9:16)")
@@ -1264,13 +1264,13 @@ def main():
     p_narrate = subparsers.add_parser("narrate", help="Generate narration scripts")
     p_narrate.add_argument("--project", "-p", type=str, required=True)
     p_narrate.add_argument("--style", type=str, default=None,
-                            choices=["viral_fb", "documentary", "technical", "calm_educational"])
+                            choices=["viral_fb", "jozzr_social", "documentary", "technical", "calm_educational"])
     p_narrate.add_argument("--lang", nargs="+", default=None)
 
     # ── dub ───────────────────────────────────────────────────────────────
     p_dub = subparsers.add_parser("dub", help="Generate TTS audio")
     p_dub.add_argument("--project", "-p", type=str, required=True)
-    p_dub.add_argument("--engine", type=str, default=None, choices=["edge", "piper", "chirp"], help="TTS engine (default: edge)")
+    p_dub.add_argument("--engine", type=str, default=None, choices=["edge", "azure", "piper", "chirp"], help="TTS engine (default: edge)")
     p_dub.add_argument("--voice-id", type=str, default=None, help="Specific voice name/ID for Indonesian")
     p_dub.add_argument("--voice-en", type=str, default=None, help="Specific voice name/ID for English")
 
@@ -1291,6 +1291,10 @@ def main():
     # Apply CLI overrides
     if hasattr(args, "ratio") and args.ratio:
         cfg.render_ratios = args.ratio
+    if hasattr(args, "style") and args.style:
+        cfg.narration_style = args.style
+    if hasattr(args, "engine") and args.engine:
+        cfg.tts_engine = args.engine
     if hasattr(args, "asr_model") and args.asr_model:
         cfg.asr_model_name = args.asr_model
     if hasattr(args, "voice_id") and args.voice_id:

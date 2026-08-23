@@ -11,6 +11,27 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.7.0] - 2026-08-23
+
+### Added
+- **Jozzr Social Narration Style**: Added `jozzr_social`, a process-driven social storytelling profile focused on concise problem → action → change → consequence → next-step narration.
+- **Azure Speech TTS Engine**: Added Azure AI Speech as a new TTS backend with native support for `id-ID-ArdiNeural`.
+- **Azure TTS Configuration**: Added `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION` configuration for Kaggle, Colab, and local environments.
+- **Azure TTS Reliability Controls**: Added retry handling, request throttling, timeout configuration, and SSML-based speech-rate control.
+- **Azure CLI Support**: Added `azure` as a valid TTS engine for `run` and `dub` workflows.
+- **Jozzr/Azure Universal Notebook**: Added notebook configuration and preflight validation for the Jozzr Social + Azure Ardi workflow.
+
+### Changed
+- **Narration Style Prompting**: Style-specific language guidance, examples, and storytelling rules are now passed more explicitly into the narration writer.
+- **Narration QA Rewrite**: QA rewrites now preserve the selected narration style instead of potentially drifting toward generic narration.
+- **Jozzr Delivery Profile**: Added restrained pacing and cadence guidance optimized for informative social-video narration.
+- **TTS Engine Selection**: Extended the existing pluggable TTS architecture to support Azure without changing the timeline-aware scheduler.
+
+### Compatibility
+- Existing `edge`, `piper`, and `chirp` TTS engines remain supported.
+- Existing narration styles remain unchanged.
+- V2.1 Vision, semantic matching, evidence verification, and typed repair behavior remain backward compatible.
+
 ## [0.6.0] - 2026-08-23
 
 ### Added

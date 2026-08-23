@@ -133,6 +133,14 @@ def build_config(
     flat["api_key_openai_vision"] = os.getenv("OPENAI_VISION_API_KEY", "")
     flat["api_key_hf"] = os.getenv("HF_API_KEY", "")
 
+    # Official Azure Speech TTS credentials. These are intentionally separate
+    # from Edge-TTS, which does not use an Azure resource/key.
+    flat["azure_speech_key"] = os.getenv("AZURE_SPEECH_KEY", "").strip()
+    flat["azure_speech_region"] = os.getenv("AZURE_SPEECH_REGION", "").strip()
+    env_azure_endpoint = os.getenv("AZURE_SPEECH_ENDPOINT", "").strip()
+    if env_azure_endpoint:
+        flat["tts_azure_endpoint"] = env_azure_endpoint
+
     # Vision-related env overrides
     env_vision_provider = os.getenv("VISION_PROVIDER", "")
     if env_vision_provider:

@@ -129,7 +129,7 @@ semantic_verifier:
 
 # ── Narration ────────────────────────────────────────────────────────────────
 narration:
-  style: "viral_fb"                 # "viral_fb" | "documentary" | "technical" | "calm_educational"
+  style: "viral_fb"                 # "viral_fb" | "jozzr_social" | "documentary" | "technical" | "calm_educational"
   languages: ["id", "en"]           # Languages to generate
   max_words_per_scene: 50           # Legacy ceiling; V2 uses duration-aware budgets
   hedging_threshold: 0.5            # Below this confidence, use hedging language
@@ -146,7 +146,7 @@ narration:
 
 # ── TTS ──────────────────────────────────────────────────────────────────────
 tts:
-  engine: "edge"                    # "edge" | "piper" | "chirp" (Google Cloud Chirp 3 HD)
+  engine: "edge"                    # "edge" | "azure" | "piper" | "chirp"
   use_timeline_scheduler: true       # V2: do not pad every short sentence to full scene length
   max_speedup: 1.12                 # Gentle safety fit; rewrite text instead of extreme speed
   min_gap: 0.20                     # Minimum separation between adjacent narration beats
@@ -155,6 +155,16 @@ tts:
   edge_voices:
     id: "id-ID-ArdiNeural"          # Indonesian male narrator
     en: "en-US-GuyNeural"           # US English male narrator
+  # Official Azure Speech TTS. id-ID-ArdiNeural is a Standard Neural voice and
+  # can be used with an Azure Speech Free (F0) resource within its monthly quota.
+  azure_voices:
+    id: "id-ID-ArdiNeural"
+    en: "en-US-GuyNeural"
+  azure_endpoint: ""                 # Empty = https://{AZURE_SPEECH_REGION}.tts.speech.microsoft.com/cognitiveservices/v1
+  azure_output_format: "riff-24khz-16bit-mono-pcm"
+  azure_timeout_seconds: 60
+  azure_rate_limit_per_minute: 20    # F0 real-time TTS limit; set 0 to disable client throttle on S0
+  azure_max_retries: 4
   # Piper voices (offline fallback)
   voices:
     id: "id_ID-news_tts-medium"

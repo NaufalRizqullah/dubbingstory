@@ -27,6 +27,36 @@ styles:
         - "Once the outer diameter is right, the center still needs drilling, because a small error here can ruin the final fit."
         - "Only after the machining and joining work is finished can the result be tested again."
 
+  jozzr_social:
+    name: "Jozzr-style Process Storytelling"
+    tone: "concise, grounded, confident, conversational, process-first"
+    language_style:
+      id: "Bahasa Indonesia natural, padat, dan mudah diikuti; terdengar seperti narator yang memahami proses, bukan komentator yang bereaksi pada gambar"
+      en: "Natural concise English; sound like a narrator who understands the process rather than reacting to the footage"
+    rules:
+      - "Buka langsung dengan masalah, tujuan, risiko, atau perubahan konkret yang membuat proses ini perlu dilakukan; tanpa salam atau clickbait generik"
+      - "Setiap beat harus menambah informasi baru: alasan langkah, perubahan kondisi, konsekuensi, atau langkah berikutnya; jangan hanya menyebut ulang apa yang sudah jelas terlihat"
+      - "Gunakan alur masalah/tujuan → tindakan penting → perubahan → alasan/konsekuensi → langkah berikutnya → payoff"
+      - "Utamakan kalimat pendek-menengah dengan satu gagasan utama; gabungkan beberapa shot yang masih menjelaskan satu proses menjadi satu pikiran naratif"
+      - "Gunakan penghubung sebab-akibat secara natural seperti 'karena', 'agar', 'setelah itu', 'baru kemudian', atau 'hasilnya'; jangan memaksa transisi di setiap kalimat"
+      - "Jaga nada tenang dan yakin. Hindari gaya announcer, reaksi berlebihan, ajakan penonton, dan filler seperti 'lihat ini', 'wow', 'luar biasa', atau 'kalian pasti gak nyangka'"
+      - "Jika detail teknis tidak didukung evidence, jelaskan fungsi/perubahannya secara generik daripada menebak nama komponen atau penyebab"
+      - "Buat penutup sebagai payoff dari masalah/tujuan awal: hasil akhir, pengujian, pemasangan, atau kondisi baru yang benar-benar didukung evidence"
+      - "Pilih tanda baca yang enak dibacakan TTS: titik untuk jeda utama, koma untuk klausa pendek; hindari kalimat sangat panjang dan tanda seru beruntun"
+    examples:
+      id:
+        - "Bagian ini belum bisa langsung dipasang. Ukurannya lebih dulu disesuaikan agar posisinya benar-benar pas dengan dudukannya."
+        - "Setelah bentuk luarnya mendekati ukuran yang dibutuhkan, bagian tengah masih harus dikerjakan. Tahap ini menentukan apakah komponen bisa terpasang tanpa memaksa sambungan."
+        - "Baru setelah penyambungan selesai, permukaannya dirapikan dan hasilnya diperiksa lagi sebelum komponen digunakan."
+      en:
+        - "This part cannot be installed yet. Its dimensions have to be corrected first so it can sit properly in place."
+        - "Once the outer shape is close to the required size, the center still needs work. This step determines whether the part can fit without forcing the joint."
+        - "Only after the joining work is complete is the surface cleaned up and the result checked again before use."
+    tts:
+      # Used as a gentle multiplier on top of tts.speaking_rate. Keep near 1.0;
+      # script cadence should do most of the work instead of aggressive speed-up.
+      speaking_rate_multiplier: 1.02
+
   documentary:
     name: "Documentary"
     tone: "formal, informative, neutral, authoritative"

@@ -29,6 +29,9 @@ def _voice_overrides(name: str, cfg) -> dict[str, str]:
     if name == "chirp":
         default_id = getattr(cfg, "tts_chirp_voices_id", None)
         default_en = getattr(cfg, "tts_chirp_voices_en", None)
+    elif name == "azure":
+        default_id = getattr(cfg, "tts_azure_voices_id", None)
+        default_en = getattr(cfg, "tts_azure_voices_en", None)
     elif name == "piper":
         default_id = getattr(cfg, "tts_voices_id", None)
         default_en = getattr(cfg, "tts_voices_en", None)
@@ -66,10 +69,35 @@ def get_engine(name: str = "edge", cfg=None) -> BaseTTSEngine:
             custom_voices=custom_voices or None,
             api_endpoint=endpoint or None,
         )
+    if name == "azure":
+        from dubbingstory.tts.azure_tts_engine import AzureTTSEngine
+        return AzureTTSEngine(
+            subscription_key=getattr(cfg, "azure_speech_key", "") if cfg else "",
+            region=getattr(cfg, "azure_speech_region", "") if cfg else "",
+            endpoint=getattr(cfg, "tts_azure_endpoint", "") if cfg else "",
+            custom_voices=custom_voices or None,
+            output_format=getattr(cfg, "tts_azure_output_format", "riff-24khz-16bit-mono-pcm") if cfg else "riff-24khz-16bit-mono-pcm",
+            timeout_seconds=float(getattr(cfg, "tts_azure_timeout_seconds", 60) if cfg else 60),
+            rate_limit_per_minute=int(getattr(cfg, "tts_azure_rate_limit_per_minute", 20) if cfg else 20),
+            max_retries=int(getattr(cfg, "tts_azure_max_retries", 4) if cfg else 4),
+        )
 
     print(f"⚠️ Unknown TTS engine '{name}', falling back to Edge-TTS.")
     from dubbingstory.tts.edge_tts_engine import EdgeTTSEngine
     return EdgeTTSEngine(custom_voices=_voice_overrides("edge", cfg) or None)
+
+
+def _style_speaking_rate_multiplier(cfg) -> float:
+    if not cfg:
+        return 1.0
+    style = str(getattr(cfg, "narration_style", "") or "").strip()
+    styles = getattr(cfg, "narration_styles", {}) or {}
+    style_cfg = styles.get(style, {}) if isinstance(styles, dict) else {}
+    tts_cfg = style_cfg.get("tts", {}) if isinstance(style_cfg, dict) else {}
+    try:
+        return max(0.85, min(1.15, float(tts_cfg.get("speaking_rate_multiplier", 1.0) or 1.0)))
+    except (TypeError, ValueError):
+        return 1.0
 
 
 def generate_all_audio(
@@ -97,7 +125,8 @@ def generate_all_audio(
     backward compatibility with older callers.
     """
     engine = get_engine(engine_name, cfg)
-    speaking_rate = float(getattr(cfg, "tts_speaking_rate", 1.0) if cfg else 1.0)
+    base_speaking_rate = float(getattr(cfg, "tts_speaking_rate", 1.0) if cfg else 1.0)
+    speaking_rate = max(0.75, min(1.25, base_speaking_rate * _style_speaking_rate_multiplier(cfg)))
     use_scheduler = bool(getattr(cfg, "tts_use_timeline_scheduler", True) if cfg else True)
 
     os.makedirs(audio_dir, exist_ok=True)
