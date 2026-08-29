@@ -46,6 +46,9 @@ def _deep_scene_schema(*, rescue: bool = False) -> dict[str, Any]:
             "cause": 48,
             "effect": 48,
             "unresolved_question": 48,
+            "emotional_tone": 32,
+            "process_stage": 32,
+            "audio_cue": 32,
             "text_items": 2,
             "text_item_chars": 32,
         }
@@ -64,6 +67,9 @@ def _deep_scene_schema(*, rescue: bool = False) -> dict[str, Any]:
             "cause": 80,
             "effect": 80,
             "unresolved_question": 80,
+            "emotional_tone": 48,
+            "process_stage": 48,
+            "audio_cue": 48,
             "text_items": 3,
             "text_item_chars": 48,
         }
@@ -85,6 +91,9 @@ def _deep_scene_schema(*, rescue: bool = False) -> dict[str, Any]:
         "cause": _string_schema(limits["cause"]),
         "effect": _string_schema(limits["effect"]),
         "unresolved_question": _string_schema(limits["unresolved_question"]),
+        "emotional_tone": _string_schema(limits["emotional_tone"]),
+        "process_stage": _string_schema(limits["process_stage"]),
+        "audio_cue": _string_schema(limits["audio_cue"]),
         "text_visible": {
             "type": "array",
             "items": _string_schema(limits["text_item_chars"]),
@@ -246,6 +255,9 @@ def normalize_scene_analysis(data: Any, kind: str = "deep") -> dict[str, Any]:
         "cause",
         "effect",
         "unresolved_question",
+        "emotional_tone",
+        "process_stage",
+        "audio_cue",
     )
     result: dict[str, Any] = {
         "visible_objects": _dedupe_strings(data.get("visible_objects"), 6),

@@ -74,6 +74,13 @@ HARD RULES:
     Every claim MUST be directly supported by the FIXED evidence for that beat. Do not
     add facts to `claims` that are not present in `text`, and do not use `claims` to
     smuggle in unsupported interpretation.
+17. OPENING BEAT: Start the narration with the core PROBLEM, GOAL, or TRANSFORMATION
+    that drives the entire video. Do not start with "In this video..." or generic filler.
+18. PACING VARIETY: Alternate sentence lengths — short punchy statements after
+    longer explanatory sentences. This creates natural rhythm for TTS delivery.
+19. PROCESS COMPRESSION: When 3+ consecutive beats show the same type of process
+    (e.g., machining steps), compress them into one flowing thought that highlights
+    what's different about each step rather than repeating "then they did X".
 
 Return ONLY a valid JSON array:
 [

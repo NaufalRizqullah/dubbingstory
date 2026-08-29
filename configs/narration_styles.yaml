@@ -43,6 +43,9 @@ styles:
       - "Jika detail teknis tidak didukung evidence, jelaskan fungsi/perubahannya secara generik daripada menebak nama komponen atau penyebab"
       - "Buat penutup sebagai payoff dari masalah/tujuan awal: hasil akhir, pengujian, pemasangan, atau kondisi baru yang benar-benar didukung evidence"
       - "Pilih tanda baca yang enak dibacakan TTS: titik untuk jeda utama, koma untuk klausa pendek; hindari kalimat sangat panjang dan tanda seru beruntun"
+      - "Variasikan panjang kalimat: setelah kalimat penjelasan panjang, sisipkan kalimat pendek yang mempertegas"
+      - "Gunakan pertanyaan retoris sesekali untuk menjaga engagement: 'Kenapa tahap ini penting?' lalu jawab di kalimat berikutnya"
+      - "Pada beat terakhir, hubungkan kembali ke masalah/tujuan awal sehingga penonton merasakan closure yang jelas"
     examples:
       id:
         - "Bagian ini belum bisa langsung dipasang. Ukurannya lebih dulu disesuaikan agar posisinya benar-benar pas dengan dudukannya."

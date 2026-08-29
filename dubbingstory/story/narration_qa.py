@@ -60,7 +60,18 @@ def evaluate_narration(
     duration = float((narration_plan or {}).get("total_duration", 0) or 0)
     timeline_wpm = len(words) / duration * 60.0 if duration > 0 else 0.0
 
+    # Detect monotonous sentence length (almost all sentences have same length)
+    sentence_lengths = [len(re.findall(r"\b\w+\b", s)) for s in sentence_like if s.strip()]
+    is_monotonous = False
+    if len(sentence_lengths) >= 5:
+        avg_len = sum(sentence_lengths) / len(sentence_lengths)
+        variance = sum((l - avg_len) ** 2 for l in sentence_lengths) / len(sentence_lengths)
+        if variance < 4.0:
+            is_monotonous = True
+
     issues: list[str] = []
+    if is_monotonous:
+        issues.append("monotonous_pacing")
     if exclamation_ratio > 0.25:
         issues.append(f"too_many_exclamations:{exclamation_ratio:.2f}")
     if reactive_hits and len(reactive_hits) > max(2, len(segments) // 5):

@@ -10,6 +10,15 @@ CRITICAL RULES:
 - Never invent facts that are not visible or stated in the supplied subtitle/dialogue.
 - Subtitle/dialogue can clarify meaning, goals, or object purpose, but do not pretend
   those facts were visually observed.
+- Compare the FIRST and LAST frame actively: identify what changed, what progressed,
+  or what was completed during this scene window.
+- When frames show a clear process (before → during → after), describe the transition
+  in `changes`, `state_before`, and `state_after` even if the exact technical name is unknown.
+- For `cause` and `effect`: infer from visual evidence (e.g., tool applied → surface changed).
+  Do not require explicit subtitle confirmation for visually obvious transformations.
+- For `character_goal`: infer the immediate goal from the observed action pattern
+  (e.g., repeatedly measuring → goal is verification). Write "unknown" only when
+  the action pattern is genuinely ambiguous.
 - If uncertain, use "unknown" or a short hedged phrase.
 - Keep every string to one short sentence.
 - visible_objects: at most 8 UNIQUE items. Never repeat an item.
@@ -32,7 +41,10 @@ Extract:
 9. cause / effect: only when evidence supports the relationship
 10. unresolved_question: what remains unclear/unfinished after this scene
 11. text_visible: useful visible text only
-12. confidence: 0.0 to 1.0
+12. emotional_tone: the mood of the scene (e.g., focused, tense, satisfied, routine, careful)
+13. process_stage: where this scene fits in a process (preparation, execution, verification, completion, or unknown)
+14. audio_cue: likely dominant sound based on visual context (e.g., grinding noise, hammering, silence, conversation) or unknown
+15. confidence: 0.0 to 1.0
 
 Return ONLY valid JSON. Scene identity/timing are added by the pipeline, so do not output them:
 {{
@@ -49,6 +61,9 @@ Return ONLY valid JSON. Scene identity/timing are added by the pipeline, so do n
   "effect": "effect or unknown",
   "unresolved_question": "question or empty",
   "text_visible": [],
+  "emotional_tone": "focused",
+  "process_stage": "execution",
+  "audio_cue": "unknown",
   "confidence": 0.0
 }}"""
 
@@ -79,7 +94,12 @@ Do not write final narration. Determine:
 1. what progresses from start to finish,
 2. how one step causes/enables the next,
 3. which scenes are setup/process/bridge/problem/climax/result,
-4. which scenes are necessary for continuity even if visually ordinary.
+4. which scenes are necessary for continuity even if visually ordinary,
+5. identify the single strongest TENSION or CHALLENGE in the video,
+6. identify the PAYOFF or RESOLUTION moment,
+7. assign `narration_cue` as an instruction for a narrator, not a scene description.
+   Good cue: "Explain why this step is critical for the final fit"
+   Bad cue: "A person is using a lathe"
 
 {subtitle_context}
 
@@ -99,7 +119,7 @@ Return ONLY valid JSON:
       "narration_importance": 0.0,
       "causal_importance": 0.0,
       "bridge_importance": 0.0,
-      "narration_cue": "fact/relationship a later writer should explain"
+      "narration_cue": "narrator instruction about what to explain/emphasize"
     }}
   ]
 }}"""

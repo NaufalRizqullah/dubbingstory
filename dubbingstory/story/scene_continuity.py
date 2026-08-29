@@ -30,6 +30,10 @@ _ALIAS_GROUPS = {
     "component": {"component", "part", "piece", "workpiece", "item"},
     "machine": {"machine", "machinery", "equipment"},
     "vehicle": {"vehicle", "car", "truck", "motorcycle", "bike"},
+    "tool": {"tool", "wrench", "caliper", "gauge", "hammer", "drill", "clamp"},
+    "surface": {"surface", "face", "side", "area", "region"},
+    "material": {"material", "metal", "steel", "iron", "aluminum", "plastic"},
+    "result": {"result", "output", "product", "outcome", "finish"},
 }
 
 _TOKEN_RE = re.compile(r"[\w]+", flags=re.UNICODE)

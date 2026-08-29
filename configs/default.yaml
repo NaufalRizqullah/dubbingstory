@@ -137,10 +137,10 @@ narration:
   target_wpm: 160                   # Initial Indonesian/English storytelling target
   min_wpm: 135
   max_wpm: 175
-  speech_coverage: 0.84             # Aim for useful narration across most of the recap
+  speech_coverage: 0.85             # Aim for useful narration across most of the recap
   group_scenes: true                # Multiple adjacent shots can become one narration thought
-  target_beat_duration: 11.0        # Prefer human-sized narration thoughts across visual cuts
-  max_beat_duration: 18.0
+  target_beat_duration: 9.0         # Prefer human-sized narration thoughts across visual cuts
+  max_beat_duration: 14.0
   plan_llm_refine: true             # Let Gemini refine intent/continuity, not timing budgets
   auto_rewrite: true                # One QA rewrite when narration is sparse/repetitive/hype-heavy
 

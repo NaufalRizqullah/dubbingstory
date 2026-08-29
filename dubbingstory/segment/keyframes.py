@@ -185,10 +185,10 @@ def extract_keyframes_from_source(
         b = max(a, end - margin)
         
         duration = max(0.0, b - a)
-        # Very short scenes do not need duplicate near-identical frames.
-        count = max(1, int(max_per_scene))
-        if duration <= 6.0:
-            count = min(count, 2)
+        # Adaptive: ~1 frame per 2.5s, minimum 2, capped by max_per_scene
+        count = max(2, min(int(max_per_scene), int(round(duration / 2.5))))
+        if duration <= 2.0:
+            count = 1
 
         if strategy == "interval" and interval_seconds > 0:
             timestamps = np.arange(a, b + 1e-6, float(interval_seconds), dtype=float)

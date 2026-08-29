@@ -1079,6 +1079,7 @@ def main():
     p_run.add_argument("--engine", type=str, default=None, choices=["edge", "azure", "piper", "chirp"], help="TTS engine (default: edge)")
     p_run.add_argument("--voice-id", type=str, default=None, help="Specific voice name/ID for Indonesian (e.g., id-ID-ArdiNeural or id_ID-news_tts-medium)")
     p_run.add_argument("--voice-en", type=str, default=None, help="Specific voice name/ID for English")
+    p_run.add_argument("--speech-coverage", type=float, default=None, help="Target ratio of narration time vs video time (e.g. 0.85)")
     p_run.add_argument("--ratio", nargs="+", default=None, help="Output ratios (16:9, 9:16)")
     p_run.add_argument(
         "--mode", type=str, default="full",
@@ -1266,6 +1267,7 @@ def main():
     p_narrate.add_argument("--style", type=str, default=None,
                             choices=["viral_fb", "jozzr_social", "documentary", "technical", "calm_educational"])
     p_narrate.add_argument("--lang", nargs="+", default=None)
+    p_narrate.add_argument("--speech-coverage", type=float, default=None, help="Target ratio of narration time vs video time (e.g. 0.85)")
 
     # ── dub ───────────────────────────────────────────────────────────────
     p_dub = subparsers.add_parser("dub", help="Generate TTS audio")
@@ -1293,6 +1295,8 @@ def main():
         cfg.render_ratios = args.ratio
     if hasattr(args, "style") and args.style:
         cfg.narration_style = args.style
+    if hasattr(args, "speech_coverage") and args.speech_coverage is not None:
+        cfg.narration_speech_coverage = args.speech_coverage
     if hasattr(args, "engine") and args.engine:
         cfg.tts_engine = args.engine
     if hasattr(args, "asr_model") and args.asr_model:
