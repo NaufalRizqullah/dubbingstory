@@ -111,8 +111,10 @@ Run the entire process from start to finish.
 | `--vision-provider` | `gemini` | Vision API choice (`gemini` or `openai` for local vLLM/Qwen). |
 | `--vision-model` | - | Override model name if using `--vision-provider openai`. |
 | `--max-keyframes` | `7` | Max keyframes per scene for vision analysis. Lower (3-5) = faster. |
+| `--disable-adaptive-keyframes`| `False` | Disable duration-based automatic keyframe count capping. |
 | `--min-scene-duration`| `2.0` | Minimum scene duration in seconds. Higher (4-6) = fewer scenes = faster. |
 | `--scene-threshold` | `3.0` | Scene detection sensitivity. Higher (4-6) = fewer scenes = faster. |
+| `--speech-coverage` | `0.85`| Target ratio of narration duration to video duration. |
 
 **Example:**
 ```bash
@@ -144,6 +146,7 @@ Detect scene changes and extract keyframes.
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `--project`, `-p` | **(Required)** | Project name. |
+| `--disable-adaptive-keyframes`| `False` | Disable duration-based automatic keyframe count capping. |
 
 **Example:**
 ```bash
@@ -176,6 +179,7 @@ Generate multilingual narration scripts and subtitles (SRT).
 | `--project`, `-p` | **(Required)** | Project name. |
 | `--style` | `viral_fb`| Narration style. |
 | `--lang` | `id en` | Target languages. |
+| `--speech-coverage`| `0.85` | Target ratio of narration duration to video duration. |
 
 **Example:**
 ```bash

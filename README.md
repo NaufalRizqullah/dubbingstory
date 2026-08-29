@@ -111,8 +111,10 @@ Jalankan seluruh proses dari awal sampai akhir.
 | `--vision-provider` | `gemini` | Pilihan API Vision (`gemini` atau `openai` untuk vLLM/Qwen lokal). |
 | `--vision-model` | - | Override nama model jika menggunakan `--vision-provider openai`. |
 | `--max-keyframes` | `7` | Maks keyframe per scene untuk analisis vision. Turunkan (3-5) untuk lebih cepat. |
+| `--disable-adaptive-keyframes`| `False` | Nonaktifkan pembatasan keyframe otomatis berbasis durasi. |
 | `--min-scene-duration`| `2.0` | Durasi minimum scene (detik). Naikkan (4-6) agar scene lebih sedikit/cepat. |
 | `--scene-threshold` | `3.0` | Sensitivitas deteksi scene. Naikkan (4-6) agar scene lebih sedikit/cepat. |
+| `--speech-coverage` | `0.85`| Rasio target durasi narasi terhadap durasi video. |
 
 **Contoh:**
 ```bash
@@ -144,6 +146,7 @@ Deteksi pergantian scene dan ambil keyframe.
 | Argumen | Default | Deskripsi |
 |---------|---------|-----------|
 | `--project`, `-p` | **(Wajib)** | Nama proyek. |
+| `--disable-adaptive-keyframes`| `False` | Nonaktifkan pembatasan keyframe otomatis berbasis durasi. |
 
 **Contoh:**
 ```bash
@@ -176,6 +179,7 @@ Hasilkan skrip narasi multibahasa beserta subtitle (SRT).
 | `--project`, `-p` | **(Wajib)** | Nama proyek. |
 | `--style` | `viral_fb`| Gaya narasi. |
 | `--lang` | `id en` | Bahasa target. |
+| `--speech-coverage`| `0.85` | Rasio target durasi narasi terhadap durasi video. |
 
 **Contoh:**
 ```bash

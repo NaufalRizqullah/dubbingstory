@@ -11,6 +11,21 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.8.0] - 2026-08-30
+
+### Added
+- **Narration Quality Overhaul**: Enhanced `V2_NARRATION_PROMPT` with strict rules for opening beats, pacing variety, and process compression to ensure more natural, engaging, and non-repetitive storytelling.
+- **Deep Scene Schema Enrichment**: Expanded vision schema to capture `emotional_tone`, `process_stage`, and `audio_cue` for richer narrative context.
+- **Monotonous Pacing Detection**: Added an automated QA check to penalize and rewrite generated scripts that exhibit identical sentence lengths repetitively, improving TTS delivery cadence.
+- **Adaptive Keyframe Extraction**: Implemented duration-aware keyframe capping in `keyframes.py` (~1 frame per 2.5s) to drastically reduce VRAM/token usage on long shots without sacrificing detail.
+- **CLI Control for Adaptive Keyframes**: Added `--disable-adaptive-keyframes` flag to bypass the new adaptive duration limit when dense frame extraction is explicitly required.
+- **CLI Speech Coverage Control**: Added `--speech-coverage` flag (defaulting to a tighter 0.85) to give users direct control over narration density vs video time.
+
+### Changed
+- **Jozzr Social Pacing & Closure**: Added specific rules to the `jozzr_social` style requiring narrative closure (payoff) and rhetorical questions for better engagement.
+- **Tighter Beat Budgets**: Reduced `target_beat_duration` (11.0s → 9.0s) and `max_beat_duration` (18.0s → 14.0s) in `default.yaml` to prevent overly long, rambling sentences across multiple scenes.
+- **Continuity Alias Expansion**: Expanded `scene_continuity.py` alias groups to recognize `tool`, `surface`, `material`, and `result` entities, improving local state-change tracking across cuts.
+
 ## [0.7.0] - 2026-08-23
 
 ### Added

@@ -144,6 +144,7 @@ def extract_keyframes_from_source(
     max_edge: int = 768,
     jpeg_quality: int = 88,
     shared_boundary_anchor: bool = True,
+    adaptive: bool = True,
 ) -> dict[str, list[str]]:
     """Extract keyframes directly from the source video using timestamps."""
     import numpy as np
@@ -185,10 +186,13 @@ def extract_keyframes_from_source(
         b = max(a, end - margin)
         
         duration = max(0.0, b - a)
-        # Adaptive: ~1 frame per 2.5s, minimum 2, capped by max_per_scene
-        count = max(2, min(int(max_per_scene), int(round(duration / 2.5))))
-        if duration <= 2.0:
-            count = 1
+        if adaptive:
+            # Adaptive: ~1 frame per 2.5s, minimum 2, capped by max_per_scene
+            count = max(2, min(int(max_per_scene), int(round(duration / 2.5))))
+            if duration <= 2.0:
+                count = 1
+        else:
+            count = max(1, int(max_per_scene))
 
         if strategy == "interval" and interval_seconds > 0:
             timestamps = np.arange(a, b + 1e-6, float(interval_seconds), dtype=float)
@@ -244,6 +248,7 @@ def extract_all_scenes(
     max_edge: int = 768,
     jpeg_quality: int = 88,
     shared_boundary_anchor: bool = True,
+    adaptive: bool = True,
 ) -> dict[str, list[str]]:
     """
     Extract keyframes for all scenes.
@@ -279,6 +284,7 @@ def extract_all_scenes(
             max_edge=max_edge,
             jpeg_quality=jpeg_quality,
             shared_boundary_anchor=shared_boundary_anchor,
+            adaptive=adaptive,
         )
 
     os.makedirs(output_dir, exist_ok=True)

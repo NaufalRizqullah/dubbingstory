@@ -244,6 +244,7 @@ def cmd_segment(args, cfg):
         max_edge=getattr(cfg, "keyframes_max_edge", 768),
         jpeg_quality=getattr(cfg, "keyframes_jpeg_quality", 88),
         shared_boundary_anchor=bool(getattr(cfg, "keyframes_shared_boundary_anchor", True)),
+        adaptive=getattr(cfg, "keyframes_adaptive", True),
     )
 
     # Save segment manifest
@@ -1081,6 +1082,7 @@ def main():
     p_run.add_argument("--voice-en", type=str, default=None, help="Specific voice name/ID for English")
     p_run.add_argument("--speech-coverage", type=float, default=None, help="Target ratio of narration time vs video time (e.g. 0.85)")
     p_run.add_argument("--ratio", nargs="+", default=None, help="Output ratios (16:9, 9:16)")
+    p_run.add_argument("--disable-adaptive-keyframes", action="store_true", help="Disable adaptive keyframe count capping")
     p_run.add_argument(
         "--mode", type=str, default="full",
         choices=["full", "summary"],
@@ -1213,6 +1215,7 @@ def main():
         help="Compute type for Faster-Whisper (float16, int8, etc.). "
              "Overrides config.whisper.compute_type.",
     )
+    p_ingest.add_argument("--disable-adaptive-keyframes", action="store_true", help="Disable adaptive keyframe count capping")
 
     # ── segment ───────────────────────────────────────────────────────────
     p_segment = subparsers.add_parser("segment", help="Detect scenes + keyframes")
@@ -1221,6 +1224,7 @@ def main():
         "--max-keyframes", type=int, default=None,
         help="Max keyframes per scene (default: 3). Lower = faster."
     )
+    p_segment.add_argument("--disable-adaptive-keyframes", action="store_true", help="Disable adaptive keyframe count capping")
     p_segment.add_argument(
         "--min-scene-duration", type=float, default=None,
         help="Minimum scene duration in seconds (default: 2.0). Higher = fewer scenes."
@@ -1297,6 +1301,8 @@ def main():
         cfg.narration_style = args.style
     if hasattr(args, "speech_coverage") and args.speech_coverage is not None:
         cfg.narration_speech_coverage = args.speech_coverage
+    if hasattr(args, "disable_adaptive_keyframes") and args.disable_adaptive_keyframes:
+        cfg.keyframes_adaptive = False
     if hasattr(args, "engine") and args.engine:
         cfg.tts_engine = args.engine
     if hasattr(args, "asr_model") and args.asr_model:
