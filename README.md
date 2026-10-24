@@ -10,7 +10,7 @@ Terinspirasi dari video repair Pakistan di Facebook yang di-dubbing dan dinarasi
 
 ## ✨ Fitur
 
-- 🎥 **Video Ingest** — Mendukung file lokal, URL YouTube, dan film bersubtitle.
+- 🎥 **Video Ingest** — File lokal, YouTube, serta adapter URL/share link Douyin dan Xiaohongshu/RedNote melalui yt-dlp. Ketersediaan unduhan tetap mengikuti akses publik dan dukungan extractor platform.
 - ✂️ **Auto Scene Detection** — Split video per scene otomatis menggunakan PySceneDetect.
 - 🖼️ **Keyframe Extraction** — Ekstrak frame representatif per scene.
 - 🧠 **Dual LLM Architecture** — Memisahkan tugas *Vision* (melihat adegan) dan *Text* (menulis narasi) demi keseimbangan kualitas dan biaya.
@@ -21,6 +21,8 @@ Terinspirasi dari video repair Pakistan di Facebook yang di-dubbing dan dinarasi
 - 🎙️ **TTS Dubbing** — Dukungan Text-to-Speech online menggunakan **Edge TTS** secara bawaan untuk stabilitas tinggi di cloud, serta dukungan TTS offline dengan **Piper**. Dilengkapi fitur override suara via argumen `--voice-id` dan `--voice-en`.
 - 🎬 **Video Render** — Render video final dengan mix audio dan subtitle (opsional) untuk format 16:9 & 9:16.
 - ✂️ **Highlight Recap Mode** — Fitur untuk merangkum video panjang menjadi video pendek berisi momen-momen terpenting (gunakan `--mode summary`).
+- 📱 **Native Storytelling** — `--mode full --ratio source` mempertahankan komposisi dan timeline video, dengan validasi durasi narasi.
+- 💬 **Animated Captions** — Word-by-word atau karaoke dari timing kata TTS/forced alignment; SRT tetap tersedia, ASS dapat di-burn ke MP4.
 
 ---
 
@@ -76,6 +78,16 @@ dubbingstory render --project video --ratio 16:9 9:16
 
 ## 🧠 Bagaimana Pipa Ini Bekerja?
 
+Untuk video vertikal yang editing-nya sudah selesai, gunakan workflow native:
+
+```bash
+dubbingstory run --input video.mp4 --mode full --lang id --engine edge --ratio source --subtitle-style karaoke --burn-subtitles
+```
+
+Pilihan `source` dan caption animasi mengaktifkan fitting narasi yang ketat: narasi yang terlalu panjang diringkas dan disintesis ulang secara terbatas, lalu gagal dengan pesan jelas jika masih tidak muat. Video tidak dipotong atau dipercepat untuk menyesuaikan suara. Gunakan `--narration-fit error` untuk menghentikan proses tanpa rewrite.
+
+Lihat [panduan native storytelling, konfigurasi subtitle, dan pengujian Kaggle](docs/native-storytelling.md) untuk instalasi opsional alignment, ingest platform, output files, serta batas kompatibilitas.
+
 DubbingStory membedah dan memproses video Anda secara otomatis melalui beberapa tahapan cerdas, khususnya saat Anda menggunakan **Mode Summary (Ringkasan)**:
 
 1. **Pemotongan Visual (Scene Detection):** Algoritma akan menonton video dari awal hingga akhir dan mendeteksi perubahan drastis pada kamera (*camera cuts*). Video 30 menit mungkin akan terpecah menjadi ~150 adegan (*scenes*). *(Anda dapat mengatur parameter kecepatan seperti `--min-scene-duration` dan `--scene-threshold` untuk mengurangi jumlah potongan kecil).*
@@ -107,7 +119,11 @@ Jalankan seluruh proses dari awal sampai akhir.
 | `--style` | `viral_fb` | Gaya narasi (`viral_fb`, `documentary`, `technical`, `calm_educational`). |
 | `--lang` | `id en` | Bahasa target narasi. |
 | `--engine` | `edge` | Mesin TTS yang digunakan (`edge`). |
-| `--ratio` | `16:9` | Rasio aspek keluaran video (misal: `16:9 9:16`). |
+| `--ratio` | `16:9` | Pilih `source` untuk mempertahankan komposisi; rasio tetap `16:9`, `9:16`, `1:1`, `4:3` juga tersedia. |
+| `--narration-fit` | `legacy` | `rewrite` atau `error` untuk validasi overflow; native/animasi otomatis memakai `rewrite` jika tidak dioverride. |
+| `--subtitle-style` | `classic` | `classic`, `word`, atau `karaoke`; SRT tetap dihasilkan. |
+| `--word-alignment` | `auto` | Metadata kata Edge, atau optional `whisperx`; tidak membagi durasi kata secara rata. |
+| `--burn-subtitles` | dari config | Burn caption; `--no-burn-subtitles` hanya mengekspor file subtitle. |
 | `--vision-provider` | `gemini` | Pilihan API Vision (`gemini` atau `openai` untuk vLLM/Qwen lokal). |
 | `--vision-model` | - | Override nama model jika menggunakan `--vision-provider openai`. |
 | `--max-keyframes` | `7` | Maks keyframe per scene untuk analisis vision. Turunkan (3-5) untuk lebih cepat. |

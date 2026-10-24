@@ -100,6 +100,52 @@ def generate_srt(
     return output_path
 
 
+def generate_srt_from_words(
+    words: list[dict], output_path: str, max_words: int = 8,
+    max_chars_per_line: int = 42,
+) -> str:
+    """Create compatible SRT blocks using measured first/last word boundaries.
+
+    This additive entry point is used when word alignment exists. The original
+    segment-based generator remains available for legacy projects without it.
+    Pauses and scene transitions split blocks rather than filling their gaps.
+    """
+    from dubbingstory.tts.word_alignment import validate_word_timings
+
+    if max_words < 1 or max_chars_per_line < 1:
+        raise ValueError("Subtitle word and line limits must be positive.")
+    measured = validate_word_timings(words)
+    blocks: list[list[dict]] = []
+    current: list[dict] = []
+    for word in measured:
+        candidate_text = " ".join(item["text"] for item in current + [word])
+        if current and (
+            len(current) >= max_words
+            or len(candidate_text) > 2 * max_chars_per_line
+            or word["start"] - current[-1]["end"] > 0.65
+            or word.get("scene_id") != current[-1].get("scene_id")
+        ):
+            blocks.append(current)
+            current = []
+        current.append(word)
+        if word["text"].endswith((".", "!", "?", "。", "！", "？")):
+            blocks.append(current)
+            current = []
+    if current:
+        blocks.append(current)
+    entries = []
+    for index, block in enumerate(blocks, 1):
+        label = _wrap_text(" ".join(word["text"] for word in block), max_chars_per_line)
+        entries.append(
+            f"{index}\n{_format_srt_time(block[0]['start'])} --> "
+            f"{_format_srt_time(block[-1]['end'])}\n{label}\n"
+        )
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as output:
+        output.write("\n".join(entries))
+    return output_path
+
+
 def _split_text_for_subtitle(text: str, max_chars: int = 42) -> list[str]:
     """
     Split text into subtitle-friendly blocks.

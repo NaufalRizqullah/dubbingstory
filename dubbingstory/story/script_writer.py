@@ -370,6 +370,59 @@ def _maybe_rewrite(
     return narration, qa
 
 
+def shorten_for_measured_duration(
+    segment: dict,
+    *,
+    language: str,
+    measured_duration: float,
+    available_duration: float,
+    cfg,
+    evidence: list[dict] | None = None,
+) -> dict:
+    """Shorten one beat after measuring TTS; never invent a replacement fallback.
+
+    The caller bounds retries and measures the replacement audio again. Existing
+    language validation, narration client and selected style remain authoritative.
+    """
+    original = str(segment.get("text", "")).strip()
+    if not original or available_duration <= 0 or measured_duration <= 0:
+        raise ValueError("A nonempty beat and positive measured/window durations are required")
+    target_words = max(1, int(len(original.split()) * available_duration / measured_duration * 0.88))
+    style = str(getattr(cfg, "narration_style", "natural") or "natural")
+    analyzer, model = _client(cfg)
+    original_claims = [str(value) for value in segment.get("claims", []) or []]
+    prompt = (
+        "Shorten this already approved narration beat to fit its measured TTS window. "
+        "Preserve chronological meaning, the visible action, uncertainty, and the selected style. "
+        "Remove secondary detail rather than adding events, motives, outcomes or claims. "
+        "Do not introduce facts absent from the original narration and supplied visual evidence. "
+        "Keep a relevant opening hook only when this beat already has one. "
+        "Return JSON with text and retained_claim_indices (zero-based indices into original_claims). "
+        "Return only a complete, natural spoken sentence or phrase, no ellipsis or stage directions.\n"
+        f"Language: {language}\nMaximum words: {target_words}\n"
+        f"Measured audio: {measured_duration:.3f}s; available: {available_duration:.3f}s\n"
+        f"Style: {json.dumps(_style_config(cfg, style), ensure_ascii=False)}\n"
+        f"Original: {json.dumps(original, ensure_ascii=False)}\n"
+        f"original_claims: {json.dumps(original_claims, ensure_ascii=False)}\n"
+        f"Visual evidence: {json.dumps(evidence or [], ensure_ascii=False)[:16000]}"
+    )
+    payload = _call_json(analyzer, model, prompt, temperature=0.15,
+                         language=language, task_name="measured-duration-rewrite")
+    if not isinstance(payload, dict):
+        raise ValueError("Duration rewrite must return an object")
+    text = str(payload.get("text", "") or "").strip()
+    if not text or len(text.split()) > target_words or text == original:
+        raise ValueError(f"Duration rewrite did not produce a shorter beat within {target_words} words")
+    indices = payload.get("retained_claim_indices", [])
+    if not isinstance(indices, list) or any(type(i) is not int or not 0 <= i < len(original_claims) for i in indices):
+        raise ValueError("Duration rewrite returned invalid claim references")
+    revised = dict(segment)
+    revised.update(text=text, word_count=len(text.split()),
+                   claims=[original_claims[i] for i in dict.fromkeys(indices)],
+                   duration_fit_rewritten=True)
+    return revised
+
+
 def _generate(
     *,
     storyboard: dict,

@@ -147,6 +147,8 @@ narration:
 # ── TTS ──────────────────────────────────────────────────────────────────────
 tts:
   engine: "edge"                    # "edge" | "azure" | "piper" | "chirp"
+  narration_fit: "legacy"           # native/animated CLI options promote this to "rewrite"
+  fit_retries: 2                    # Bounded per-beat rewrite + resynthesis attempts
   use_timeline_scheduler: true       # V2: do not pad every short sentence to full scene length
   max_speedup: 1.12                 # Gentle safety fit; rewrite text instead of extreme speed
   min_gap: 0.20                     # Minimum separation between adjacent narration beats
@@ -177,8 +179,34 @@ tts:
 
 # ── Render ───────────────────────────────────────────────────────────────────
 render:
-  ratios: ["16:9"]                  # Output ratios: "16:9", "9:16", or both
+  ratios: ["16:9"]                  # "source" preserves geometry; fixed ratios remain available
   audio_strategy: "dynamic_duck"    # "dynamic_duck" | "duck" | "replace" | "mute_original"
   original_volume: 0.15             # Volume level for original audio when ducking
+  narration_volume: 1.0
+  duck_threshold: 0.025
+  duck_ratio: 8.0
+  duck_attack_ms: 20.0
+  duck_release_ms: 350.0
   burn_subtitles: false             # Burn subtitles into video
   video_quality_crf: 20
+
+# Animated caption styling. SRT remains available for every language.
+subtitle:
+  style: "classic"                 # "classic" | "word" | "karaoke"
+  alignment: "auto"                # Edge word metadata first, otherwise optional WhisperX
+  alignment_device: "cpu"          # "cuda" can be selected on Kaggle
+  alignment_model: null             # null uses the aligner's model for the narration language
+  alignment_min_score: 0.05         # Reject low-confidence forced-alignment words
+  font_name: "DejaVu Sans"
+  font_path: null                   # Optional explicit TTF/OTF path for reproducible layout
+  font_size: 64                     # Pixels at reference width 1080; scales with output width
+  font_color: "#FFFFFF"
+  active_color: "#FFE600"
+  outline_color: "#000000"
+  outline: 3
+  position: "bottom"               # "bottom" | "center" | "top"
+  animation: "pop"                 # "none" | "pop" | "fade" | "scale"
+  safe_margin_x: 0.08              # Fraction of display width, on each side
+  safe_margin_y: 0.18              # Fraction of display height, at top and bottom
+  max_words: 5
+  pop_scale: 1.12

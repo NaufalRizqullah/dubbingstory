@@ -11,6 +11,34 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [Unreleased]
+
+### Added
+- Native full-video workflow through `--ratio source`, source-derived timeline metadata, and `--narration-fit rewrite|error` with bounded per-beat rewrite/re-synthesis.
+- Additive TTS metadata interface and Edge word-boundary capture; optional WhisperX alignment for Piper/other engines (`.[alignment]`, WhisperX 3.8.6+ for Indonesian and disabled interpolation).
+- Versioned word-timing artifacts bound to final narration/audio hashes, reusable ASS word-by-word and active-word karaoke captions, configurable animations/fonts/colors/safe margins, and `--subtitle-style`/`--word-alignment`/`--burn-subtitles` options.
+- Shared yt-dlp ingestion for YouTube, Douyin, and Xiaohongshu/RedNote with URL normalization, source identity, reusable validated assets, and classified download errors. Platform support remains conditional on public availability; no authentication/DRM bypass was added.
+- Offline regression tests and a Kaggle validation guide for native rendering, TTS fitting, word timing, subtitles, URL routing, and legacy behavior.
+
+### Changed
+- Native/animated workflows validate complete speech before rendering; legacy CLI defaults remain available.
+- Animated subtitles use measured boundaries rather than equal-duration word allocation. Existing SRT output is retained and refreshed from final speech timing.
+- Audio mixing honors the original-volume setting during dynamic ducking, handles sources without audio, and pads audio to retain the video timeline.
+- Rendering combines required visual filters in one video-encoding stage; compatible video without visual filtering can be stream-copied.
+- Automatic URL project names include source identity. Existing projects remain accessible through explicit `--project`.
+- Declared Edge TTS in both installation manifests and kept forced alignment in an optional extra.
+
+### Fixed
+- Full-mode subtitles no longer rely only on pre-TTS planned timestamps when actual speech placements are available.
+- Local subtitle discovery uses the original input basename before the project copy is renamed to `source.mp4`.
+- Summary audio volume can be set to zero; FFmpeg test discovery no longer requires a Unix shell.
+- Partial legacy TTS keeps the complete narration script for retry and records partial coverage instead of claiming complete audio.
+- Strict timelines use video stream/packet duration instead of a potentially longer container/audio duration; classic subtitle font defaults remain unchanged.
+
+### Validation status
+- Tests and rendering were not executed on the development computer at the user's request; run the documented suite in Kaggle before treating this as a validated release.
+- A metadata-only probe with installed yt-dlp `2026.06.21.235142` did not resolve the supplied RedNote example (direct host unsupported; Xiaohongshu alias returned an extractor error). No successful live download is claimed.
+
 ## [0.8.0] - 2026-08-30
 
 ### Added

@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -122,7 +123,7 @@ class StorytellingV2Tests(unittest.TestCase):
         self.assertNotIn("component", fallback)
         self.assertIn("Komponen", fallback)
 
-    @unittest.skipUnless(subprocess.call(["sh", "-c", "command -v ffmpeg >/dev/null && command -v ffprobe >/dev/null"]) == 0, "ffmpeg unavailable")
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg unavailable")
     def test_timeline_canvas_keeps_video_length_without_per_scene_padding(self):
         with tempfile.TemporaryDirectory() as td:
             tone1 = os.path.join(td, "a.wav")
@@ -144,7 +145,7 @@ class StorytellingV2Tests(unittest.TestCase):
             )
             self.assertAlmostEqual(_get_audio_duration(out), 3.0, delta=0.08)
 
-    @unittest.skipUnless(subprocess.call(["sh", "-c", "command -v ffmpeg >/dev/null"]) == 0, "ffmpeg unavailable")
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg unavailable")
     def test_dynamic_duck_filter_executes(self):
         with tempfile.TemporaryDirectory() as td:
             video = os.path.join(td, "video.mp4")

@@ -197,6 +197,9 @@ def build_narration_plan(
     base_coverage = float(getattr(cfg, "narration_speech_coverage", 0.84) or 0.84)
     min_wpm = float(getattr(cfg, "narration_min_wpm", 135) or 135)
     max_wpm = float(getattr(cfg, "narration_max_wpm", 175) or 175)
+    strict_fit = getattr(cfg, "tts_narration_fit", "legacy") != "legacy"
+    source_duration = float(getattr(cfg, "narration_source_duration", 0) or 0) if mode == "full" else 0.0
+    min_gap = max(0.0, float(getattr(cfg, "tts_min_gap", 0.2))) if strict_fit else 0.0
 
     roles = _scene_role_map(story_plan)
     matched_specs = _matched_group_specs(scenes, story_beats, match_report) if mode == "summary" else []
@@ -224,13 +227,21 @@ def build_narration_plan(
             timeline_end = timeline_start + duration
             cumulative = timeline_end
         else:
-            timeline_start = float(first.get("start_time", cumulative) or cumulative)
+            timeline_start = float(first.get("start_time", cumulative))
             source_end = float(last.get("end_time", timeline_start) or timeline_start)
-            duration = max(
-                0.1,
-                source_end - timeline_start,
-                sum(max(0.1, float(scene.get("duration", 0) or 0.1)) for scene in group),
-            )
+            if strict_fit and source_duration > 0:
+                if timeline_start < 0 or timeline_start >= source_duration or timeline_start < cumulative - 0.01:
+                    raise ValueError(f"Invalid or overlapping source timeline for narration beat {beat_id}")
+                source_end = min(source_end, source_duration)
+                if source_end <= timeline_start:
+                    raise ValueError(f"No source time is available for narration beat {beat_id}")
+                duration = source_end - timeline_start
+            else:
+                duration = max(
+                    0.1,
+                    source_end - timeline_start,
+                    sum(max(0.1, float(scene.get("duration", 0) or 0.1)) for scene in group),
+                )
             timeline_end = timeline_start + duration
             cumulative = timeline_end
 
@@ -238,6 +249,13 @@ def build_narration_plan(
         target_words = max(5, round(duration * target_wpm / 60.0 * coverage))
         min_words = max(4, round(duration * min_wpm / 60.0 * max(0.48, coverage - 0.12)))
         max_words = max(target_words + 3, round(duration * max_wpm / 60.0 * min(1.0, coverage + 0.10)))
+        if strict_fit:
+            # Leave room for natural separation; short beats must not inherit a
+            # fixed minimum word count which is physically impossible to speak.
+            speech_window = max(0.0, duration - (min_gap if index else 0.0))
+            max_words = max(1, int(speech_window * max_wpm / 60.0))
+            target_words = min(max_words, max(1, round(speech_window * target_wpm / 60.0 * coverage)))
+            min_words = min(target_words, max(0, int(speech_window * min_wpm / 60.0 * max(0.48, coverage - 0.12))))
 
         reasons: list[str] = []
         evidence_fallback: list[str] = []
@@ -307,6 +325,8 @@ def build_narration_plan(
         total_duration = sum(float(e["available_duration"]) for e in entries)
     else:
         total_duration = max((float(e.get("timeline_end", 0) or 0) for e in entries), default=0.0)
+        if strict_fit and source_duration > 0:
+            total_duration = source_duration
     total_target_words = sum(int(e["target_words"]) for e in entries)
     return {
         "mode": mode,

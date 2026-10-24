@@ -54,6 +54,29 @@ class BaseTTSEngine(ABC):
         """
         ...
 
+    def synthesize_with_metadata(
+        self,
+        text: str,
+        output_path: str,
+        language: str = "id",
+        voice_id: str | None = None,
+        speaking_rate: float = 1.0,
+    ) -> dict:
+        """Optional word timing extension; preserve the existing audio-only API.
+
+        Timing is local to the returned audio, in seconds. Engines without
+        alignment support deliberately return no timings, allowing the caller
+        to align the final waveform instead of inventing word boundaries.
+        """
+        audio_path = self.synthesize(
+            text, output_path, language, voice_id, speaking_rate
+        )
+        return {
+            "audio_path": audio_path,
+            "word_timings": [],
+            "timing_source": None,
+        }
+
     @abstractmethod
     def get_engine_name(self) -> str:
         """Return the engine name."""

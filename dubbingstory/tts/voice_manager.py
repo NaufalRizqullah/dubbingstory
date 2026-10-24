@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import glob
 import json
+import math
 import os
 import re
 import shutil
@@ -108,16 +109,19 @@ def generate_all_audio(
     script_prefix: str = "script_",
     audio_prefix: str = "audio_",
     segment_durations: dict[str, float] | None = None,
+    timeline_duration: float | None = None,
+    timeline_kind: str = "source",
+    timeline_source_path: str | None = None,
 ) -> dict[str, dict]:
     """Generate TTS for every language script.
 
     V2 behavior
     -----------
     If ``{script_prefix}{lang}.json`` exists and contains timeline information,
-    a timeline scheduler is used.  Each TTS clip is synthesized at its natural
-    length, gently sped up only when it exceeds its planned window, and then
-    placed at ``timeline_start`` on a full-length silent canvas.  Short speech
-    clips are *not* padded to the duration of their scene.
+    a timeline scheduler is used. Each TTS clip is measured and placed on a
+    full-length silent canvas. Strict fitting rewrites or rejects speech that
+    exceeds its visual window; only legacy fitting permits bounded speedup.
+    Short speech clips are *not* padded to the duration of their scene.
 
     Legacy behavior
     ---------------
@@ -135,6 +139,11 @@ def generate_all_audio(
         os.remove(fail_log_path)
 
     script_files = sorted(glob.glob(os.path.join(scripts_dir, f"{script_prefix}*.txt")))
+    requested_languages = getattr(cfg, "requested_languages", None)
+    if requested_languages is not None:
+        requested_languages = set(requested_languages)
+        script_files = [path for path in script_files
+                        if os.path.basename(path)[len(script_prefix):-len(".txt")] in requested_languages]
     if not script_files:
         print(f"   ⚠️ No script files found matching '{script_prefix}*.txt' in scripts directory.")
         return {}
@@ -149,22 +158,93 @@ def generate_all_audio(
         structured_path = os.path.join(scripts_dir, f"{script_prefix}{lang}.json")
         structured = _load_structured_script(structured_path) if os.path.exists(structured_path) else None
 
-        if structured and use_scheduler and _has_timeline(structured["segments"]):
+        animated = str(getattr(cfg, "subtitle_style", "classic")) in {"word", "karaoke"}
+        strict = str(getattr(cfg, "tts_narration_fit", "legacy")) != "legacy" or animated
+        output_audio_path = os.path.join(audio_dir, f"{audio_prefix}{lang}.wav")
+        manifest_path = os.path.join(audio_dir, f"{audio_prefix}{lang}.manifest.json")
+        # Invalidate completion proof for every attempt, including legacy runs.
+        # A failed provider call must not leave yesterday's complete manifest.
+        with open(manifest_path, "w", encoding="utf-8") as handle:
+            json.dump({"schema_version": 1, "status": "failed", "language": lang,
+                       "strict_timing_validated": False}, handle, indent=2)
+        # Invalidate derived outputs before attempting synthesis. If a provider
+        # fails, a later render must not silently reuse yesterday's voice track.
+        if strict:
+            for stale_path in [output_audio_path,
+                               os.path.join(scripts_dir, f"{script_prefix}{lang}.words.json"),
+                               *glob.glob(os.path.join(scripts_dir, f"{script_prefix}{lang}*.ass"))]:
+                if os.path.isfile(stale_path):
+                    os.remove(stale_path)
+        if strict and (not structured or not _has_timeline(structured["segments"])):
+            raise ValueError("Native fitting/animated captions require structured narration with timeline windows; run narrate first")
+        if structured and (use_scheduler or strict) and _has_timeline(structured["segments"]):
+            evidence_path = os.path.join(os.path.dirname(scripts_dir), "storyboard.json")
+            evidence = {}
+            if os.path.exists(evidence_path):
+                with open(evidence_path, encoding="utf-8") as handle:
+                    evidence = json.load(handle)
             result = _generate_timeline_audio(
                 engine=engine,
                 language=lang,
                 segments=structured["segments"],
-                total_duration=structured.get("total_duration"),
-                output_path=os.path.join(audio_dir, f"{audio_prefix}{lang}.wav"),
+                total_duration=timeline_duration if timeline_duration is not None else structured.get("total_duration"),
+                output_path=output_audio_path,
                 audio_dir=os.path.join(audio_dir, lang),
                 speaking_rate=speaking_rate,
                 cfg=cfg,
                 fail_log_path=fail_log_path,
+                evidence=evidence.get("scenes", []),
             )
             if result:
+                from dubbingstory.tts.word_alignment import build_word_payload, file_sha256, text_sha256
+                final_text = "\n".join(item["text"] for item in result["placements"])
+                # Validate the complete, rendered waveform before publishing
+                # rewritten scripts or a successful synthesis manifest.
+                payload = None
+                if animated:
+                    payload = build_word_payload(
+                        result["word_timings"], result["concat_path"], final_text,
+                        lang, placements=result["placements"],
+                    )
+                    payload.update(timeline_kind=timeline_kind, total_duration=result["timeline_duration"])
+                if result["complete_coverage"]:
+                    structured["segments"] = result["final_segments"]
+                    structured["total_duration"] = result["timeline_duration"]
+                    structured["timeline_kind"] = timeline_kind
+                    with open(structured_path, "w", encoding="utf-8") as handle:
+                        json.dump(structured, handle, ensure_ascii=False, indent=2)
+                    with open(script_path, "w", encoding="utf-8") as handle:
+                        for segment in result["final_segments"]:
+                            handle.write(f"[{segment['scene_id']}] {segment['text']}\n\n")
+                result["timeline_kind"] = timeline_kind
+                result["language"] = lang
+                result["engine"] = engine_name
+                result["speaking_rate"] = speaking_rate
+                result["status"] = "complete" if result["complete_coverage"] else "partial"
+                result["audio_sha256"] = file_sha256(result["concat_path"])
+                result["text_sha256"] = text_sha256(final_text)
+                if timeline_source_path and os.path.isfile(timeline_source_path):
+                    result["source_sha256"] = file_sha256(timeline_source_path)
+                elif strict and timeline_source_path:
+                    raise ValueError("Source video disappeared during synthesis; regenerate dub with the source available")
+                if animated:
+                    words_path = os.path.join(scripts_dir, f"{script_prefix}{lang}.words.json")
+                    with open(words_path, "w", encoding="utf-8") as handle:
+                        json.dump(payload, handle, ensure_ascii=False, indent=2)
+                    result["word_timings_path"] = words_path
+                else:
+                    # A new synthesis invalidates previously generated captions.
+                    for suffix in (".words.json", ".ass"):
+                        stale_path = os.path.join(scripts_dir, f"{script_prefix}{lang}{suffix}")
+                        if os.path.isfile(stale_path):
+                            os.remove(stale_path)
+                result["manifest_path"] = manifest_path
+                with open(manifest_path, "w", encoding="utf-8") as handle:
+                    json.dump({"schema_version": 1, **result}, handle, ensure_ascii=False, indent=2)
                 results[lang] = result
+                marker = "✅" if result["status"] == "complete" else "⚠️ Partial"
                 print(
-                    f"   ✅ {lang.upper()} timeline audio: {result['concat_path']} "
+                    f"   {marker} {lang.upper()} timeline audio: {result['concat_path']} "
                     f"(speech={result.get('speech_duration', 0):.1f}s / "
                     f"timeline={result.get('timeline_duration', 0):.1f}s)"
                 )
@@ -181,6 +261,8 @@ def generate_all_audio(
         os.makedirs(lang_audio_dir, exist_ok=True)
         segment_paths: list[str] = []
         final_durations: dict[str, float] = {}
+        failed_segment_ids: list[str] = []
+        spoken_text: list[str] = []
 
         for seg in segments:
             scene_id = seg["scene_id"]
@@ -207,20 +289,37 @@ def generate_all_audio(
                 else:
                     segment_paths.append(seg_audio)
                     final_durations[scene_id] = _get_audio_duration(seg_audio)
+                spoken_text.append(seg["text"])
                 print(f"      ✅ {scene_id}: {len(seg['text'].split())} words")
             except Exception as exc:
+                failed_segment_ids.append(scene_id)
                 _log_tts_failure(fail_log_path, lang, scene_id, exc)
                 print(f"      ❌ {scene_id}: {exc}")
 
         if segment_paths:
+            from dubbingstory.tts.word_alignment import file_sha256, text_sha256
             concat_path = os.path.join(audio_dir, f"{audio_prefix}{lang}.wav")
             _concatenate_audio(segment_paths, concat_path)
-            results[lang] = {
+            result = {
                 "concat_path": concat_path,
                 "durations": final_durations,
                 "timeline_scheduled": False,
+                "strict_timing_validated": False,
+                "fit_policy": "legacy",
+                "complete_coverage": not failed_segment_ids,
+                "failed_segment_ids": failed_segment_ids,
+                "status": "partial" if failed_segment_ids else "complete",
+                "language": lang,
+                "engine": engine_name,
+                "audio_sha256": file_sha256(concat_path),
+                "text_sha256": text_sha256("\n".join(spoken_text)),
+                "manifest_path": manifest_path,
             }
-            print(f"   ✅ {lang.upper()} audio: {concat_path}")
+            with open(manifest_path, "w", encoding="utf-8") as handle:
+                json.dump({"schema_version": 1, **result}, handle, ensure_ascii=False, indent=2)
+            results[lang] = result
+            marker = "✅" if result["status"] == "complete" else "⚠️ Partial"
+            print(f"   {marker} {lang.upper()} audio: {concat_path}")
 
     return results
 
@@ -282,28 +381,56 @@ def _generate_timeline_audio(
     speaking_rate: float,
     cfg,
     fail_log_path: str,
+    evidence: list[dict] | None = None,
 ) -> dict | None:
     os.makedirs(audio_dir, exist_ok=True)
     max_speedup = float(getattr(cfg, "tts_max_speedup", 1.12) if cfg else 1.12)
     min_gap = max(0.0, float(getattr(cfg, "tts_min_gap", 0.20) if cfg else 0.20))
     normalize = bool(getattr(cfg, "tts_normalize_loudness", True) if cfg else True)
+    fit_policy = str(getattr(cfg, "tts_narration_fit", "legacy") or "legacy")
+    if fit_policy not in {"legacy", "rewrite", "error"}:
+        raise ValueError("tts.narration_fit must be legacy, rewrite or error")
+    animated = str(getattr(cfg, "subtitle_style", "classic")) in {"word", "karaoke"}
+    strict = fit_policy != "legacy" or animated
+    if animated and fit_policy == "legacy":
+        fit_policy = "error"
+    retry_limit = max(0, min(5, int(getattr(cfg, "tts_fit_retries", 2))))
 
+    if not segments:
+        if strict:
+            raise ValueError("No narration segments were supplied")
+        return None
     timeline_end = max(
         float(item.get("timeline_end", item.get("end_time", 0)) or 0)
         for item in segments
     )
     requested_total = float(total_duration or 0)
-    timeline_duration = max(timeline_end, requested_total, 0.1)
+    if not math.isfinite(requested_total) or not math.isfinite(timeline_end):
+        raise ValueError("Narration timeline durations must be finite")
+    timeline_duration = requested_total if strict and requested_total > 0 else max(timeline_end, requested_total, 0.1)
+    if strict and requested_total <= 0:
+        raise ValueError("Native fitting requires the measured video timeline duration")
 
     placements: list[dict] = []
     durations: dict[str, float] = {}
     previous_end = 0.0
     speech_total = 0.0
+    final_segments = []
+    all_words = []
+    expected_segment_ids = [str(segment.get("scene_id", f"segment_{index + 1:03d}"))
+                            for index, segment in enumerate(segments)]
+    if strict and len(set(expected_segment_ids)) != len(expected_segment_ids):
+        raise ValueError("Strict narration requires a unique scene_id for every beat")
+    failed_segment_ids = []
+    evidence_map = {str(item.get("scene_id")): item for item in evidence or []}
 
     for index, seg in enumerate(segments):
         scene_id = str(seg.get("scene_id", f"segment_{index + 1:03d}"))
         text = str(seg.get("text", "") or "").strip()
         if not text:
+            if strict:
+                raise ValueError(f"{scene_id}: narration text is empty")
+            failed_segment_ids.append(scene_id)
             continue
 
         planned_start = max(0.0, float(seg.get("timeline_start", seg.get("start_time", 0)) or 0))
@@ -311,23 +438,49 @@ def _generate_timeline_audio(
             planned_start + 0.1,
             float(seg.get("timeline_end", seg.get("end_time", planned_start + 0.1)) or planned_start + 0.1),
         )
+        if not math.isfinite(planned_start) or not math.isfinite(planned_end):
+            raise ValueError(f"{scene_id}: invalid nonfinite narration window")
+        if strict and index and planned_start < float(segments[index - 1].get("timeline_start", segments[index - 1].get("start_time", 0)) or 0):
+            raise ValueError(f"{scene_id}: narration windows must follow video chronology")
         available = max(0.25, planned_end - planned_start)
+        actual_start = max(planned_start, previous_end + (min_gap if placements else 0.0))
+        if strict:
+            planned_end = min(planned_end, timeline_duration)
+            available = planned_end - actual_start
+            if available <= 0:
+                raise ValueError(f"{scene_id}: no speech window remains inside video timeline")
         raw_path = os.path.join(audio_dir, f"{index:03d}_{scene_id}_raw.wav")
 
         try:
-            engine.synthesize(
-                text=text,
-                output_path=raw_path,
-                language=language,
-                speaking_rate=speaking_rate,
-            )
-            actual = _get_audio_duration(raw_path)
-            if actual <= 0:
-                raise RuntimeError(f"Cannot determine synthesized duration: {raw_path}")
+            final_segment = dict(seg)
+            metadata = {}
+            for attempt in range(retry_limit + 1):
+                if animated:
+                    metadata = engine.synthesize_with_metadata(
+                        text=text, output_path=raw_path, language=language, speaking_rate=speaking_rate)
+                else:
+                    engine.synthesize(text=text, output_path=raw_path, language=language, speaking_rate=speaking_rate)
+                actual = _get_audio_duration(raw_path)
+                if actual <= 0:
+                    raise RuntimeError(f"Cannot determine synthesized duration: {raw_path}")
+                if not strict or actual <= available + 0.001:
+                    break
+                if fit_policy != "rewrite" or attempt >= retry_limit:
+                    raise ValueError(
+                        f"{scene_id}: narration {actual:.3f}s exceeds window {available:.3f}s; "
+                        "shorten this beat or use --narration-fit rewrite. Video and speech were not cut."
+                    )
+                from dubbingstory.story.script_writer import shorten_for_measured_duration
+                final_segment = shorten_for_measured_duration(
+                    final_segment, language=language, measured_duration=actual,
+                    available_duration=available, cfg=cfg,
+                    evidence=[evidence_map[sid] for sid in final_segment.get("covers_scene_ids", [scene_id]) if sid in evidence_map],
+                )
+                text = final_segment["text"]
 
             fitted_path = raw_path
             fitted_duration = actual
-            if actual > available + 0.05:
+            if not strict and actual > available + 0.05:
                 fitted_path = os.path.join(audio_dir, f"{index:03d}_{scene_id}_fit.wav")
                 fitted_duration = _align_audio_duration(
                     raw_path,
@@ -342,6 +495,21 @@ def _generate_timeline_audio(
             # shifted slightly instead of overlapping voices.
             actual_start = max(planned_start, previous_end + (min_gap if placements else 0.0))
             actual_end = actual_start + fitted_duration
+            if strict and actual_end > planned_end + 0.001:
+                raise ValueError(f"{scene_id}: fitted narration exceeds its visual window")
+            word_timings = []
+            timing_source = None
+            if animated:
+                from dubbingstory.tts.word_alignment import resolve_word_timings, transform_word_timings
+                local_words, timing_source = resolve_word_timings(
+                    text, fitted_path, language, cfg,
+                    provider_words=metadata.get("word_timings"), provider_source=metadata.get("timing_source"),
+                )
+                word_timings = transform_word_timings(local_words, offset=actual_start, scene_id=scene_id)
+                all_words.extend(word_timings)
+            final_segment.update(text=text, start_time=actual_start, end_time=actual_end,
+                                 measured_duration=fitted_duration, word_count=len(text.split()))
+            final_segments.append(final_segment)
             previous_end = actual_end
             speech_total += fitted_duration
             durations[scene_id] = fitted_duration
@@ -355,6 +523,9 @@ def _generate_timeline_audio(
                     "actual_end": round(actual_end, 3),
                     "speech_duration": round(fitted_duration, 3),
                     "words": len(text.split()),
+                    "text": text,
+                    "word_timings": word_timings,
+                    "timing_source": timing_source,
                 }
             )
             overrun = max(0.0, actual_end - planned_end)
@@ -364,13 +535,18 @@ def _generate_timeline_audio(
                 f"speech={fitted_duration:.2f}s @ {actual_start:.2f}s{suffix}"
             )
         except Exception as exc:
+            failed_segment_ids.append(scene_id)
             _log_tts_failure(fail_log_path, language, scene_id, exc)
             print(f"      ❌ {scene_id}: {exc}")
+            if strict:
+                raise RuntimeError(f"TTS failed for {language}/{scene_id}: {exc}") from exc
 
     if not placements:
         return None
 
     overflow = max(0.0, max(item["actual_end"] for item in placements) - timeline_duration)
+    if strict and overflow > 0.001:
+        raise ValueError(f"Narration exceeds source by {overflow:.3f}s; rendering was stopped")
     if overflow > 0.05:
         print(
             f"   ⚠️ Narration exceeds planned timeline by {overflow:.2f}s. "
@@ -380,12 +556,20 @@ def _generate_timeline_audio(
     # Never create arbitrary per-scene padding.  A single timeline canvas is
     # intentionally as long as the video; silence only exists where no narration
     # is scheduled and original ambience can be heard through dynamic ducking.
-    _render_timeline_canvas(
-        placements=placements,
-        output_path=output_path,
-        total_duration=timeline_duration,
-        normalize_loudness=normalize,
-    )
+    partial_path = os.path.splitext(output_path)[0] + ".synthesizing.wav"
+    try:
+        _render_timeline_canvas(
+            placements=placements,
+            output_path=partial_path,
+            total_duration=timeline_duration,
+            normalize_loudness=normalize,
+        )
+        if strict and abs(_get_audio_duration(partial_path) - timeline_duration) > 0.02:
+            raise ValueError("Rendered narration duration differs from the video timeline")
+        os.replace(partial_path, output_path)
+    finally:
+        if os.path.isfile(partial_path):
+            os.remove(partial_path)
 
     return {
         "concat_path": output_path,
@@ -396,6 +580,13 @@ def _generate_timeline_audio(
         "speech_coverage": round(min(1.0, speech_total / timeline_duration), 4),
         "overflow_seconds": round(overflow, 3),
         "placements": placements,
+        "final_segments": final_segments,
+        "word_timings": all_words,
+        "expected_segment_ids": expected_segment_ids,
+        "failed_segment_ids": failed_segment_ids,
+        "complete_coverage": not failed_segment_ids and len(final_segments) == len(segments),
+        "fit_policy": fit_policy,
+        "strict_timing_validated": strict and not failed_segment_ids and len(final_segments) == len(segments),
     }
 
 

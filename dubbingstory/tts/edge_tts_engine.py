@@ -180,6 +180,69 @@ class EdgeTTSEngine(BaseTTSEngine):
         communicate = edge_tts.Communicate(text, voice, rate=rate)
         await communicate.save(output_path)
 
+    def synthesize_with_metadata(
+        self,
+        text: str,
+        output_path: str,
+        language: str = "id",
+        voice_id: str | None = None,
+        speaking_rate: float = 1.0,
+    ) -> dict:
+        """Capture boundaries from the same request that produces the audio.
+
+        Edge offsets are 100-nanosecond ticks and already include the service's
+        speaking rate. FFmpeg decodes the MP3 normally (including encoder delay);
+        it must not additionally trim, pad, or stretch this waveform here.
+        """
+        voice = voice_id or self.voices.get(language, self.DEFAULT_VOICES["en"])
+        rate = f"{int((speaking_rate - 1.0) * 100):+d}%"
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        mp3_path = output_path + ".tmp.mp3"
+        try:
+            words = asyncio.run(
+                self._async_synthesize_with_metadata(text, voice, rate, mp3_path)
+            )
+            if not os.path.isfile(mp3_path) or os.path.getsize(mp3_path) == 0:
+                raise RuntimeError("Edge-TTS returned no audio.")
+            self._mp3_to_wav(mp3_path, output_path)
+        except Exception as exc:
+            raise RuntimeError(f"Edge-TTS synthesis with metadata failed: {exc}") from exc
+        finally:
+            if os.path.exists(mp3_path):
+                os.remove(mp3_path)
+        return {
+            "audio_path": output_path,
+            "word_timings": words,
+            "timing_source": "edge" if words else None,
+        }
+
+    async def _async_synthesize_with_metadata(
+        self, text: str, voice: str, rate: str, output_path: str
+    ) -> list[dict]:
+        try:
+            communicate = edge_tts.Communicate(
+                text, voice, rate=rate, boundary="WordBoundary"
+            )
+        except TypeError as exc:
+            # Older releases emitted WordBoundary by default and did not expose
+            # the boundary argument. Never treat SentenceBoundary as word data.
+            if "boundary" not in str(exc):
+                raise
+            communicate = edge_tts.Communicate(text, voice, rate=rate)
+        words = []
+        with open(output_path, "wb") as audio:
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    audio.write(chunk["data"])
+                elif chunk["type"] == "WordBoundary":
+                    start = float(chunk["offset"]) / 10_000_000
+                    words.append({
+                        "text": str(chunk["text"]),
+                        "start": start,
+                        "end": start + float(chunk["duration"]) / 10_000_000,
+                    })
+        return words
+
     @staticmethod
     def _mp3_to_wav(mp3_path: str, wav_path: str) -> None:
         """Convert MP3 to WAV using ffmpeg."""

@@ -14,7 +14,8 @@ python-multipart
 jinja2
 
 # TTS (Text-to-Speech)
-edge-tts
+edge-tts>=7.3.1,<8
+# Word alignment for Piper is optional: pip install -e '.[alignment]'
 
 # Optional / advanced
 torch

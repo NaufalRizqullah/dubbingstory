@@ -10,7 +10,7 @@ Inspired by the accurately narrated and dubbed Pakistani repair videos on Facebo
 
 ## ✨ Features
 
-- 🎥 **Video Ingest** — Supports local files, YouTube URLs, and films with subtitles.
+- 🎥 **Video Ingest** — Local files, YouTube, and Douyin/Xiaohongshu/RedNote URL adapters backed by yt-dlp. Download availability depends on public access and the platform extractor.
 - ✂️ **Auto Scene Detection** — Automatically split videos into scenes using PySceneDetect.
 - 🖼️ **Keyframe Extraction** — Extract representative frames per scene.
 - 🧠 **Dual LLM Architecture** — Separates the *Vision* (seeing scenes) and *Text* (writing narration) tasks for optimal quality-to-cost balance.
@@ -21,6 +21,8 @@ Inspired by the accurately narrated and dubbed Pakistani repair videos on Facebo
 - 🎙️ **TTS Dubbing** — Text-to-Speech support powered by **Edge TTS** by default for maximum stability in cloud environments, as well as robust offline support with **Piper**. Customize voices effortlessly using `--voice-id` and `--voice-en` CLI flags.
 - 🎬 **Video Render** — Final video render with audio mix and optional subtitles for 16:9 & 9:16 aspect ratios.
 - ✂️ **Highlight Recap Mode** — Automatically cut and condense long videos into short highlight reels using the `--mode summary` option.
+- 📱 **Native Storytelling** — `--mode full --ratio source` preserves the source composition and timeline with measured narration fitting.
+- 💬 **Animated Captions** — Word-by-word and active-word karaoke using TTS boundaries or optional forced alignment. SRT remains available; ASS can be burned into MP4.
 
 ---
 
@@ -76,6 +78,16 @@ dubbingstory render --project video --ratio 16:9 9:16
 
 ## 🧠 How the Pipeline Works
 
+For an already edited vertical video:
+
+```bash
+dubbingstory run --input video.mp4 --mode full --lang id --engine edge --ratio source --subtitle-style karaoke --burn-subtitles
+```
+
+Native/animated output defaults to bounded narration rewrite and re-synthesis when speech exceeds its visual window. Use `--narration-fit error` to stop instead of rewriting. Video is never cut or sped up to fit speech. `--subtitle-style word` selects individual-word captions; `--word-alignment auto|edge|whisperx` controls timing. `--no-burn-subtitles` exports subtitle files without a video overlay.
+
+See the [native storytelling and Kaggle validation guide](docs/native-storytelling.md) for settings, optional alignment dependencies, source limitations, and output files (Indonesian guide, runnable CLI examples).
+
 DubbingStory automatically dissects and processes your video through several smart stages, particularly when using **Summary Mode (Highlight Recap)**:
 
 1. **Visual Segmentation (Scene Detection):** The algorithm watches the video from start to finish and detects drastic camera angle changes (*cuts*). A 30-minute video might be split into ~150 scenes. *(You can adjust speed optimization parameters like `--min-scene-duration` and `--scene-threshold` to prevent too many micro-cuts).*
@@ -107,7 +119,7 @@ Run the entire process from start to finish.
 | `--style` | `viral_fb` | Narration style (`viral_fb`, `documentary`, `technical`, `calm_educational`). |
 | `--lang` | `id en` | Target languages for narration. |
 | `--engine` | `edge` | TTS Engine to use (`edge`). |
-| `--ratio` | `16:9` | Output video aspect ratios (e.g., `16:9 9:16`). |
+| `--ratio` | `16:9` | `source` preserves composition; fixed `16:9`, `9:16`, `1:1`, `4:3` outputs are also available. |
 | `--vision-provider` | `gemini` | Vision API choice (`gemini` or `openai` for local vLLM/Qwen). |
 | `--vision-model` | - | Override model name if using `--vision-provider openai`. |
 | `--max-keyframes` | `7` | Max keyframes per scene for vision analysis. Lower (3-5) = faster. |

@@ -15,6 +15,7 @@ import argparse
 import os
 import sys
 import json
+import math
 
 from dubbingstory import __version__
 from dubbingstory.config import build_config
@@ -41,12 +42,62 @@ def _resolve_project_name(args) -> str:
     if hasattr(args, "input") and args.input:
         return os.path.splitext(os.path.basename(args.input))[0]
     if hasattr(args, "url") and args.url:
-        # Sanitize URL into a usable project name
-        from urllib.parse import urlparse
-        parsed = urlparse(args.url)
-        slug = parsed.path.strip("/").replace("/", "_")[:50] or "youtube_video"
-        return slug
+        from dubbingstory.ingest.sources import source_project_name
+        return source_project_name(args.url)
     return "untitled"
+
+
+def _strict_output(cfg) -> bool:
+    """Enhanced outputs require a complete, validated narration timeline."""
+    return (
+        "source" in (getattr(cfg, "render_ratios", []) or [])
+        or getattr(cfg, "subtitle_style", "classic") in {"word", "karaoke"}
+        or getattr(cfg, "tts_narration_fit", "legacy") != "legacy"
+    )
+
+
+def _video_timeline_duration(video_path: str, *, required: bool = False) -> float | None:
+    from dubbingstory.ingest.local_video import get_video_metadata
+
+    if not os.path.isfile(video_path):
+        if required:
+            raise FileNotFoundError(f"Source video required for timeline validation: {video_path}")
+        return None
+    metadata = get_video_metadata(video_path)
+    if required:
+        from dubbingstory.ingest.local_video import require_video_timeline
+        metadata = require_video_timeline(video_path, metadata)
+    duration = float(metadata.get("video_duration") or metadata.get("duration") or 0)
+    if not math.isfinite(duration) or duration <= 0:
+        if required:
+            raise ValueError("Cannot determine the source video duration; check the media and FFprobe.")
+        return None
+    return duration
+
+
+def _refresh_speech_subtitles(scripts_dir: str, results: dict, prefix: str = "script_") -> None:
+    """SRT follows completed synthesis, including rewrites and actual placement."""
+    from dubbingstory.story.subtitle_gen import generate_srt, generate_srt_from_words
+
+    for language, result in results.items():
+        subtitle_path = os.path.join(scripts_dir, f"{prefix}{language}.srt")
+        if result.get("word_timings"):
+            generate_srt_from_words(result["word_timings"], subtitle_path)
+            continue
+        segments = result.get("final_segments")
+        if not segments:
+            continue  # Legacy plain-text outputs retain their existing subtitle behavior.
+        placement_map = {item["scene_id"]: item for item in result.get("placements", [])}
+        timed = []
+        for segment in segments:
+            item = dict(segment)
+            placement = placement_map.get(item.get("scene_id"))
+            if placement:
+                item["start_time"] = placement["actual_start"]
+                item["end_time"] = placement["actual_end"]
+                timed.append(item)
+        if timed:
+            generate_srt(timed, subtitle_path)
 
 
 # ==============================================================================
@@ -56,6 +107,13 @@ def _resolve_project_name(args) -> str:
 def cmd_ingest(args, cfg):
     """Download/validate video and read subtitles."""
     from dubbingstory.ingest import local_video, youtube, subtitle_reader
+    from dubbingstory.ingest.sources import download_source, normalize_source_url
+
+    if bool(args.input) == bool(args.url):
+        raise ValueError("Provide exactly one of --input or --url.")
+    if args.url and not getattr(args, "i_have_rights", False):
+        raise ValueError("Tambahkan --i-have-rights untuk mengonfirmasi hak penggunaan video URL.")
+    source = normalize_source_url(args.url) if args.url else None
 
     project_name = _resolve_project_name(args)
     project_dir = _setup_project_dir(cfg, project_name)
@@ -71,15 +129,10 @@ def cmd_ingest(args, cfg):
         print(f"   Source: Local file → {args.input}")
         video_path = local_video.validate_and_copy(args.input, project_dir)
     elif args.url:
-        # YouTube / URL download
-        if not getattr(args, "i_have_rights", False):
-            print("⚠️  Anda harus menambahkan --i-have-rights untuk mengunduh dari URL.")
-            print("   Ini menandakan Anda memiliki hak atas video tersebut.")
-            sys.exit(1)
-
-        print(f"   Source: URL → {args.url}")
+        # All remote sources have already passed the rights gate above.
+        print(f"   Source: {source.provider} → {source.canonical_url}")
         download_q = getattr(args, "quality", None) or getattr(cfg, "ingest_download_height", "1080")
-        video_path = youtube.download_video(
+        video_path = download_source(
             url=args.url,
             output_dir=project_dir,
             download_height=download_q,
@@ -98,13 +151,13 @@ def cmd_ingest(args, cfg):
     # Step 1: Look for local subtitle files (SRT/ASS/VTT alongside video)
     if getattr(cfg, "ingest_read_subtitles", True):
         subtitle_data = subtitle_reader.find_and_read_subtitles(
-            video_path, project_dir
+            args.input or video_path, project_dir
         )
         if subtitle_data:
             context_source = subtitle_data.get("source", "manual")
 
     # Step 2: If no local subs and source is YouTube, try downloading subs
-    if subtitle_data is None and args.url:
+    if subtitle_data is None and source and source.provider == "youtube":
         print("   🌐 No local subtitles — trying YouTube subtitle download...")
         yt_sub_path = youtube.download_subtitles(
             url=args.url,
@@ -162,7 +215,17 @@ def cmd_ingest(args, cfg):
         "context_source": context_source,
         "asr_used": asr_used,
         "status": "ingested",
+        "rights_confirmed": bool(getattr(args, "i_have_rights", False)) if source else None,
     }
+    metadata_path = os.path.join(project_dir, "video_metadata.json")
+    if os.path.exists(metadata_path):
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+        manifest["source"] = {
+            key: metadata[key]
+            for key in ("provider", "source_id", "canonical_url", "request_identity", "sha256")
+            if key in metadata
+        }
     manifest_path = os.path.join(project_dir, "ingest_manifest.json")
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
@@ -371,6 +434,10 @@ def cmd_narrate(args, cfg):
 
     story_plan, story_memory = load_story_artifacts(project_dir, storyboard)
     scenes = storyboard.get("scenes", []) or []
+    if _strict_output(cfg):
+        cfg.narration_source_duration = _video_timeline_duration(
+            os.path.join(project_dir, "source.mp4"), required=True,
+        )
     narration_plan = build_narration_plan(
         storyboard,
         scenes,
@@ -460,17 +527,24 @@ def cmd_dub(args, cfg):
     audio_dir = os.path.join(project_dir, "audio")
     os.makedirs(audio_dir, exist_ok=True)
 
-    voice_manager.generate_all_audio(
+    audio_results = voice_manager.generate_all_audio(
         scripts_dir=scripts_dir,
         audio_dir=audio_dir,
         engine_name=engine_name,
         cfg=cfg,
+        timeline_duration=_video_timeline_duration(
+            os.path.join(project_dir, "source.mp4"), required=_strict_output(cfg),
+        ),
+        timeline_kind="source",
+        timeline_source_path=os.path.join(project_dir, "source.mp4"),
     )
+    if not audio_results and _strict_output(cfg):
+        raise RuntimeError("No narration audio was produced. Generate structured scripts before dubbing.")
+    _refresh_speech_subtitles(scripts_dir, audio_results)
 
     # Backup TTS audio to project dir
-    import glob
     import shutil
-    audio_files = glob.glob(os.path.join(audio_dir, "audio_*.wav"))
+    audio_files = [result["concat_path"] for result in audio_results.values()]
     for audio_path in audio_files:
         basename = os.path.basename(audio_path)
         lang = basename.replace("audio_", "").replace(".wav", "")
@@ -480,6 +554,7 @@ def cmd_dub(args, cfg):
 
     print(f"\n✅ TTS dubbing selesai!")
     print(f"   Audio: {audio_dir}")
+    return audio_results
 
 
 # ==============================================================================
@@ -499,13 +574,16 @@ def cmd_render(args, cfg):
 
     ratios = getattr(cfg, "render_ratios", ["16:9"])
 
-    video_render.render_project(
+    rendered = video_render.render_project(
         project_dir=project_dir,
         ratios=ratios,
         cfg=cfg,
     )
+    if not rendered and _strict_output(cfg):
+        raise RuntimeError("No final videos were rendered. Complete dubbing before rendering.")
 
     print(f"\n✅ Render selesai!")
+    return rendered
 
 
 # ==============================================================================
@@ -948,7 +1026,12 @@ def cmd_summary(args, cfg):
         cfg=cfg,
         script_prefix="summary_script_",
         audio_prefix="summary_audio_",
+        timeline_duration=_video_timeline_duration(summary_video, required=_strict_output(cfg)),
+        timeline_kind="summary",
+        timeline_source_path=summary_video,
     )
+    if not audio_results and _strict_output(cfg):
+        raise RuntimeError("Summary narration did not produce any complete audio.")
 
     for lang, audio_info in audio_results.items():
         backup_path = os.path.join(project_dir, f"backup_tts_summary_{lang}.wav")
@@ -963,7 +1046,7 @@ def cmd_summary(args, cfg):
     ratios = getattr(cfg, "render_ratios", ["16:9"])
     audio_strategy = getattr(cfg, "render_audio_strategy", "dynamic_duck")
     burn_subs = getattr(cfg, "render_burn_subtitles", False)
-    original_volume = float(getattr(cfg, "render_original_volume", 0.15) or 0.15)
+    original_volume = float(getattr(cfg, "render_original_volume", 0.15))
 
     for lang, audio_info in audio_results.items():
         audio_path = audio_info["concat_path"]
@@ -993,7 +1076,7 @@ def cmd_summary(args, cfg):
             )
 
         # Use actual speech placements for subtitle timing in V2.
-        segments = narration.get(lang, [])
+        segments = audio_info.get("final_segments") or narration.get(lang, [])
         placement_map = {
             item["scene_id"]: item
             for item in audio_info.get("placements", [])
@@ -1016,21 +1099,25 @@ def cmd_summary(args, cfg):
                     seg["start_time"], seg["end_time"] = timeline[seg["scene_id"]]
 
         srt_path = os.path.join(scripts_dir, f"summary_script_{lang}.srt")
-        if segments:
+        if audio_info.get("word_timings"):
+            subtitle_gen.generate_srt_from_words(audio_info["word_timings"], srt_path)
+        elif segments:
             subtitle_gen.generate_srt(segments, srt_path)
         else:
             srt_path = None
 
-        # Refresh human-readable script with final speech timestamps.
+        # Preserve the complete script for retry when legacy TTS only produced
+        # some beats; the SRT above still describes the audio actually present.
         txt_path = os.path.join(scripts_dir, f"summary_script_{lang}.txt")
-        with open(txt_path, "w", encoding="utf-8") as f:
-            for seg in segments:
-                f.write(
-                    f"[{seg['scene_id']}] "
-                    f"[{subtitle_gen._format_srt_time(seg.get('start_time', 0))} --> "
-                    f"{subtitle_gen._format_srt_time(seg.get('end_time', 0))}] "
-                    f"{seg['text']}\n\n"
-                )
+        if audio_info.get("complete_coverage", True):
+            with open(txt_path, "w", encoding="utf-8") as f:
+                for seg in segments:
+                    f.write(
+                        f"[{seg['scene_id']}] "
+                        f"[{subtitle_gen._format_srt_time(seg.get('start_time', 0))} --> "
+                        f"{subtitle_gen._format_srt_time(seg.get('end_time', 0))}] "
+                        f"{seg['text']}\n\n"
+                    )
 
         for ratio in ratios:
             ratio_label = ratio.replace(":", "x")
@@ -1046,10 +1133,13 @@ def cmd_summary(args, cfg):
                     original_volume=original_volume,
                     burn_subs=burn_subs,
                     target_ratio=ratio if ratio != "16:9" else None,
+                    cfg=cfg,
                 )
                 print(f"   ✅ {output_path}")
             except Exception as exc:
                 print(f"   ❌ Summary render failed: {exc}")
+                if _strict_output(cfg):
+                    raise
 
     print("\n✅ Summary pipeline selesai!")
 
@@ -1057,6 +1147,61 @@ def cmd_summary(args, cfg):
 # ==============================================================================
 # MAIN
 # ==============================================================================
+
+def _add_caption_arguments(parser, *, synthesis: bool = False) -> None:
+    parser.add_argument(
+        "--subtitle-style", choices=["classic", "word", "karaoke"], default=None,
+        help="Caption style; animated styles require validated word timing (SRT is retained).",
+    )
+    parser.add_argument(
+        "--word-alignment", choices=["auto", "edge", "whisperx"], default=None,
+        help="Word timing backend; auto prefers Edge metadata, otherwise optional WhisperX.",
+    )
+    if synthesis:
+        parser.add_argument(
+            "--narration-fit", choices=["legacy", "rewrite", "error"], default=None,
+            help="Handle speech overflow; native/animated workflows default to bounded rewrite.",
+        )
+    else:
+        parser.add_argument(
+            "--burn-subtitles", action=argparse.BooleanOptionalAction, default=None,
+            help="Burn subtitles into MP4, or export subtitle files only.",
+        )
+
+
+def _configure_enhancements(args, cfg) -> None:
+    """Apply additive options without replacing configured values with parser defaults."""
+    for arg_name, config_name in (
+        ("subtitle_style", "subtitle_style"),
+        ("word_alignment", "subtitle_alignment"),
+        ("narration_fit", "tts_narration_fit"),
+        ("burn_subtitles", "render_burn_subtitles"),
+    ):
+        value = getattr(args, arg_name, None)
+        if value is not None:
+            setattr(cfg, config_name, value)
+    style = getattr(cfg, "subtitle_style", "classic")
+    if style not in {"classic", "word", "karaoke"}:
+        raise ValueError("subtitle.style must be classic, word, or karaoke")
+    if getattr(cfg, "subtitle_alignment", "auto") not in {"auto", "edge", "whisperx"}:
+        raise ValueError("subtitle.alignment must be auto, edge, or whisperx")
+    ratios = getattr(cfg, "render_ratios", ["16:9"])
+    if not isinstance(ratios, (list, tuple)) or not ratios or any(
+        ratio not in {"source", "16:9", "9:16", "1:1", "4:3"} for ratio in ratios
+    ):
+        raise ValueError("render.ratios must contain source, 16:9, 9:16, 1:1, or 4:3")
+    fit = getattr(cfg, "tts_narration_fit", "legacy")
+    if fit not in {"legacy", "rewrite", "error"}:
+        raise ValueError("tts.narration_fit must be legacy, rewrite, or error")
+    if ("source" in ratios or style != "classic") and fit == "legacy":
+        if getattr(args, "narration_fit", None) == "legacy":
+            raise ValueError("Native/animated output requires --narration-fit rewrite or error.")
+        cfg.tts_narration_fit = "rewrite"
+    if _strict_output(cfg) and not getattr(cfg, "tts_use_timeline_scheduler", True):
+        raise ValueError("Native/animated output requires tts.use_timeline_scheduler: true")
+    if not 0 <= float(getattr(cfg, "render_original_volume", 0.15)) <= 2:
+        raise ValueError("render.original_volume must be between 0 and 2")
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -1071,7 +1216,7 @@ def main():
     # ── run ───────────────────────────────────────────────────────────────
     p_run = subparsers.add_parser("run", help="Full pipeline")
     p_run.add_argument("--input", "-i", type=str, help="Path to local video file")
-    p_run.add_argument("--url", "-u", type=str, help="YouTube/video URL")
+    p_run.add_argument("--url", "-u", type=str, help="YouTube, Douyin, or Xiaohongshu/RedNote video/share URL")
     p_run.add_argument("--i-have-rights", action="store_true", help="Confirm video rights")
     p_run.add_argument("--project", "-p", type=str, help="Project name")
     p_run.add_argument("--style", type=str, default=None,
@@ -1081,7 +1226,11 @@ def main():
     p_run.add_argument("--voice-id", type=str, default=None, help="Specific voice name/ID for Indonesian (e.g., id-ID-ArdiNeural or id_ID-news_tts-medium)")
     p_run.add_argument("--voice-en", type=str, default=None, help="Specific voice name/ID for English")
     p_run.add_argument("--speech-coverage", type=float, default=None, help="Target ratio of narration time vs video time (e.g. 0.85)")
-    p_run.add_argument("--ratio", nargs="+", default=None, help="Output ratios (16:9, 9:16)")
+    p_run.add_argument("--ratio", nargs="+", default=None,
+                       choices=["source", "16:9", "9:16", "1:1", "4:3"],
+                       help="Output ratios; source preserves original composition and duration")
+    _add_caption_arguments(p_run, synthesis=True)
+    p_run.add_argument("--burn-subtitles", action=argparse.BooleanOptionalAction, default=None)
     p_run.add_argument("--disable-adaptive-keyframes", action="store_true", help="Disable adaptive keyframe count capping")
     p_run.add_argument(
         "--mode", type=str, default="full",
@@ -1177,7 +1326,7 @@ def main():
     # ── ingest ────────────────────────────────────────────────────────────
     p_ingest = subparsers.add_parser("ingest", help="Download/validate video")
     p_ingest.add_argument("--input", "-i", type=str, help="Path to local video file")
-    p_ingest.add_argument("--url", "-u", type=str, help="YouTube/video URL")
+    p_ingest.add_argument("--url", "-u", type=str, help="YouTube, Douyin, or Xiaohongshu/RedNote video/share URL")
     p_ingest.add_argument("--i-have-rights", action="store_true")
     p_ingest.add_argument("--project", "-p", type=str)
     p_ingest.add_argument(
@@ -1279,11 +1428,14 @@ def main():
     p_dub.add_argument("--engine", type=str, default=None, choices=["edge", "azure", "piper", "chirp"], help="TTS engine (default: edge)")
     p_dub.add_argument("--voice-id", type=str, default=None, help="Specific voice name/ID for Indonesian")
     p_dub.add_argument("--voice-en", type=str, default=None, help="Specific voice name/ID for English")
+    _add_caption_arguments(p_dub, synthesis=True)
 
     # ── render ────────────────────────────────────────────────────────────
     p_render = subparsers.add_parser("render", help="Render final video")
     p_render.add_argument("--project", "-p", type=str, required=True)
-    p_render.add_argument("--ratio", nargs="+", default=None)
+    p_render.add_argument("--ratio", nargs="+", default=None,
+                          choices=["source", "16:9", "9:16", "1:1", "4:3"])
+    _add_caption_arguments(p_render)
 
     args = parser.parse_args()
 
@@ -1299,6 +1451,9 @@ def main():
         cfg.render_ratios = args.ratio
     if hasattr(args, "style") and args.style:
         cfg.narration_style = args.style
+    if getattr(args, "lang", None):
+        cfg.narration_languages = args.lang
+        cfg.requested_languages = args.lang
     if hasattr(args, "speech_coverage") and args.speech_coverage is not None:
         cfg.narration_speech_coverage = args.speech_coverage
     if hasattr(args, "disable_adaptive_keyframes") and args.disable_adaptive_keyframes:
@@ -1337,6 +1492,8 @@ def main():
         cfg.segment_max_scene_duration = args.max_scene_duration
     if hasattr(args, "scene_threshold") and args.scene_threshold is not None:
         cfg.segment_adaptive_threshold = args.scene_threshold
+
+    _configure_enhancements(args, cfg)
 
     # Dispatch
     commands = {
