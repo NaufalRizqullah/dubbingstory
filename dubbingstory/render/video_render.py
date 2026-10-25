@@ -9,6 +9,7 @@ import os
 from dubbingstory.ingest.local_video import get_video_metadata
 from dubbingstory.render.audio_mix import _run_ffmpeg, build_audio_filter
 from dubbingstory.render.subtitle_burn import build_subtitle_filter
+from dubbingstory.render.vertical_layout import build_layered_video_filter, layout_settings
 
 RATIO_DIMS = {"16:9": (1920, 1080), "9:16": (1080, 1920),
               "1:1": (1080, 1080), "4:3": (1440, 1080)}
@@ -104,12 +105,14 @@ def build_render_command(
     audio_strategy="mute_original", original_volume=0.15, burn_subs=False,
     target_ratio=None, cfg=None,
 ) -> list[str]:
-    """Pure command builder, suitable for offline command-contract tests."""
+    """Build one encode/mux command. None narration preserves an existing mix."""
     duration = float(metadata.get("video_duration") or metadata.get("duration") or 0)
     if not math.isfinite(duration) or duration <= 0:
         raise ValueError("Cannot render without a measured positive video duration")
     if target_ratio not in {None, "source", *RATIO_DIMS}:
         raise ValueError(f"Unsupported output ratio: {target_ratio}")
+    layout = layout_settings(cfg)
+    layered = target_ratio == "9:16" and layout["layout"] == "layered"
     graph = build_audio_filter(
         duration=duration, has_original_audio=bool(metadata.get("has_audio")),
         strategy=audio_strategy, original_volume=float(original_volume),
@@ -119,9 +122,9 @@ def build_render_command(
         duck_ratio=float(getattr(cfg, "render_duck_ratio", 8.0)),
         duck_attack_ms=float(getattr(cfg, "render_duck_attack_ms", 20.0)),
         duck_release_ms=float(getattr(cfg, "render_duck_release_ms", 350.0)),
-    )
+    ) if narration_audio is not None else ""
     visual_filters = []
-    if target_ratio in RATIO_DIMS:
+    if target_ratio in RATIO_DIMS and not layered:
         width, height = RATIO_DIMS[target_ratio]
         visual_filters.extend([
             "scale=iw*sar:ih,setsar=1",
@@ -150,17 +153,33 @@ def build_render_command(
             outline_width=float(getattr(cfg, setting_prefix + "outline", 2)),
             position=str(getattr(cfg, setting_prefix + "position", "bottom")),
         ))
-    encode = bool(visual_filters) or metadata.get("codec") not in _MP4_COPY_CODECS
+    encode = layered or bool(visual_filters) or metadata.get("codec") not in _MP4_COPY_CODECS
     if encode and metadata.get("color_transfer") in {"smpte2084", "arib-std-b67"}:
         raise ValueError("HDR encoding needs an explicit color-management policy; use source stream copy without subtitle burn or provide an SDR source")
     cmd = ["ffmpeg", "-y", "-copyts", "-itsoffset", f"{-float(metadata.get('video_start_time', 0)):.9f}",
-           "-i", source_video, "-i", narration_audio]
+           "-i", source_video]
+    if narration_audio is not None:
+        cmd += ["-i", narration_audio]
     stream_index = metadata.get("video_stream_index")
     video_selector = f"0:{stream_index}" if isinstance(stream_index, int) else "0:v:0"
     if encode:
-        visual_filters.insert(0, "setpts=PTS-STARTPTS")
-        graph += f";[{video_selector}]" + ",".join(visual_filters) + "[video]"
-    cmd += ["-filter_complex", graph, "-map", "[video]" if encode else video_selector, "-map", "[out]"]
+        if layered:
+            width, height = RATIO_DIMS["9:16"]
+            visual_graph = build_layered_video_filter(video_selector, metadata, width, height, cfg)
+            # Subtitles use the final canvas: never zoomed, duplicated or blurred.
+            visual_graph += ";[vertical_composite]" + (",".join(visual_filters) or "null") + "[video]"
+        else:
+            visual_filters.insert(0, "setpts=PTS-STARTPTS")
+            visual_graph = f"[{video_selector}]" + ",".join(visual_filters) + "[video]"
+        graph = ";".join(part for part in (graph, visual_graph) if part)
+    if graph:
+        cmd += ["-filter_complex", graph]
+    cmd += ["-map", "[video]" if encode else video_selector]
+    if narration_audio is not None:
+        cmd += ["-map", "[out]"]
+    elif metadata.get("has_audio"):
+        # Reframe already-mixed exports once; no new narration or doubled audio.
+        cmd += ["-map", "0:a:0"]
     if encode:
         cmd += ["-c:v", "libx264", "-preset", "fast", "-crf", str(getattr(cfg, "render_video_quality_crf", 20)),
                 "-pix_fmt", "yuv420p", "-fps_mode", "passthrough", "-metadata:s:v:0", "rotate=0"]
@@ -168,7 +187,11 @@ def build_render_command(
         cmd += ["-c:v", "copy"]
     # No -shortest and no video -t: retain all source frames. Audio alone is
     # padded/trimmed to the measured video timeline in the graph.
-    cmd += ["-c:a", "aac", "-b:a", "192k", "-map_metadata", "0", "-avoid_negative_ts", "disabled",
+    if narration_audio is None and metadata.get("audio_codec") in {"aac", "mp3", "alac", "ac3", "eac3"}:
+        cmd += ["-c:a", "copy"]
+    elif narration_audio is not None or metadata.get("has_audio"):
+        cmd += ["-c:a", "aac", "-b:a", "192k"]
+    cmd += ["-map_metadata", "0", "-avoid_negative_ts", "disabled",
             "-movflags", "+faststart", output_path]
     return cmd
 
@@ -204,6 +227,54 @@ def render_final(
     return output_path
 
 
+def reframe_video(source_video: str, output_path: str, *, target_ratio: str = "9:16", cfg=None) -> str:
+    """Recompose an existing MP4/video without invoking analysis, TTS or mixing.
+
+    Use a new output path to preserve the existing export. A completed MP4 is
+    published atomically; a small adjacent manifest records the layout recipe.
+    Existing burnt-in text is part of the footage and will be transformed too.
+    """
+    if not os.path.isfile(source_video):
+        raise FileNotFoundError(f"Source video not found: {source_video}")
+    if target_ratio != "9:16":
+        raise ValueError("reframe currently supports the 9:16 canvas")
+    if os.path.splitext(output_path)[1].lower() != ".mp4":
+        raise ValueError("Reframe output must be an .mp4 file")
+    if os.path.normcase(os.path.realpath(source_video)) == os.path.normcase(os.path.realpath(output_path)):
+        raise ValueError("Reframe requires a different output path; the source must be preserved")
+    manifest_path = output_path + ".render.json"
+    if os.path.exists(output_path) or os.path.exists(manifest_path):
+        raise FileExistsError("Reframe output already exists; choose a new --output path")
+    layout = layout_settings(cfg)
+    metadata = get_video_metadata(source_video)
+    if int(metadata.get("display_width", 0)) <= 0 or int(metadata.get("display_height", 0)) <= 0:
+        raise ValueError("Cannot reframe a source without a valid video stream")
+    # tempfile keeps failed/interrupted work separate from both source and export.
+    import tempfile
+    output_dir = os.path.dirname(os.path.abspath(output_path))
+    os.makedirs(output_dir, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".reframe-", dir=output_dir) as staging:
+        partial_path = os.path.join(staging, "output.mp4")
+        cmd = build_render_command(source_video, None, partial_path, metadata,
+                                   target_ratio=target_ratio, cfg=cfg)
+        _run_ffmpeg(cmd, "vertical reframe")
+        manifest = {
+            "schema_version": 1, "status": "complete", "operation": "reframe",
+            "source_video": os.path.abspath(source_video), "output_video": os.path.abspath(output_path),
+            "ratio": target_ratio, "layout": layout, "audio": "existing_mix",
+            "video_duration": metadata.get("video_duration"),
+        }
+        staged_manifest = os.path.join(staging, "render.json")
+        with open(staged_manifest, "w", encoding="utf-8") as dest:
+            json.dump(manifest, dest, ensure_ascii=False, indent=2)
+        # Re-check after rendering in case another job used the selected name.
+        if os.path.exists(output_path) or os.path.exists(manifest_path):
+            raise FileExistsError("Reframe output appeared during rendering; choose a new --output path")
+        os.replace(partial_path, output_path)
+        os.replace(staged_manifest, manifest_path)
+    return output_path
+
+
 def render_project(project_dir: str, ratios: list[str] | None = None, cfg=None) -> list[str]:
     ratios = ratios if ratios is not None else getattr(cfg, "render_ratios", ["16:9"])
     source_video = os.path.join(project_dir, "source.mp4")
@@ -214,7 +285,9 @@ def render_project(project_dir: str, ratios: list[str] | None = None, cfg=None) 
     if requested_languages is not None:
         audio_files = [path for path in audio_files
                        if os.path.basename(path)[len("audio_"):-len(".wav")] in requested_languages]
-    strict = any(_strict_output(cfg, ratio) for ratio in ratios)
+    layout = layout_settings(cfg)
+    strict = (any(_strict_output(cfg, ratio) for ratio in ratios)
+              or (layout["layout"] == "layered" and "9:16" in ratios))
     if not audio_files:
         if strict:
             raise ValueError("No complete narration audio found; run dub first")
@@ -239,6 +312,7 @@ def render_project(project_dir: str, ratios: list[str] | None = None, cfg=None) 
                 print(f"   Render failed: {exc}")
     with open(os.path.join(project_dir, "render_manifest.json"), "w", encoding="utf-8") as dest:
         json.dump({"rendered_videos": rendered, "ratios": ratios,
+                   "vertical_layout": layout,
                    "audio_strategy": getattr(cfg, "render_audio_strategy", "mute_original"),
                    "status": "failed" if errors else "complete", "errors": errors}, dest, ensure_ascii=False, indent=2)
     if errors and strict:

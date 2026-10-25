@@ -23,6 +23,7 @@ Terinspirasi dari video repair Pakistan di Facebook yang di-dubbing dan dinarasi
 - ✂️ **Highlight Recap Mode** — Fitur untuk merangkum video panjang menjadi video pendek berisi momen-momen terpenting (gunakan `--mode summary`).
 - 📱 **Native Storytelling** — `--mode full --ratio source` mempertahankan komposisi dan timeline video, dengan validasi durasi narasi.
 - 💬 **Animated Captions** — Word-by-word atau karaoke dari timing kata TTS/forced alignment; SRT tetap tersedia, ASS dapat di-burn ke MP4.
+- 🖼️ **Layered Vertical Render** — Canvas 9:16 dengan foreground tajam di tengah dan background video blur/grayscale; zoom kedua layer dapat diatur. `reframe` dapat mengolah MP4 hasil export tanpa mengulang TTS.
 
 ---
 
@@ -88,6 +89,14 @@ Pilihan `source` dan caption animasi mengaktifkan fitting narasi yang ketat: nar
 
 Lihat [panduan native storytelling, konfigurasi subtitle, dan pengujian Kaggle](docs/native-storytelling.md) untuk instalasi opsional alignment, ingest platform, output files, serta batas kompatibilitas.
 
+Untuk mengubah video 16:9 menjadi canvas 9:16 dengan dua layer seperti editor video:
+
+```bash
+dubbingstory reframe --input final_summary_id_16x9.mp4 --output final_summary_id_vertical.mp4 --vertical-layout layered --foreground-zoom 25 --background-zoom 100 --background-blur 50 --background-grayscale 1
+```
+
+Preset ini juga tersedia pada `run` dan `render` dengan `--ratio 9:16 --vertical-layout layered`. Lihat [panduan layered vertical dan contoh Kaggle](docs/layered-vertical.md) untuk arti zoom 0–100, konfigurasi, serta cara menghasilkan output 16:9 dan 9:16 sekaligus.
+
 DubbingStory membedah dan memproses video Anda secara otomatis melalui beberapa tahapan cerdas, khususnya saat Anda menggunakan **Mode Summary (Ringkasan)**:
 
 1. **Pemotongan Visual (Scene Detection):** Algoritma akan menonton video dari awal hingga akhir dan mendeteksi perubahan drastis pada kamera (*camera cuts*). Video 30 menit mungkin akan terpecah menjadi ~150 adegan (*scenes*). *(Anda dapat mengatur parameter kecepatan seperti `--min-scene-duration` dan `--scene-threshold` untuk mengurangi jumlah potongan kecil).*
@@ -120,6 +129,9 @@ Jalankan seluruh proses dari awal sampai akhir.
 | `--lang` | `id en` | Bahasa target narasi. |
 | `--engine` | `edge` | Mesin TTS yang digunakan (`edge`). |
 | `--ratio` | `16:9` | Pilih `source` untuk mempertahankan komposisi; rasio tetap `16:9`, `9:16`, `1:1`, `4:3` juga tersedia. |
+| `--vertical-layout` | `pad` | `layered` mengaktifkan foreground tajam dan background blur/grayscale khusus output 9:16. |
+| `--foreground-zoom`, `--background-zoom` | `25`, `100` | Zoom tiap layer: 0 = muat utuh, 100 = memenuhi canvas. |
+| `--background-blur`, `--background-grayscale` | `50`, `1.0` | Blur 1–100 dan grayscale 0–1 untuk background. |
 | `--narration-fit` | `legacy` | `rewrite` atau `error` untuk validasi overflow; native/animasi otomatis memakai `rewrite` jika tidak dioverride. |
 | `--subtitle-style` | `classic` | `classic`, `word`, atau `karaoke`; SRT tetap dihasilkan. |
 | `--word-alignment` | `auto` | Metadata kata Edge, atau optional `whisperx`; tidak membagi durasi kata secara rata. |

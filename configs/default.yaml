@@ -180,6 +180,11 @@ tts:
 # ── Render ───────────────────────────────────────────────────────────────────
 render:
   ratios: ["16:9"]                  # "source" preserves geometry; fixed ratios remain available
+  vertical_layout: "pad"           # Opt-in "layered" affects only 9:16 output
+  foreground_zoom: 25.0            # 0 = fit whole frame, 100 = fill canvas
+  background_zoom: 100.0           # Same fit-to-fill scale; 100 removes canvas black bars
+  background_blur: 50.0            # Gaussian sigma in pixels, 1..100 (layered only)
+  background_grayscale: 1.0        # 0 = original color, 1 = fully grayscale
   audio_strategy: "dynamic_duck"    # "dynamic_duck" | "duck" | "replace" | "mute_original"
   original_volume: 0.15             # Volume level for original audio when ducking
   narration_volume: 1.0

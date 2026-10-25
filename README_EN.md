@@ -23,6 +23,7 @@ Inspired by the accurately narrated and dubbed Pakistani repair videos on Facebo
 - ✂️ **Highlight Recap Mode** — Automatically cut and condense long videos into short highlight reels using the `--mode summary` option.
 - 📱 **Native Storytelling** — `--mode full --ratio source` preserves the source composition and timeline with measured narration fitting.
 - 💬 **Animated Captions** — Word-by-word and active-word karaoke using TTS boundaries or optional forced alignment. SRT remains available; ASS can be burned into MP4.
+- 🖼️ **Layered Vertical Render** — A 9:16 canvas with a sharp centered foreground and a blurred/grayscale video background, with independent zoom controls. `reframe` handles existing MP4 exports without rerunning TTS.
 
 ---
 
@@ -88,6 +89,14 @@ Native/animated output defaults to bounded narration rewrite and re-synthesis wh
 
 See the [native storytelling and Kaggle validation guide](docs/native-storytelling.md) for settings, optional alignment dependencies, source limitations, and output files (Indonesian guide, runnable CLI examples).
 
+To recompose an existing 16:9 export onto a 9:16 canvas:
+
+```bash
+dubbingstory reframe --input final_summary_id_16x9.mp4 --output final_summary_id_vertical.mp4 --vertical-layout layered --foreground-zoom 25 --background-zoom 100 --background-blur 50 --background-grayscale 1
+```
+
+The same preset works with `run` and `render` using `--ratio 9:16 --vertical-layout layered`. See the [layered vertical and Kaggle guide](docs/layered-vertical.md) for the 0–100 fit-to-fill zoom scale, configuration, and simultaneous 16:9/9:16 outputs (Indonesian guide with runnable examples).
+
 DubbingStory automatically dissects and processes your video through several smart stages, particularly when using **Summary Mode (Highlight Recap)**:
 
 1. **Visual Segmentation (Scene Detection):** The algorithm watches the video from start to finish and detects drastic camera angle changes (*cuts*). A 30-minute video might be split into ~150 scenes. *(You can adjust speed optimization parameters like `--min-scene-duration` and `--scene-threshold` to prevent too many micro-cuts).*
@@ -120,6 +129,9 @@ Run the entire process from start to finish.
 | `--lang` | `id en` | Target languages for narration. |
 | `--engine` | `edge` | TTS Engine to use (`edge`). |
 | `--ratio` | `16:9` | `source` preserves composition; fixed `16:9`, `9:16`, `1:1`, `4:3` outputs are also available. |
+| `--vertical-layout` | `pad` | `layered` enables a sharp foreground over a blurred/grayscale background for 9:16 output. |
+| `--foreground-zoom`, `--background-zoom` | `25`, `100` | Independent layer zoom: 0 fits the entire frame, 100 fills the canvas. |
+| `--background-blur`, `--background-grayscale` | `50`, `1.0` | Background blur 1–100 and grayscale amount 0–1. |
 | `--vision-provider` | `gemini` | Vision API choice (`gemini` or `openai` for local vLLM/Qwen). |
 | `--vision-model` | - | Override model name if using `--vision-provider openai`. |
 | `--max-keyframes` | `7` | Max keyframes per scene for vision analysis. Lower (3-5) = faster. |

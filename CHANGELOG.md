@@ -11,9 +11,11 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
-## [Unreleased]
+## [0.9.0]
 
 ### Added
+- Opt-in `--vertical-layout layered` for 9:16 output: independently zoomed foreground/background video layers, configurable Gaussian blur and grayscale, and one audio path. Available in full and summary rendering without changing the default padded layout.
+- `reframe --input ... --output ...` recomposes existing local exports without rerunning analysis, narration, or TTS; includes Kaggle usage and visual acceptance checks in `docs/layered-vertical.md`.
 - Native full-video workflow through `--ratio source`, source-derived timeline metadata, and `--narration-fit rewrite|error` with bounded per-beat rewrite/re-synthesis.
 - Additive TTS metadata interface and Edge word-boundary capture; optional WhisperX alignment for Piper/other engines (`.[alignment]`, WhisperX 3.8.6+ for Indonesian and disabled interpolation).
 - Versioned word-timing artifacts bound to final narration/audio hashes, reusable ASS word-by-word and active-word karaoke captions, configurable animations/fonts/colors/safe margins, and `--subtitle-style`/`--word-alignment`/`--burn-subtitles` options.

@@ -586,6 +586,17 @@ def cmd_render(args, cfg):
     return rendered
 
 
+def cmd_reframe(args, cfg):
+    """Recompose an exported video without analyzing or synthesizing it again."""
+    from dubbingstory.render import video_render
+
+    output_path = video_render.reframe_video(
+        args.input, args.output, target_ratio="9:16", cfg=cfg,
+    )
+    print(f"\n✅ Reframe selesai: {output_path}")
+    return output_path
+
+
 # ==============================================================================
 # SUBCOMMAND: run (full pipeline)
 # ==============================================================================
@@ -1138,7 +1149,9 @@ def cmd_summary(args, cfg):
                 print(f"   ✅ {output_path}")
             except Exception as exc:
                 print(f"   ❌ Summary render failed: {exc}")
-                if _strict_output(cfg):
+                if _strict_output(cfg) or (
+                    ratio == "9:16" and getattr(cfg, "render_vertical_layout", "pad") == "layered"
+                ):
                     raise
 
     print("\n✅ Summary pipeline selesai!")
@@ -1147,6 +1160,43 @@ def cmd_summary(args, cfg):
 # ==============================================================================
 # MAIN
 # ==============================================================================
+
+def _add_layout_arguments(parser) -> None:
+    parser.add_argument(
+        "--vertical-layout", choices=["pad", "layered"], default=None,
+        help="9:16 layout: pad (existing black bars) or layered (sharp foreground over blurred background).",
+    )
+    parser.add_argument(
+        "--foreground-zoom", type=float, default=None,
+        help="Foreground zoom from 0 (fit entire video) to 100 (fill canvas); default 25.",
+    )
+    parser.add_argument(
+        "--background-zoom", type=float, default=None,
+        help="Background zoom from 0 (fit entire video) to 100 (fill canvas); default 100.",
+    )
+    parser.add_argument(
+        "--background-blur", type=float, default=None,
+        help="Background Gaussian blur strength, 1 to 100; default 50.",
+    )
+    parser.add_argument(
+        "--background-grayscale", type=float, default=None,
+        help="Background grayscale amount, 0 (original color) to 1 (fully gray); default 1.",
+    )
+
+
+def _configure_layout(args, cfg) -> None:
+    from dubbingstory.render.vertical_layout import layout_settings
+
+    for name in ("vertical_layout", "foreground_zoom", "background_zoom",
+                 "background_blur", "background_grayscale"):
+        value = getattr(args, name, None)
+        if value is not None:
+            setattr(cfg, "render_" + name, value)
+    layout_settings(cfg)
+    if (getattr(cfg, "render_vertical_layout", "pad") == "layered"
+            and "9:16" not in getattr(cfg, "render_ratios", ["16:9"])):
+        raise ValueError("The layered layout requires --ratio 9:16 (other output ratios may be included).")
+
 
 def _add_caption_arguments(parser, *, synthesis: bool = False) -> None:
     parser.add_argument(
@@ -1229,6 +1279,7 @@ def main():
     p_run.add_argument("--ratio", nargs="+", default=None,
                        choices=["source", "16:9", "9:16", "1:1", "4:3"],
                        help="Output ratios; source preserves original composition and duration")
+    _add_layout_arguments(p_run)
     _add_caption_arguments(p_run, synthesis=True)
     p_run.add_argument("--burn-subtitles", action=argparse.BooleanOptionalAction, default=None)
     p_run.add_argument("--disable-adaptive-keyframes", action="store_true", help="Disable adaptive keyframe count capping")
@@ -1435,7 +1486,15 @@ def main():
     p_render.add_argument("--project", "-p", type=str, required=True)
     p_render.add_argument("--ratio", nargs="+", default=None,
                           choices=["source", "16:9", "9:16", "1:1", "4:3"])
+    _add_layout_arguments(p_render)
     _add_caption_arguments(p_render)
+
+    # ── reframe ───────────────────────────────────────────────────────────
+    p_reframe = subparsers.add_parser("reframe", help="Recompose an existing video onto a 9:16 canvas")
+    p_reframe.add_argument("--input", "-i", type=str, required=True, help="Existing local video, including a final summary export")
+    p_reframe.add_argument("--output", "-o", type=str, required=True, help="New MP4 output path (must not already exist)")
+    p_reframe.add_argument("--ratio", choices=["9:16"], default="9:16")
+    _add_layout_arguments(p_reframe)
 
     args = parser.parse_args()
 
@@ -1448,7 +1507,7 @@ def main():
 
     # Apply CLI overrides
     if hasattr(args, "ratio") and args.ratio:
-        cfg.render_ratios = args.ratio
+        cfg.render_ratios = [args.ratio] if isinstance(args.ratio, str) else args.ratio
     if hasattr(args, "style") and args.style:
         cfg.narration_style = args.style
     if getattr(args, "lang", None):
@@ -1493,7 +1552,10 @@ def main():
     if hasattr(args, "scene_threshold") and args.scene_threshold is not None:
         cfg.segment_adaptive_threshold = args.scene_threshold
 
-    _configure_enhancements(args, cfg)
+    if args.command in {"run", "render", "reframe"}:
+        _configure_layout(args, cfg)
+    if args.command != "reframe":
+        _configure_enhancements(args, cfg)
 
     # Dispatch
     commands = {
@@ -1504,6 +1566,7 @@ def main():
         "narrate": cmd_narrate,
         "dub": cmd_dub,
         "render": cmd_render,
+        "reframe": cmd_reframe,
         "summary": cmd_summary,
     }
 
