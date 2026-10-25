@@ -65,6 +65,6 @@ def burn_subtitles(
                               position=position, font_family=font_family,
                               margin_v=margin_v, fonts_dir=fonts_dir)
     _run_ffmpeg(["ffmpeg", "-y", "-i", video_path, "-vf", vf,
-                 "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-fps_mode", "passthrough",
+                 "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-vsync", "0",
                  "-c:a", "copy", output_path], "subtitle burn (FFmpeg with libass required)")
     return output_path

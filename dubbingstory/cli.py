@@ -148,7 +148,12 @@ def cmd_ingest(args, cfg):
     context_source = "none"
     asr_used = False
 
-    # Step 1: Look for local subtitle files (SRT/ASS/VTT alongside video)
+    narration_source = getattr(cfg, "narration_source", "visual")
+    if narration_source not in {"visual", "audio"}:
+        raise ValueError("narration.source must be visual or audio")
+
+    # Keep ingesting local subtitle files for backwards-compatible artifacts.
+    # Visual mode suppresses this context at analysis time; audio mode opts in.
     if getattr(cfg, "ingest_read_subtitles", True):
         subtitle_data = subtitle_reader.find_and_read_subtitles(
             args.input or video_path, project_dir
@@ -184,9 +189,10 @@ def cmd_ingest(args, cfg):
 
     # Step 3: If still no context, use Whisper ASR as final fallback
     if (
-        subtitle_data is None
+        narration_source == "audio"
+        and subtitle_data is None
         and getattr(cfg, "ingest_use_asr_fallback", True)
-        and getattr(args, "use_asr", False)
+        and (getattr(args, "use_asr", False) or narration_source == "audio")
     ):
         from dubbingstory.asr.whisper_asr import transcribe_video
 
@@ -360,7 +366,8 @@ def cmd_analyze(args, cfg):
     if os.path.exists(ingest_path):
         with open(ingest_path, "r", encoding="utf-8") as f:
             ingest_data = json.load(f)
-        subtitle_context = ingest_data.get("subtitle_data")
+        if getattr(cfg, "narration_source", "visual") == "audio":
+            subtitle_context = ingest_data.get("subtitle_data")
 
     storyboard = scene_understanding.run_analysis(
         segment_data=segment_data,
@@ -1226,6 +1233,7 @@ def _configure_enhancements(args, cfg) -> None:
         ("word_alignment", "subtitle_alignment"),
         ("narration_fit", "tts_narration_fit"),
         ("burn_subtitles", "render_burn_subtitles"),
+        ("narration_source", "narration_source"),
     ):
         value = getattr(args, arg_name, None)
         if value is not None:
@@ -1235,6 +1243,8 @@ def _configure_enhancements(args, cfg) -> None:
         raise ValueError("subtitle.style must be classic, word, or karaoke")
     if getattr(cfg, "subtitle_alignment", "auto") not in {"auto", "edge", "whisperx"}:
         raise ValueError("subtitle.alignment must be auto, edge, or whisperx")
+    if getattr(cfg, "narration_source", "visual") not in {"visual", "audio"}:
+        raise ValueError("narration.source must be visual or audio")
     ratios = getattr(cfg, "render_ratios", ["16:9"])
     if not isinstance(ratios, (list, tuple)) or not ratios or any(
         ratio not in {"source", "16:9", "9:16", "1:1", "4:3"} for ratio in ratios
@@ -1266,7 +1276,7 @@ def main():
     # ── run ───────────────────────────────────────────────────────────────
     p_run = subparsers.add_parser("run", help="Full pipeline")
     p_run.add_argument("--input", "-i", type=str, help="Path to local video file")
-    p_run.add_argument("--url", "-u", type=str, help="YouTube, Douyin, or Xiaohongshu/RedNote video/share URL")
+    p_run.add_argument("--url", "-u", type=str, help="YouTube, TikTok, Douyin, or Xiaohongshu/RedNote video/share URL")
     p_run.add_argument("--i-have-rights", action="store_true", help="Confirm video rights")
     p_run.add_argument("--project", "-p", type=str, help="Project name")
     p_run.add_argument("--style", type=str, default=None,
@@ -1336,6 +1346,10 @@ def main():
         help="If no subtitles are found, use Whisper ASR to generate a transcript.",
     )
     p_run.add_argument(
+        "--narration-source", type=str, default=None, choices=["visual", "audio"],
+        help="Narration context: visual-only (default) or original audio/transcript.",
+    )
+    p_run.add_argument(
         "--whisper-model",
         type=str,
         default=None,
@@ -1377,9 +1391,13 @@ def main():
     # ── ingest ────────────────────────────────────────────────────────────
     p_ingest = subparsers.add_parser("ingest", help="Download/validate video")
     p_ingest.add_argument("--input", "-i", type=str, help="Path to local video file")
-    p_ingest.add_argument("--url", "-u", type=str, help="YouTube, Douyin, or Xiaohongshu/RedNote video/share URL")
+    p_ingest.add_argument("--url", "-u", type=str, help="YouTube, TikTok, Douyin, or Xiaohongshu/RedNote video/share URL")
     p_ingest.add_argument("--i-have-rights", action="store_true")
     p_ingest.add_argument("--project", "-p", type=str)
+    p_ingest.add_argument(
+        "--narration-source", type=str, default=None, choices=["visual", "audio"],
+        help="Narration context: visual-only (default) or original audio/transcript.",
+    )
     p_ingest.add_argument(
         "--quality", "-q", type=str, default=None,
         choices=["720", "1080", "2k", "4k", "max"],
@@ -1515,6 +1533,8 @@ def main():
         cfg.requested_languages = args.lang
     if hasattr(args, "speech_coverage") and args.speech_coverage is not None:
         cfg.narration_speech_coverage = args.speech_coverage
+    if hasattr(args, "narration_source") and args.narration_source:
+        cfg.narration_source = args.narration_source
     if hasattr(args, "disable_adaptive_keyframes") and args.disable_adaptive_keyframes:
         cfg.keyframes_adaptive = False
     if hasattr(args, "engine") and args.engine:

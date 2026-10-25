@@ -72,6 +72,12 @@ def test_url_project_identity_distinguishes_youtube_video_ids():
     assert cli._resolve_project_name(SimpleNamespace(project="existing", url="unused")) == "existing"
 
 
+def test_narration_source_defaults_to_visual_and_accepts_audio():
+    cfg = config(narration_source="visual")
+    cli._configure_enhancements(SimpleNamespace(narration_source="audio"), cfg)
+    assert cfg.narration_source == "audio"
+
+
 def test_rights_gate_precedes_project_creation(monkeypatch):
     def unexpected(*args, **kwargs):
         pytest.fail("A project must not be created before the rights gate")

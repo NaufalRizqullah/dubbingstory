@@ -112,7 +112,7 @@ def test_layers_share_one_video_timeline_and_one_audio_mix():
     assert cmd.count("-i") == 2  # source video and narration, not two videos
     assert cmd.count("-c:v") == 1
     assert cmd[cmd.index("-c:v") + 1] == "libx264"
-    assert cmd[cmd.index("-fps_mode") + 1] == "passthrough"
+    assert cmd[cmd.index("-vsync") + 1] == "0"
     assert not any(option in cmd for option in ("-r", "-shortest", "-t"))
     assert "fps=" not in filters and "color=c=" not in filters
 

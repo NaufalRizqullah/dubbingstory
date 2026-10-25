@@ -10,7 +10,7 @@ Inspired by the accurately narrated and dubbed Pakistani repair videos on Facebo
 
 ## ✨ Features
 
-- 🎥 **Video Ingest** — Local files, YouTube, and Douyin/Xiaohongshu/RedNote URL adapters backed by yt-dlp. Download availability depends on public access and the platform extractor.
+- 🎥 **Video Ingest** — Local files, YouTube, TikTok, and Douyin/Xiaohongshu/RedNote URL adapters backed by yt-dlp. Download availability depends on public access and the platform extractor.
 - ✂️ **Auto Scene Detection** — Automatically split videos into scenes using PySceneDetect.
 - 🖼️ **Keyframe Extraction** — Extract representative frames per scene.
 - 🧠 **Dual LLM Architecture** — Separates the *Vision* (seeing scenes) and *Text* (writing narration) tasks for optimal quality-to-cost balance.
@@ -62,6 +62,16 @@ dubbingstory run --input video.mp4 --vision-provider openai --engine edge
 
 # Full pipeline — YouTube (with rights)
 dubbingstory run --url "https://youtube.com/..." --i-have-rights
+
+# Finished TikTok/RedNote video: keep the source canvas and narrate from visuals.
+dubbingstory run --url "https://www.tiktok.com/@creator/video/1234567890123456789" `
+  --i-have-rights --mode full --lang id --engine edge --ratio source `
+  --subtitle-style karaoke --burn-subtitles
+
+# Optional: use dialogue/subtitles or automatic Whisper ASR as narration context.
+dubbingstory run --url "https://www.rednote.com/explore/..." `
+  --i-have-rights --mode full --narration-source audio --lang id `
+  --engine edge --ratio source
 
 # Full pipeline — Summary Mode (Highlight Recap ~60 seconds)
 dubbingstory run --url "https://youtube.com/..." --mode summary --summary-duration 60 --i-have-rights
@@ -119,7 +129,7 @@ Run the entire process from start to finish.
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `--input`, `-i` | `None` | Path to local video file. |
-| `--url`, `-u` | `None` | YouTube or other video URL. |
+| `--url`, `-u` | `None` | YouTube, TikTok, Douyin, or Xiaohongshu/RedNote video URL. |
 | `--i-have-rights` | `False` | Confirm video rights (required for URL). |
 | `--project`, `-p` | `auto` | Project name (defaults to filename). |
 | `--mode` | `full` | Pipeline mode: `full` (entire video) or `summary` (highlight recap). |
@@ -139,6 +149,7 @@ Run the entire process from start to finish.
 | `--min-scene-duration`| `2.0` | Minimum scene duration in seconds. Higher (4-6) = fewer scenes = faster. |
 | `--scene-threshold` | `3.0` | Scene detection sensitivity. Higher (4-6) = fewer scenes = faster. |
 | `--speech-coverage` | `0.85`| Target ratio of narration duration to video duration. |
+| `--narration-source` | `visual` | Narration context: `visual` (default) or `audio` for subtitles/ASR and dialogue-based translation. |
 
 **Example:**
 ```bash

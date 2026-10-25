@@ -33,9 +33,18 @@ _HOSTS = {
     "m.xiaohongshu.com": "xiaohongshu", "rednote.com": "xiaohongshu",
     "www.rednote.com": "xiaohongshu", "xhslink.com": "xiaohongshu",
     "www.xhslink.com": "xiaohongshu",
+    "tiktok.com": "tiktok", "www.tiktok.com": "tiktok",
+    "m.tiktok.com": "tiktok", "vm.tiktok.com": "tiktok",
+    "vt.tiktok.com": "tiktok",
 }
-_SHORT_HOSTS = {"v.douyin.com", "xhslink.com", "www.xhslink.com"}
-_EXTRACTOR_KEYS = {"youtube": "Youtube", "douyin": "Douyin", "xiaohongshu": "XiaoHongShu"}
+_SHORT_HOSTS = {
+    "v.douyin.com", "xhslink.com", "www.xhslink.com",
+    "vm.tiktok.com", "vt.tiktok.com",
+}
+_EXTRACTOR_KEYS = {
+    "youtube": "Youtube", "douyin": "Douyin",
+    "xiaohongshu": "XiaoHongShu", "tiktok": "TikTok",
+}
 
 
 @dataclass(frozen=True)
@@ -77,7 +86,7 @@ def _parse_supported_url(value: str):
         raise SourceIngestError("unsupported_url", "Only public HTTP(S) video URLs without embedded credentials are supported.")
     host = (parsed.hostname or "").lower()
     if host not in _HOSTS:
-        raise SourceIngestError("unsupported_url", "Supported URL sources are YouTube, Douyin, and Xiaohongshu/RedNote.")
+        raise SourceIngestError("unsupported_url", "Supported URL sources are YouTube, TikTok, Douyin, and Xiaohongshu/RedNote.")
     return parsed, host
 
 
@@ -110,6 +119,12 @@ def normalize_source_url(value: str) -> SourceURL:
             raise SourceIngestError("unsupported_url", "Provide a Douyin video URL or v.douyin.com share link.")
         video_id = match.group(1)
         canonical = f"https://www.douyin.com/video/{video_id}"
+    elif provider == "tiktok":
+        match = re.fullmatch(r"/(?:@[^/]+/video|v)/(\d+)", path)
+        if not match:
+            raise SourceIngestError("unsupported_url", "Provide a TikTok video URL or vm.tiktok.com/vt.tiktok.com share link.")
+        video_id = match.group(1)
+        canonical = f"https://www.tiktok.com/@_/video/{video_id}"
     else:
         match = re.fullmatch(r"/(?:explore|discovery/item)/([a-fA-F0-9]+)", path)
         if not match:

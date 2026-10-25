@@ -130,6 +130,7 @@ semantic_verifier:
 # ── Narration ────────────────────────────────────────────────────────────────
 narration:
   style: "viral_fb"                 # "viral_fb" | "jozzr_social" | "documentary" | "technical" | "calm_educational"
+  source: "visual"                  # "visual" or "audio"; audio uses subtitles/ASR as dialogue context
   languages: ["id", "en"]           # Languages to generate
   max_words_per_scene: 50           # Legacy ceiling; V2 uses duration-aware budgets
   hedging_threshold: 0.5            # Below this confidence, use hedging language

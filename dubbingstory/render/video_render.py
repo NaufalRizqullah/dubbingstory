@@ -182,7 +182,7 @@ def build_render_command(
         cmd += ["-map", "0:a:0"]
     if encode:
         cmd += ["-c:v", "libx264", "-preset", "fast", "-crf", str(getattr(cfg, "render_video_quality_crf", 20)),
-                "-pix_fmt", "yuv420p", "-fps_mode", "passthrough", "-metadata:s:v:0", "rotate=0"]
+                "-pix_fmt", "yuv420p", "-vsync", "0", "-metadata:s:v:0", "rotate=0"]
     else:
         cmd += ["-c:v", "copy"]
     # No -shortest and no video -t: retain all source frames. Audio alone is

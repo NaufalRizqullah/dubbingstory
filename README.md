@@ -10,7 +10,7 @@ Terinspirasi dari video repair Pakistan di Facebook yang di-dubbing dan dinarasi
 
 ## ✨ Fitur
 
-- 🎥 **Video Ingest** — File lokal, YouTube, serta adapter URL/share link Douyin dan Xiaohongshu/RedNote melalui yt-dlp. Ketersediaan unduhan tetap mengikuti akses publik dan dukungan extractor platform.
+- 🎥 **Video Ingest** — File lokal, YouTube, TikTok, serta adapter URL/share link Douyin dan Xiaohongshu/RedNote melalui yt-dlp. Ketersediaan unduhan tetap mengikuti akses publik dan dukungan extractor platform.
 - ✂️ **Auto Scene Detection** — Split video per scene otomatis menggunakan PySceneDetect.
 - 🖼️ **Keyframe Extraction** — Ekstrak frame representatif per scene.
 - 🧠 **Dual LLM Architecture** — Memisahkan tugas *Vision* (melihat adegan) dan *Text* (menulis narasi) demi keseimbangan kualitas dan biaya.
@@ -62,6 +62,18 @@ dubbingstory run --input video.mp4 --vision-provider openai --engine edge
 
 # Pipa lengkap — YouTube (dengan pernyataan hak cipta)
 dubbingstory run --url "https://youtube.com/..." --i-have-rights
+
+# Video TikTok/RedNote yang sudah selesai diedit: pertahankan canvas asli,
+# buat voice-over storytelling dari visual, dan burn karaoke subtitle.
+dubbingstory run --url "https://www.tiktok.com/@creator/video/1234567890123456789" `
+  --i-have-rights --mode full --lang id --engine edge --ratio source `
+  --subtitle-style karaoke --burn-subtitles
+
+# Opsional: gunakan dialog/transkrip audio sebagai konteks narasi.
+# Subtitle lokal diprioritaskan; jika tidak ada, ASR dijalankan otomatis.
+dubbingstory run --url "https://www.rednote.com/explore/..." `
+  --i-have-rights --mode full --narration-source audio --lang id `
+  --engine edge --ratio source
 
 # Pipa lengkap — Mode Summary (Highlight Recap ~60 detik)
 dubbingstory run --url "https://youtube.com/..." --mode summary --summary-duration 60 --i-have-rights
@@ -119,7 +131,7 @@ Jalankan seluruh proses dari awal sampai akhir.
 | Argumen | Default | Deskripsi |
 |---------|---------|-----------|
 | `--input`, `-i` | `None` | Jalur ke file video lokal. |
-| `--url`, `-u` | `None` | Tautan YouTube atau video lainnya. |
+| `--url`, `-u` | `None` | Tautan YouTube, TikTok, Douyin, atau Xiaohongshu/RedNote. |
 | `--i-have-rights` | `False` | Konfirmasi hak cipta video (wajib untuk URL). |
 | `--project`, `-p` | `auto` | Nama proyek (default: nama file). |
 | `--mode` | `full` | Mode pipeline: `full` (video utuh) atau `summary` (potongan ringkasan highlight). |
@@ -143,6 +155,7 @@ Jalankan seluruh proses dari awal sampai akhir.
 | `--min-scene-duration`| `2.0` | Durasi minimum scene (detik). Naikkan (4-6) agar scene lebih sedikit/cepat. |
 | `--scene-threshold` | `3.0` | Sensitivitas deteksi scene. Naikkan (4-6) agar scene lebih sedikit/cepat. |
 | `--speech-coverage` | `0.85`| Rasio target durasi narasi terhadap durasi video. |
+| `--narration-source` | `visual` | Konteks narasi: `visual` (default) atau `audio` untuk subtitle/ASR dan terjemahan berbasis dialog. |
 
 **Contoh:**
 ```bash

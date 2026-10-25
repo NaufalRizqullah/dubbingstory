@@ -14,6 +14,10 @@ All notable changes to the **dubbingstory** project will be documented in this f
 ## [0.9.0]
 
 ### Added
+- TikTok URL/share-link routing through the shared yt-dlp ingest backend.
+- `--narration-source visual|audio`; visual is the default for finished-video
+  storytelling, while audio mode uses subtitles or automatic Whisper ASR as
+  dialogue context before generating translated/narrated TTS.
 - Opt-in `--vertical-layout layered` for 9:16 output: independently zoomed foreground/background video layers, configurable Gaussian blur and grayscale, and one audio path. Available in full and summary rendering without changing the default padded layout.
 - `reframe --input ... --output ...` recomposes existing local exports without rerunning analysis, narration, or TTS; includes Kaggle usage and visual acceptance checks in `docs/layered-vertical.md`.
 - Native full-video workflow through `--ratio source`, source-derived timeline metadata, and `--narration-fit rewrite|error` with bounded per-beat rewrite/re-synthesis.
@@ -31,6 +35,8 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - Declared Edge TTS in both installation manifests and kept forced alignment in an optional extra.
 
 ### Fixed
+- Use legacy-compatible `-vsync 0` for encoded renders and subtitle burns so
+  layered output also works with older FFmpeg builds that reject `-fps_mode`.
 - Full-mode subtitles no longer rely only on pre-TTS planned timestamps when actual speech placements are available.
 - Local subtitle discovery uses the original input basename before the project copy is renamed to `source.mp4`.
 - Summary audio volume can be set to zero; FFmpeg test discovery no longer requires a Unix shell.

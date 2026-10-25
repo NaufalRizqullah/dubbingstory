@@ -98,6 +98,10 @@ python main.py --config vertical.yaml run --input video.mp4 --lang id
 
 Preset membutuhkan encoding video karena frame dikomposisikan ulang. Pipeline menggabungkan komposisi dan burn subtitle dalam tahap encode yang sama. Tidak ada filter FPS, perubahan kecepatan, atau pemotongan waktu yang ditambahkan oleh preset. Sumber HDR tetap mengikuti pembatasan color management renderer: gunakan sumber SDR untuk encode sampai kebijakan HDR tersedia. Tidak ada dependency Python baru khusus preset ini; FFmpeg harus menyediakan filter `split`, `scale`, `crop`, `pad`, `gblur`, `hue`, dan `overlay`.
 
+Renderer memakai `-vsync 0` saat encode agar kompatibel dengan build FFmpeg lama
+di Kaggle yang belum mengenal opsi `-fps_mode`. Opsi ini tidak mengubah isi
+timeline atau menambahkan frame sintetis.
+
 ## Penyesuaian contoh notebook Kaggle
 
 Pada contoh `mereska-dubbingstory-yt.py`, ubah pengaturan `RATIO` dan tambahkan variabel berikut:

@@ -16,6 +16,7 @@ REDNOTE_ID = "6a47c2cc000000001700a073"
 REDNOTE_URL = f"https://www.rednote.com/discovery/item/{REDNOTE_ID}"
 XHS_URL = f"https://www.xiaohongshu.com/discovery/item/{REDNOTE_ID}"
 YOUTUBE_URL = "https://www.youtube.com/watch?v=abcdefghijk"
+TIKTOK_URL = "https://www.tiktok.com/@creator/video/1234567890123456789"
 
 
 class SourceURLTests(unittest.TestCase):
@@ -43,6 +44,19 @@ class SourceURLTests(unittest.TestCase):
         self.assertEqual(source.canonical_url, "https://v.douyin.com/abc123")
         direct = sources.normalize_source_url("https://www.iesdouyin.com/share/video/123456789/")
         self.assertEqual(direct.canonical_url, "https://www.douyin.com/video/123456789")
+
+    def test_tiktok_video_variants_use_shared_extractor(self):
+        source = sources.normalize_source_url(TIKTOK_URL)
+        self.assertEqual(source.provider, "tiktok")
+        self.assertEqual(source.extractor_key, "TikTok")
+        self.assertEqual(source.video_id, "1234567890123456789")
+        self.assertEqual(
+            source.canonical_url,
+            "https://www.tiktok.com/@_/video/1234567890123456789",
+        )
+        short = sources.normalize_source_url("https://vm.tiktok.com/ZMexample/")
+        self.assertTrue(short.is_short_link)
+        self.assertEqual(short.provider, "tiktok")
 
     def test_untrusted_hosts_credentials_and_nonvideo_urls_rejected(self):
         for url in ["file:///video.mp4", "https://127.0.0.1/video/123",
