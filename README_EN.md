@@ -245,10 +245,14 @@ Combine original video, narration audio (ducking/replace), and set aspect ratios
 |----------|---------|-------------|
 | `--project`, `-p` | **(Required)** | Project name. |
 | `--ratio` | `16:9` | Aspect ratios. |
+| `--mode` | `full` | `summary` uses the saved summary compilation and narration without rerunning AI/TTS. |
 
 **Example:**
 ```bash
 dubbingstory render --project my_awesome_project --ratio 16:9 9:16
+
+# Recover a failed summary render using its existing artifacts.
+dubbingstory render --project my_awesome_project --mode summary --ratio 16:9 9:16 --vertical-layout layered
 ```
 
 ---

@@ -310,7 +310,7 @@ def test_layered_render_pixels_duration_frame_count_and_single_audio(tmp_path):
 def test_layered_vfr_preserves_frame_presentation_times(tmp_path):
     source, output = tmp_path / "vfr.mp4", tmp_path / "vertical.mp4"
     run_media(["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=12:duration=1",
-               "-vf", "select='if(lt(n,6),not(mod(n,2)),1)'", "-fps_mode", "vfr",
+               "-vf", "select='if(lt(n,6),not(mod(n,2)),1)'", "-vsync", "vfr",
                "-an", "-c:v", "libx264", str(source)])
     video_render.reframe_video(str(source), str(output), cfg=config(render_background_blur=5))
     timestamps = []

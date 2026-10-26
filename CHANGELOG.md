@@ -11,6 +11,16 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [Unreleased]
+
+### Fixed
+- Fix dynamic ducking format negotiation on older FFmpeg builds when mixing stereo 44.1 kHz source audio with mono 24 kHz TTS: pin stereo layouts and 48 kHz rates, with explicit double-sample compressor inputs and float mix boundaries.
+- Keep the layered VFR regression fixture compatible with the legacy FFmpeg synchronization option already used by the renderer.
+
+### Added
+- Render saved summary artifacts with `render --mode summary`, including original 16:9 and layered 9:16 output, without repeating vision, narration, or TTS.
+- Opt-in Kaggle media regressions for the reported stereo/mono ducking failure, both render ratios, and ducking attenuation/recovery. Tests are authored but have not been run locally.
+
 ## [0.9.0]
 
 ### Added

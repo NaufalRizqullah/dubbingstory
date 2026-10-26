@@ -585,6 +585,7 @@ def cmd_render(args, cfg):
         project_dir=project_dir,
         ratios=ratios,
         cfg=cfg,
+        mode=getattr(args, "mode", "full"),
     )
     if not rendered and _strict_output(cfg):
         raise RuntimeError("No final videos were rendered. Complete dubbing before rendering.")
@@ -1502,6 +1503,8 @@ def main():
     # ── render ────────────────────────────────────────────────────────────
     p_render = subparsers.add_parser("render", help="Render final video")
     p_render.add_argument("--project", "-p", type=str, required=True)
+    p_render.add_argument("--mode", choices=["full", "summary"], default="full",
+                          help="Render saved full or summary artifacts without rerunning analysis or TTS")
     p_render.add_argument("--ratio", nargs="+", default=None,
                           choices=["source", "16:9", "9:16", "1:1", "4:3"])
     _add_layout_arguments(p_render)

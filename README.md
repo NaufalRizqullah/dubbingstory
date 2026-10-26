@@ -251,10 +251,14 @@ Gabungkan video asli, audio narasi (ducking/replace), dan atur rasio.
 |---------|---------|-----------|
 | `--project`, `-p` | **(Wajib)** | Nama proyek. |
 | `--ratio` | `16:9` | Rasio aspek. |
+| `--mode` | `full` | `summary` memakai video kompilasi dan TTS summary yang sudah tersimpan, tanpa mengulang AI/TTS. |
 
 **Contoh:**
 ```bash
 dubbingstory render --project proyek_keren --ratio 16:9 9:16
+
+# Pulihkan tahap render summary yang gagal, memakai artefak yang sudah ada.
+dubbingstory render --project proyek_keren --mode summary --ratio 16:9 9:16 --vertical-layout layered
 ```
 
 ---

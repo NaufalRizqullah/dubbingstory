@@ -24,8 +24,14 @@ def build_audio_filter(
     if strategy not in {"replace", "mute_original", "duck", "dynamic_duck"}:
         raise ValueError(f"Unsupported audio strategy: {strategy}")
     timeline = f"apad,atrim=duration={duration:.6f}"
-    filters = [f"[1:a:0]asetpts=PTS-STARTPTS,aresample=48000,volume={max(0.0, narration_volume):.6f},{timeline}[narr]"]
-    if not has_original_audio or original_volume <= 0 or strategy in {"replace", "mute_original"}:
+    mix_original = has_original_audio and original_volume > 0 and strategy not in {"replace", "mute_original"}
+    # FFmpeg 4.x cannot always resolve channel layouts through the split ->
+    # sidechaincompress -> amix branches (stereo AAC + mono TTS). Constrain both
+    # mixed inputs explicitly; narration-only output keeps its existing layout.
+    mix_format = "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"
+    narration_format = f",{mix_format}" if mix_original else ""
+    filters = [f"[1:a:0]asetpts=PTS-STARTPTS,aresample=48000,volume={max(0.0, narration_volume):.6f}{narration_format},{timeline}[narr]"]
+    if not mix_original:
         filters.append("[narr]anull[out]")
         return ";".join(filters)
     # Preserve original audio's offset from the first video frame. Resetting
@@ -35,16 +41,22 @@ def build_audio_filter(
         offset_filter = f"atrim=start={-original_start_offset:.6f},asetpts=PTS-STARTPTS,"
     elif original_start_offset > 0:
         offset_filter = f"adelay={original_start_offset * 1000:.3f}:all=1,"
-    filters.append(f"[0:a:0]asetpts=PTS-STARTPTS,aresample=48000,{offset_filter}volume={max(0.0, original_volume):.6f},{timeline}[orig]")
+    filters.append(f"[0:a:0]asetpts=PTS-STARTPTS,aresample=48000,{offset_filter}volume={max(0.0, original_volume):.6f},{mix_format},{timeline}[orig]")
     if strategy == "dynamic_duck":
+        # The compressor uses packed double samples. Pin its main AND detector
+        # layouts/rates before negotiation, then convert back for the mix branch.
+        compressor_format = "aformat=sample_fmts=dbl:sample_rates=48000:channel_layouts=stereo"
         filters.extend([
-            "[narr]asplit=2[narrmix][side]",
-            "[orig][side]sidechaincompress="
+            "[narr]asplit=2[narrmix][side_in]",
+            f"[orig]{compressor_format}[compress_main]",
+            f"[side_in]{compressor_format}[compress_side]",
+            "[compress_main][compress_side]sidechaincompress="
             f"threshold={max(0.00098, min(1.0, duck_threshold)):.5f}:"
             f"ratio={max(1.0, min(20.0, duck_ratio)):.2f}:"
             f"attack={max(0.01, min(2000.0, duck_attack_ms)):.2f}:"
             f"release={max(0.01, min(9000.0, duck_release_ms)):.2f}[ducked]",
-            "[ducked][narrmix]amix=inputs=2:duration=first:normalize=0[out]",
+            f"[ducked]{mix_format}[duckmix]",
+            "[duckmix][narrmix]amix=inputs=2:duration=first:normalize=0[out]",
         ])
     else:
         filters.append("[orig][narr]amix=inputs=2:duration=first:normalize=0[out]")

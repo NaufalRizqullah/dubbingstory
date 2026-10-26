@@ -64,7 +64,7 @@ python main.py render --project cerita_full \
 
 Preset hanya berlaku pada output **9:16**. Dalam permintaan multi-ratio, output 16:9/source/1:1/4:3 tetap mengikuti jalur existing. Memilih `layered` tanpa menyertakan 9:16 menghasilkan error agar pilihan layout tidak diabaikan diam-diam. Gunakan `--vertical-layout pad` untuk kembali ke layout black bar existing.
 
-Mode summary tetap memilih dan memotong adegan sesuai pipeline summary. Preset ini hanya mengatur susunan visual setelah kompilasi selesai. `render --project` menggunakan artefak full; untuk MP4 summary yang sudah diekspor, gunakan `reframe`.
+Mode summary tetap memilih dan memotong adegan sesuai pipeline summary. Preset ini hanya mengatur susunan visual setelah kompilasi selesai. `render --project` menggunakan artefak full secara default; `render --project ... --mode summary` menggunakan kompilasi dan audio summary yang tersimpan. Untuk MP4 summary yang sudah diekspor, gunakan `reframe`.
 
 Output pipeline tetap memakai nama existing, misalnya `final_id_9x16.mp4` atau `final_summary_id_9x16.mp4`. Rerender project dapat mengganti hasil render dengan nama yang sama; simpan salinan lebih dahulu jika ingin membandingkan dengan hasil lama. `reframe` menyediakan path output eksplisit yang harus baru.
 
@@ -149,10 +149,47 @@ subprocess.run([
 
 ## Validasi di Kaggle
 
+### Memulihkan render summary tanpa mengulang AI/TTS
+
+Jika proses sudah menyimpan `summary_source.mp4`, `audio/summary_audio_id.wav`, dan `scripts/summary_script_id.srt`, tetapi kedua MP4 final gagal dibuat, jalankan dari root repository Kaggle yang sudah memuat perbaikan:
+
+```bash
+python main.py render --project my_dubbing_project --mode summary \
+  --ratio 16:9 9:16 --vertical-layout layered \
+  --foreground-zoom 25 --background-zoom 100 \
+  --background-blur 50 --background-grayscale 1.0
+```
+
+Untuk cell Python notebook:
+
+```python
+import subprocess
+import sys
+
+subprocess.run([
+    sys.executable, "main.py", "render",
+    "--project", "my_dubbing_project", "--mode", "summary",
+    "--ratio", "16:9", "9:16", "--vertical-layout", "layered",
+    "--foreground-zoom", "25", "--background-zoom", "100",
+    "--background-blur", "50", "--background-grayscale", "1.0",
+], check=True)
+```
+
+Perintah ini tidak menjalankan analisis, Gemini, vLLM, scene selection, atau TTS. Artefak summary harus masih tersedia di direktori project (default `outputs/my_dubbing_project`); gunakan config yang sama jika direktori output diubah. Output tetap `final_summary_id_16x9.mp4` dan `final_summary_id_9x16.mp4`. Status tiap rasio disimpan dalam `summary_render_manifest.json`; kegagalan salah satu rasio menghasilkan exit nonzero setelah rasio lain dicoba. Perintah tidak memakai artefak full sebagai pengganti artefak summary yang hilang.
+
+Pada log kegagalan 26 Oktober 2026, kedua rasio berhenti pada `sidechaincompress` dengan `No channel layout for input 1`. Sumber AAC stereo 44,1 kHz dan narasi PCM mono 24 kHz memerlukan penetapan channel layout/format audio yang jelas sebelum ducking. Perbaikan diterapkan pada audio mixer bersama; konfigurasi canvas notebook tidak perlu diubah untuk kasus ini. Tetap gunakan build yang menyertakan perbaikan tersebut.
+
+Render ulang memakai audio yang sudah tersimpan apa adanya. Jika log TTS melaporkan overflow (contoh tersebut: 2,95 detik), perbaikan filter tidak mengembalikan ucapan yang sudah terpotong pada audio legacy. Periksa bagian akhir narasi; jika terpotong, ringkas dan sintesis ulang narasi melalui workflow summary dengan fitting ketat secara terpisah. Jangan menganggap keberhasilan render berarti masalah durasi narasi sudah terselesaikan.
+
+### Tests dan pemeriksaan visual
+
 Tests dan FFmpeg tidak dijalankan pada komputer development sesuai permintaan. Jalankan tests dari checkout terbaru di Kaggle dan review hasil visual sebelum menganggap preset terverifikasi:
 
 ```bash
 python -m pytest -q tests
+
+# Aktifkan juga regresi FFmpeg sintetis untuk komposisi dan audio campuran.
+DUBBINGSTORY_FFMPEG_TESTS=1 python -m pytest -q tests/test_layered_vertical.py tests/test_audio_mix_compat.py
 ```
 
 Periksa hasil pada video pendek yang mempunyai detail berwarna dan suara jelas:

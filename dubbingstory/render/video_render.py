@@ -219,7 +219,8 @@ def render_final(
                                original_volume=original_volume, burn_subs=burn_subs,
                                target_ratio=target_ratio, cfg=cfg)
     try:
-        _run_ffmpeg(cmd, "final render; subtitle burn requires FFmpeg with libass")
+        label = "final render; subtitle burn requires FFmpeg with libass" if burn_subs else "final render"
+        _run_ffmpeg(cmd, label)
         os.replace(partial_path, output_path)
     finally:
         if os.path.isfile(partial_path):
@@ -275,32 +276,60 @@ def reframe_video(source_video: str, output_path: str, *, target_ratio: str = "9
     return output_path
 
 
-def render_project(project_dir: str, ratios: list[str] | None = None, cfg=None) -> list[str]:
+def _summary_source_for_audio(project_dir: str, source_video: str, audio_path: str, lang: str) -> str:
+    """Use a legacy per-language recut only when its TTS manifest requests it."""
+    manifest_path = os.path.splitext(audio_path)[0] + ".manifest.json"
+    if os.path.isfile(manifest_path):
+        try:
+            with open(manifest_path, encoding="utf-8") as source:
+                manifest = json.load(source)
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"Could not read summary TTS manifest: {manifest_path}") from exc
+        if not isinstance(manifest, dict):
+            raise ValueError(f"Invalid summary TTS manifest: {manifest_path}")
+        language_source = os.path.join(project_dir, f"summary_source_{lang}.mp4")
+        if manifest.get("timeline_scheduled") is False and os.path.isfile(language_source):
+            return language_source
+    return source_video
+
+
+def render_project(project_dir: str, ratios: list[str] | None = None, cfg=None, mode: str = "full") -> list[str]:
+    """Render saved full or summary artifacts without repeating AI/TTS stages."""
+    if mode not in {"full", "summary"}:
+        raise ValueError("Render mode must be full or summary")
     ratios = ratios if ratios is not None else getattr(cfg, "render_ratios", ["16:9"])
-    source_video = os.path.join(project_dir, "source.mp4")
+    summary = mode == "summary"
+    source_video = os.path.join(project_dir, "summary_source.mp4" if summary else "source.mp4")
     if not os.path.isfile(source_video):
         raise FileNotFoundError(f"Source video not found: {source_video}")
-    audio_files = sorted(glob.glob(os.path.join(project_dir, "audio", "audio_*.wav")))
+    audio_prefix = "summary_audio_" if summary else "audio_"
+    script_prefix = "summary_script_" if summary else "script_"
+    output_prefix = "final_summary_" if summary else "final_"
+    manifest_name = "summary_render_manifest.json" if summary else "render_manifest.json"
+    audio_files = sorted(glob.glob(os.path.join(project_dir, "audio", f"{audio_prefix}*.wav")))
     requested_languages = getattr(cfg, "requested_languages", None)
     if requested_languages is not None:
         audio_files = [path for path in audio_files
-                       if os.path.basename(path)[len("audio_"):-len(".wav")] in requested_languages]
+                       if os.path.basename(path)[len(audio_prefix):-len(".wav")] in requested_languages]
     layout = layout_settings(cfg)
     strict = (any(_strict_output(cfg, ratio) for ratio in ratios)
               or (layout["layout"] == "layered" and "9:16" in ratios))
     if not audio_files:
+        if summary:
+            raise ValueError("No saved summary narration found (audio/summary_audio_*.wav). Restore the summary artifacts or complete summary synthesis before render --mode summary.")
         if strict:
             raise ValueError("No complete narration audio found; run dub first")
         print("   No audio files found. Run 'dubbingstory dub' first.")
         return []
     rendered, errors = [], []
     for audio_path in audio_files:
-        lang = os.path.basename(audio_path)[len("audio_"):-len(".wav")]
-        subtitle_path = os.path.join(project_dir, "scripts", f"script_{lang}.srt")
+        lang = os.path.basename(audio_path)[len(audio_prefix):-len(".wav")]
+        subtitle_path = os.path.join(project_dir, "scripts", f"{script_prefix}{lang}.srt")
         for ratio in ratios:
-            output_path = os.path.join(project_dir, f"final_{lang}_{ratio.replace(':', 'x')}.mp4")
+            output_path = os.path.join(project_dir, f"{output_prefix}{lang}_{ratio.replace(':', 'x')}.mp4")
             try:
-                render_final(source_video, audio_path, output_path, subtitle_path,
+                language_source = _summary_source_for_audio(project_dir, source_video, audio_path, lang) if summary else source_video
+                render_final(language_source, audio_path, output_path, subtitle_path,
                              audio_strategy=getattr(cfg, "render_audio_strategy", "mute_original"),
                              original_volume=float(getattr(cfg, "render_original_volume", 0.15)),
                              burn_subs=bool(getattr(cfg, "render_burn_subtitles", False)),
@@ -310,11 +339,11 @@ def render_project(project_dir: str, ratios: list[str] | None = None, cfg=None) 
             except Exception as exc:
                 errors.append({"language": lang, "ratio": ratio, "error": str(exc)})
                 print(f"   Render failed: {exc}")
-    with open(os.path.join(project_dir, "render_manifest.json"), "w", encoding="utf-8") as dest:
-        json.dump({"rendered_videos": rendered, "ratios": ratios,
+    with open(os.path.join(project_dir, manifest_name), "w", encoding="utf-8") as dest:
+        json.dump({"rendered_videos": rendered, "ratios": ratios, "mode": mode,
                    "vertical_layout": layout,
                    "audio_strategy": getattr(cfg, "render_audio_strategy", "mute_original"),
                    "status": "failed" if errors else "complete", "errors": errors}, dest, ensure_ascii=False, indent=2)
-    if errors and strict:
-        raise RuntimeError(f"{len(errors)} render output(s) failed; inspect render_manifest.json")
+    if errors and (strict or summary):
+        raise RuntimeError(f"{len(errors)} render output(s) failed; inspect {manifest_name}")
     return rendered
