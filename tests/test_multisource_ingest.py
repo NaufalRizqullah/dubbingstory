@@ -110,6 +110,11 @@ class SourceURLTests(unittest.TestCase):
         self.assertNotIn("example-only", str(error))
         self.assertNotIn("cdn.example", str(error))
 
+    def test_format_failure_is_not_misreported_as_private_video(self):
+        error = sources.classify_download_error(RuntimeError("Requested format is not available"))
+        self.assertEqual(error.category, "no_video")
+        self.assertNotIn("private", str(error))
+
 
 class DownloadBackendTests(unittest.TestCase):
     def test_new_sources_do_not_read_cookies_or_use_youtube_options(self):

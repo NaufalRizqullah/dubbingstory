@@ -224,7 +224,9 @@ def classify_download_error(exc: Exception) -> SourceIngestError:
     text = str(exc).lower()
     if any(word in text for word in ("drm", "protected content")):
         return SourceIngestError("protected", "DRM/protected media is not supported. Supply a permitted local video.")
-    if any(word in text for word in ("private", "deleted", "removed", "not available", "404")):
+    if any(word in text for word in ("requested format is not available", "only images are available", "no video formats")):
+        return SourceIngestError("no_video", "No accessible video stream was found; image posts and unsupported formats are not supported.")
+    if any(word in text for word in ("private", "deleted", "removed", "unavailable", "404")):
         return SourceIngestError("unavailable", "This video is private, removed, or unavailable.")
     if any(word in text for word in ("login", "sign in", "cookies", "authentication", "401", "403", "429", "captcha", "blocked", "restricted")):
         return SourceIngestError("restricted", "The platform requires access or is restricting requests. No authentication/protection bypass was attempted; use an accessible URL or permitted local video.")

@@ -43,7 +43,9 @@ def test_known_stream_duration_does_not_scan_packets(monkeypatch):
 
 
 def test_youtube_options_use_python_extractor_argument_shape():
-    assert _base_options("youtube")["extractor_args"] == {"youtube": {"player_client": ["web"]}}
+    assert _base_options("youtube")["extractor_args"] == {
+        "youtube": {"player_client": ["android", "web"]}
+    }
     assert "extractor_args" not in _base_options("xiaohongshu")
     assert "cookiesfrombrowser" not in _base_options("douyin", "chrome")
 

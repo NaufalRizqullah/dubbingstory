@@ -14,6 +14,8 @@ All notable changes to the **dubbingstory** project will be documented in this f
 ## [Unreleased]
 
 ### Fixed
+- Restore the YouTube Android/Web player-client fallback so public videos that
+  expose only image formats to the Web client can still be downloaded.
 - Fix dynamic ducking format negotiation on older FFmpeg builds when mixing stereo 44.1 kHz source audio with mono 24 kHz TTS: pin stereo layouts and 48 kHz rates, with explicit double-sample compressor inputs and float mix boundaries.
 - Keep the layered VFR regression fixture compatible with the legacy FFmpeg synchronization option already used by the renderer.
 

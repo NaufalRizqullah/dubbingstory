@@ -98,7 +98,10 @@ def _base_options(provider: str, cookies: str | None = None) -> dict:
     # Preserve existing YouTube behavior; never apply its special options or
     # browser-cookie configuration to the newly supported providers.
     if provider == "youtube":
-        opts.update(extractor_args={"youtube": {"player_client": ["web"]}}, remote_components=["ejs:github"])
+        opts.update(
+            extractor_args={"youtube": {"player_client": ["android", "web"]}},
+            remote_components=["ejs:github"],
+        )
         _apply_cookies(opts, cookies)
     return opts
 
@@ -335,7 +338,7 @@ def download_subtitles(
             "subtitleslangs": languages,
             "subtitlesformat": "srt",
             "outtmpl": os.path.join(output_dir, "yt_subs"),
-            "extractor_args": {"youtube": {"player_client": ["web"]}},
+            "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
             "remote_components": ["ejs:github"],
             **opts_extra,
         }
@@ -367,7 +370,7 @@ def download_subtitles(
                             "subtitleslangs": [lang],
                             "subtitlesformat": "srt",
                             "outtmpl": os.path.join(output_dir, "yt_subs"),
-                            "extractor_args": {"youtube": {"player_client": ["web"]}},
+                            "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
                         }
                         _apply_cookies(dl_opts, cookies)
                         with YoutubeDL(dl_opts) as ydl2:
