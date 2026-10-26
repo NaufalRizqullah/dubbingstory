@@ -47,6 +47,23 @@ Nama project URL otomatis sekarang mencakup provider/video identity. Gunakan `--
 
 **Hasil probe contoh RedNote, 24 Oktober 2026:** yt-dlp terpasang `2026.06.21.235142` belum mengenali URL `rednote.com` langsung. Alias `xiaohongshu.com` dengan ID sama menghasilkan extractor error tanpa metadata. Probe hanya meminta metadata, tanpa cookie/login, instalasi, atau download video. Adapter sudah tersedia, tetapi keberhasilan download contoh tersebut belum terverifikasi. Jika platform menolak akses di Kaggle, gunakan file lokal yang Anda berhak gunakan.
 
+### Download YouTube di Kaggle
+
+Log notebook 27 Oktober 2026 berhenti di `download_video`, sebelum vision, TTS, atau render. Pesan lama `[no_video]` berasal dari klasifikasi kegagalan pemilihan format yt-dlp; pesan itu sendiri tidak membuktikan bahwa link rusak atau hanya berisi gambar. Logger lama membuang peringatan extractor, sehingga log tersebut tidak cukup untuk memastikan apakah client YouTube, JavaScript/EJS, filter format, atau pembatasan akses yang menjadi pemicu akhirnya.
+
+Downloader sekarang membiarkan versi yt-dlp terpasang menentukan client YouTube untuk video dan subtitle. Penguncian ke `android/web` dihapus agar tidak meniadakan pilihan client yang dipelihara upstream. Batas resolusi dan pengecualian AV1 tetap berlaku; `format_unavailable` berarti format sesuai pilihan tersebut tidak dapat diperoleh, bukan bukti bahwa videonya hilang. Diagnostik memakai pesan yang telah ditentukan di kode, tanpa mencetak URL media bertanda tangan, isi cookie, atau credential.
+
+Pada notebook ini, download dilakukan **sebelum** cell instalasi `requirements.txt`. Karena itu, cell setup downloader harus memasang `yt-dlp[default]`, bukan hanya `yt-dlp`. Extra `default` membawa paket EJS yang sesuai; Deno menyediakan runtime JavaScript. Menurut [panduan resmi EJS](https://github.com/yt-dlp/yt-dlp/wiki/EJS), keduanya diperlukan untuk dukungan YouTube, sedangkan pengambilan EJS dari GitHub bergantung pada akses jaringan.
+
+Gunakan [notebook repository](../notebooks/dubbingstory-qwen-local-universal.ipynb) yang sudah memuat perbaikan. Untuk notebook salinan Anda:
+
+1. Pastikan cell clone menggunakan branch/commit yang sudah memuat perbaikan downloader ini. Pembaruan notebook di repository tidak otomatis mengubah salinan notebook Kaggle.
+2. Pada cell bertuliskan `Upgrade yt-dlp`, ubah argumen paket menjadi `"yt-dlp[default]"`. Jalankan setup Deno/FFmpeg dan paket ini sebelum cell download. Perubahan ini dijalankan di Kaggle, bukan komputer development.
+3. Mulai dengan session/kernel baru setelah memperbarui paket atau source yang sebelumnya sudah di-import. Mengulang `from ... import ...` saja dapat tetap memakai modul lama dari memori. Notebook repository menghentikan setup bila mendeteksi yt-dlp sudah di-import sebelum upgrade.
+4. Jalankan cell download, lalu lanjutkan pipeline hanya setelah berhasil. Notebook repository mencetak versi yt-dlp/EJS, ketersediaan Deno/FFmpeg/FFprobe, dan commit repository untuk memudahkan pemeriksaan log berikutnya.
+
+Tidak perlu memakai `render --mode summary` untuk kegagalan ini. Perintah tersebut hanya memulihkan tahap render ketika video summary dan TTS sudah tersedia. Link yang dapat diputar di browser belum memastikan bahwa format yang sama tersedia bagi downloader di lingkungan Kaggle; bila platform menolak akses, jangan melewati proteksinya. Perubahan ini telah ditinjau secara statis; download langsung dan tests belum dijalankan pada komputer development.
+
 ## Word timing dan dependency opsional
 
 Edge menangkap `WordBoundary` dari proses synthesis yang sama dengan audionya. Metadata disimpan setelah validasi urutan, durasi, dan cakupan teks. Dependency Edge dideklarasikan `>=7.3.1,<8` untuk API boundary yang dipakai.

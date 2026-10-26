@@ -79,29 +79,86 @@ def _build_format_selector(download_height: str | int = "1080") -> str:
     )
 
 
-class _QuietLogger:
-    """Prevent downloader diagnostics from exposing tokens/media URLs."""
+_DIAGNOSTIC_MESSAGES = {
+    "js_runtime_unavailable": "yt-dlp could not find a supported JavaScript runtime. Check Deno in the notebook runtime PATH.",
+    "js_challenge_failed": "YouTube JavaScript challenge solving failed; some formats may be missing. Check the runtime and matching yt-dlp EJS package.",
+    "ejs_unavailable": "The EJS solver could not be loaded. Update yt-dlp[default] together in the notebook environment.",
+    "platform_access_required": "The platform reported an access requirement or request restriction. Browser playback does not guarantee access from Kaggle; no bypass was attempted.",
+    "youtube_delivery_unavailable": "YouTube did not expose ordinary downloadable URLs for some client formats (SABR delivery).",
+    "no_video_formats": "The extractor reported no usable video formats. This alone does not establish that the link is invalid or the post contains only images.",
+    "format_selection": "No extracted format matched the requested height/codec policy. Extraction warnings may explain why formats are missing.",
+    "extractor_warning": "The extractor emitted an additional warning; its raw text was suppressed to avoid exposing credentials or signed media URLs.",
+    "extractor_error": "The extractor failed without a recognized diagnostic marker; its raw text was suppressed.",
+}
+
+
+class _SafeLogger:
+    """Keep only bounded reason codes, never raw messages, URLs, or credentials.
+
+    Regex redaction alone is insufficient: extractor logs may include headers,
+    cookies, or signed media URLs in arbitrary formats. Emit our own fixed text.
+    """
+    def __init__(self):
+        self.codes = set()
+
     def debug(self, message):
         pass
 
     info = debug
-    warning = debug
-    error = debug
+
+    def warning(self, message):
+        self._record(message, "extractor_warning")
+
+    def error(self, message):
+        self._record(message, "extractor_error")
+
+    def _record(self, message, fallback):
+        text = re.sub(r"https?://\S+", "", str(message).lower())
+        codes = set()
+        if "no supported javascript runtime" in text or "no javascript runtime" in text:
+            codes.add("js_runtime_unavailable")
+        if any(marker in text for marker in (
+            "challenge solving failed", "signature solving failed",
+            "nsig extraction failed", "signature extraction failed",
+        )):
+            codes.add("js_challenge_failed")
+        if ("ejs" in text or "challenge solver" in text) and any(
+            marker in text for marker in (
+                "not installed", "not found", "unavailable", "missing ejs", "no usable",
+                "unsupported version", "is not supported", "hash mismatch", "failed to load",
+                "failed to read", "failed to download", "unable to download",
+            )
+        ):
+            codes.add("ejs_unavailable")
+        if any(marker in text for marker in (
+            "po token", "po_token", "sign in", "login required", "captcha",
+            "http error 403", "http error 429", "confirm you're not a bot",
+        )):
+            codes.add("platform_access_required")
+        if "sabr" in text and any(marker in text for marker in ("missing", "skipped", "forcing", "sabr-only")):
+            codes.add("youtube_delivery_unavailable")
+        if "only images are available" in text or "no video formats" in text:
+            codes.add("no_video_formats")
+        if "requested format is not available" in text:
+            codes.add("format_selection")
+        self.codes.update(codes or {fallback})
+
+    def report(self):
+        for code in sorted(self.codes):
+            print(f"      yt-dlp [{code}]: {_DIAGNOSTIC_MESSAGES[code]}")
 
 
 def _base_options(provider: str, cookies: str | None = None) -> dict:
     opts = {
-        "quiet": True, "no_warnings": True, "logger": _QuietLogger(),
+        "quiet": True, "no_warnings": False, "logger": _SafeLogger(),
         "noplaylist": True, "cachedir": False, "socket_timeout": 30,
         "retries": 2, "extractor_retries": 1, "allow_unplayable_formats": False,
     }
-    # Preserve existing YouTube behavior; never apply its special options or
-    # browser-cookie configuration to the newly supported providers.
+    # Let the installed yt-dlp select its supported clients. Pinning android/web
+    # prevents upstream client fixes from taking effect even after an upgrade.
+    # Never apply YouTube cookie or remote-component settings to other providers.
     if provider == "youtube":
-        opts.update(
-            extractor_args={"youtube": {"player_client": ["android", "web"]}},
-            remote_components=["ejs:github"],
-        )
+        opts["remote_components"] = ["ejs:github"]
         _apply_cookies(opts, cookies)
     return opts
 
@@ -242,6 +299,7 @@ def download_video(
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, "source.mp4")
     print(f"   📥 Downloading {source.provider} video ({'highest available' if quality == 'max' else 'height <= ' + quality})...")
+    print(f"      yt-dlp version: {YTDLP_VERSION}")
     # Stage media first. Never replace an existing source or publish metadata
     # for a failed/partial download; later stages can safely reuse source.mp4.
     with tempfile.TemporaryDirectory(prefix=".ingest-", dir=output_dir) as staging:
@@ -278,8 +336,11 @@ def download_video(
             os.replace(staged_path, output_path)
             os.replace(staged_metadata, os.path.join(output_dir, "video_metadata.json"))
         except SourceIngestError:
+            opts["logger"].report()
             raise
         except Exception as exc:
+            opts["logger"].error(exc)
+            opts["logger"].report()
             raise classify_download_error(exc) from None
     print(f"      ✅ Download complete: {output_path}")
     return output_path
@@ -332,14 +393,11 @@ def download_subtitles(
         ydl_opts = {
             **_base_options("youtube", cookies),
             "quiet": True,
-            "no_warnings": True,
             "skip_download": True,
             "writesubtitles": True,
             "subtitleslangs": languages,
             "subtitlesformat": "srt",
             "outtmpl": os.path.join(output_dir, "yt_subs"),
-            "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
-            "remote_components": ["ejs:github"],
             **opts_extra,
         }
         _apply_cookies(ydl_opts, cookies)
@@ -361,16 +419,14 @@ def download_subtitles(
 
                         # Actually download the subtitle
                         dl_opts = {
-                            **_base_options("youtube", cookies),
+                            **ydl_opts,
                             "quiet": True,
-                            "no_warnings": True,
                             "skip_download": True,
                             "writesubtitles": sub_type == "manual",
                             "writeautomaticsub": sub_type == "auto",
                             "subtitleslangs": [lang],
                             "subtitlesformat": "srt",
                             "outtmpl": os.path.join(output_dir, "yt_subs"),
-                            "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
                         }
                         _apply_cookies(dl_opts, cookies)
                         with YoutubeDL(dl_opts) as ydl2:
@@ -394,6 +450,8 @@ def download_subtitles(
                                 return match
 
         except Exception as e:
+            ydl_opts["logger"].error(e)
+            ydl_opts["logger"].report()
             print(f"      ⚠️ {label} subtitle check failed: {classify_download_error(e)}")
             continue
 

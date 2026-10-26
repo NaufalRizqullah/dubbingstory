@@ -1,11 +1,13 @@
 """Offline ingest regressions. No real platform, FFmpeg, or browser access."""
 
 import hashlib
+import io
 import json
 import os
 import socket
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from urllib.error import HTTPError
 from unittest.mock import patch
 
@@ -110,10 +112,84 @@ class SourceURLTests(unittest.TestCase):
         self.assertNotIn("example-only", str(error))
         self.assertNotIn("cdn.example", str(error))
 
-    def test_format_failure_is_not_misreported_as_private_video(self):
+    def test_format_failure_is_not_misreported_as_missing_or_private_video(self):
         error = sources.classify_download_error(RuntimeError("Requested format is not available"))
-        self.assertEqual(error.category, "no_video")
+        self.assertEqual(error.category, "format_unavailable")
         self.assertNotIn("private", str(error))
+        self.assertNotIn("image posts", str(error))
+
+    def test_actual_missing_formats_remain_distinct_from_selection_failure(self):
+        for message in ("Only images are available for download", "No video formats found"):
+            with self.subTest(message=message):
+                error = sources.classify_download_error(RuntimeError(message))
+                self.assertEqual(error.category, "no_video")
+                self.assertNotIn("image posts", str(error))
+
+    def test_explicit_access_requirement_takes_priority_over_generic_unavailable(self):
+        error = sources.classify_download_error(
+            RuntimeError("Video unavailable. Sign in to confirm you're not a bot. HTTP 403"))
+        self.assertEqual(error.category, "restricted")
+
+
+class DownloaderDiagnosticsTests(unittest.TestCase):
+    def test_challenge_warning_does_not_claim_ejs_is_missing_from_generic_advice(self):
+        logger = youtube._SafeLogger()
+        logger.warning(
+            "n challenge solving failed: Some formats may be missing. "
+            "Ensure you have a supported JavaScript runtime and challenge solver "
+            "script distribution installed. See https://github.com/yt-dlp/yt-dlp/wiki/EJS")
+        self.assertEqual(logger.codes, {"js_challenge_failed"})
+
+    def test_diagnostic_keywords_inside_a_signed_url_do_not_become_reason_codes(self):
+        logger = youtube._SafeLogger()
+        logger.error("Extractor failed https://cdn.example/ejs?reason=unavailable&po_token=fixture")
+        self.assertEqual(logger.codes, {"extractor_error"})
+
+    def test_recognized_warnings_keep_only_safe_reason_codes(self):
+        cases = [
+            ("No supported JavaScript runtime could be found", "js_runtime_unavailable"),
+            ("n challenge solving failed", "js_challenge_failed"),
+            ("Signature solving failed", "js_challenge_failed"),
+            ("EJS challenge solver scripts are unavailable", "ejs_unavailable"),
+            ("This client requires a PO Token", "platform_access_required"),
+            ("Sign in to confirm you're not a bot", "platform_access_required"),
+            ("HTTP Error 429: Too Many Requests", "platform_access_required"),
+            ("Some formats are missing a url. YouTube is forcing SABR streaming", "youtube_delivery_unavailable"),
+            ("Only images are available for download", "no_video_formats"),
+            ("Requested format is not available", "format_selection"),
+        ]
+        for message, code in cases:
+            with self.subTest(code=code, message=message):
+                logger = youtube._SafeLogger()
+                raw = message + " https://cdn.example/video?token=private-fixture-value"
+                captured = io.StringIO()
+                with redirect_stdout(captured), redirect_stderr(captured):
+                    logger.warning(raw)
+                    logger.warning(raw)
+                    logger.report()
+                self.assertIn(code, logger.codes)
+                self.assertTrue(captured.getvalue().strip())
+                for unsafe in ("cdn.example", "private-fixture-value"):
+                    self.assertNotIn(unsafe, captured.getvalue())
+                    self.assertNotIn(unsafe, repr(vars(logger)))
+
+    def test_unknown_messages_and_debug_output_never_leak_or_accumulate(self):
+        logger = youtube._SafeLogger()
+        raw = "opaque-fixture-diagnostic https://cdn.example/file?signature=private-fixture-value"
+        captured = io.StringIO()
+        with redirect_stdout(captured), redirect_stderr(captured):
+            logger.debug(raw)
+            logger.info(raw)
+            self.assertEqual(logger.codes, set())
+            logger.warning(raw)
+            logger.error(raw)
+            self.assertEqual(captured.getvalue(), "")
+            logger.report()
+        self.assertEqual(logger.codes, {"extractor_warning", "extractor_error"})
+        self.assertTrue(captured.getvalue().strip())
+        for unsafe in ("opaque-fixture-diagnostic", "cdn.example", "private-fixture-value"):
+            self.assertNotIn(unsafe, captured.getvalue())
+            self.assertNotIn(unsafe, repr(vars(logger)))
 
 
 class DownloadBackendTests(unittest.TestCase):
@@ -125,6 +201,67 @@ class DownloadBackendTests(unittest.TestCase):
         self.assertNotIn("cookiesfrombrowser", opts)
         self.assertFalse(opts["allow_unplayable_formats"])
         self.assertFalse(opts["cachedir"])
+
+    def test_youtube_uses_upstream_clients_and_keeps_existing_cookie_support(self):
+        with patch.object(youtube, "_apply_cookies") as cookies:
+            opts = youtube._base_options("youtube", "fixture-browser")
+        cookies.assert_called_once_with(opts, "fixture-browser")
+        self.assertNotIn("extractor_args", opts)
+        self.assertEqual(opts["remote_components"], ["ejs:github"])
+        self.assertFalse(opts["no_warnings"])
+        self.assertIsInstance(opts["logger"], youtube._SafeLogger)
+
+    @patch.object(youtube, "YoutubeDL")
+    def test_subtitle_discovery_and_transfer_do_not_reintroduce_client_pins(self, downloader):
+        session = downloader.return_value.__enter__.return_value
+        session.extract_info.return_value = {"subtitles": {"id": [{"ext": "srt"}]}}
+        with tempfile.TemporaryDirectory() as directory:
+            expected = os.path.join(directory, "yt_subs.id.srt")
+
+            def transfer(urls):
+                with open(expected, "w", encoding="utf-8") as handle:
+                    handle.write("1\n00:00:00,000 --> 00:00:01,000\nFixture\n")
+
+            session.download.side_effect = transfer
+            self.assertEqual(youtube.download_subtitles(YOUTUBE_URL, directory, ["id"]), expected)
+        self.assertEqual(downloader.call_count, 2)
+        for call in downloader.call_args_list:
+            opts = call.args[0]
+            self.assertNotIn("extractor_args", opts)
+            self.assertFalse(opts["no_warnings"])
+            self.assertIsInstance(opts["logger"], youtube._SafeLogger)
+
+    @patch.object(youtube, "resolve_source_url")
+    @patch.object(youtube, "YoutubeDL")
+    def test_format_failure_reports_safe_context_without_publishing_source(self, downloader, resolve):
+        resolve.return_value = sources.normalize_source_url(YOUTUBE_URL)
+        session = downloader.return_value.__enter__.return_value
+        raw_url = "https://cdn.example/video?token=private-fixture-value"
+
+        def fail(*args, **kwargs):
+            logger = downloader.call_args.args[0]["logger"]
+            logger.warning("Signature solving failed " + raw_url)
+            logger.error("Requested format is not available " + raw_url)
+            raise RuntimeError("Requested format is not available " + raw_url)
+
+        session.extract_info.side_effect = fail
+        captured = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(youtube._SafeLogger, "report", autospec=True) as report:
+                with redirect_stdout(captured), redirect_stderr(captured):
+                    with self.assertRaises(sources.SourceIngestError) as error:
+                        youtube.download_video(YOUTUBE_URL, directory)
+                report.assert_called_once()
+            self.assertEqual(error.exception.category, "format_unavailable")
+            self.assertEqual(os.listdir(directory), [])
+        session.process_ie_result.assert_not_called()
+        logger = downloader.call_args.args[0]["logger"]
+        self.assertIn("js_challenge_failed", logger.codes)
+        self.assertIn("format_selection", logger.codes)
+        for unsafe in ("cdn.example", "private-fixture-value"):
+            self.assertNotIn(unsafe, captured.getvalue())
+            self.assertNotIn(unsafe, str(error.exception))
+            self.assertNotIn(unsafe, repr(vars(logger)))
 
     def test_quality_keeps_legacy_height_limit_and_supports_silent_video(self):
         limited = youtube._build_format_selector("1080")

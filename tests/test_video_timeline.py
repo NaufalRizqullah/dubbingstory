@@ -42,10 +42,9 @@ def test_known_stream_duration_does_not_scan_packets(monkeypatch):
     assert require_video_timeline("input.mp4", {"video_duration_source": "stream", "video_duration": 3})["video_duration"] == 3
 
 
-def test_youtube_options_use_python_extractor_argument_shape():
-    assert _base_options("youtube")["extractor_args"] == {
-        "youtube": {"player_client": ["android", "web"]}
-    }
+def test_youtube_options_allow_upstream_to_select_supported_clients():
+    assert "extractor_args" not in _base_options("youtube")
+    assert _base_options("youtube")["remote_components"] == ["ejs:github"]
     assert "extractor_args" not in _base_options("xiaohongshu")
     assert "cookiesfrombrowser" not in _base_options("douyin", "chrome")
 

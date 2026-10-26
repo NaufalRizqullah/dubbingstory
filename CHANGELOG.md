@@ -14,12 +14,18 @@ All notable changes to the **dubbingstory** project will be documented in this f
 ## [Unreleased]
 
 ### Fixed
-- Restore the YouTube Android/Web player-client fallback so public videos that
-  expose only image formats to the Web client can still be downloaded.
+- Let the installed yt-dlp select its maintained YouTube player clients for video
+  and subtitle extraction instead of restricting extraction to Android/Web.
+- Distinguish unavailable requested formats from an extractor reporting no usable video,
+  and expose allowlisted downloader diagnostics without raw media URLs or credentials.
+- Install `yt-dlp[default]` before the Kaggle notebook's download cell so its
+  matching EJS solver is available alongside the JavaScript runtime.
 - Fix dynamic ducking format negotiation on older FFmpeg builds when mixing stereo 44.1 kHz source audio with mono 24 kHz TTS: pin stereo layouts and 48 kHz rates, with explicit double-sample compressor inputs and float mix boundaries.
 - Keep the layered VFR regression fixture compatible with the legacy FFmpeg synchronization option already used by the renderer.
 
 ### Added
+- Safe Kaggle download setup diagnostics for package versions, tool availability,
+  and the checked-out commit; stop reuse of a kernel that imported yt-dlp before an upgrade.
 - Render saved summary artifacts with `render --mode summary`, including original 16:9 and layered 9:16 output, without repeating vision, narration, or TTS.
 - Opt-in Kaggle media regressions for the reported stereo/mono ducking failure, both render ratios, and ducking attenuation/recovery. Tests are authored but have not been run locally.
 

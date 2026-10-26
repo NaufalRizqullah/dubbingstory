@@ -224,16 +224,16 @@ def classify_download_error(exc: Exception) -> SourceIngestError:
     text = str(exc).lower()
     if any(word in text for word in ("drm", "protected content")):
         return SourceIngestError("protected", "DRM/protected media is not supported. Supply a permitted local video.")
-    if any(word in text for word in ("requested format is not available", "only images are available", "no video formats")):
-        return SourceIngestError("no_video", "No accessible video stream was found; image posts and unsupported formats are not supported.")
-    if any(word in text for word in ("private", "deleted", "removed", "unavailable", "404")):
-        return SourceIngestError("unavailable", "This video is private, removed, or unavailable.")
     if any(word in text for word in ("login", "sign in", "cookies", "authentication", "401", "403", "429", "captcha", "blocked", "restricted")):
         return SourceIngestError("restricted", "The platform requires access or is restricting requests. No authentication/protection bypass was attempted; use an accessible URL or permitted local video.")
+    if "requested format is not available" in text:
+        return SourceIngestError("format_unavailable", "No extracted format matches the requested height/codec settings. This does not mean the video URL is invalid. Check the safe yt-dlp diagnostics and notebook setup.")
+    if any(word in text for word in ("only images are available", "no video formats")):
+        return SourceIngestError("no_video", "The extractor exposed no usable video stream. This can result from extraction/access limitations or non-video media; check the safe yt-dlp diagnostics.")
+    if any(word in text for word in ("private", "deleted", "removed", "unavailable", "404")):
+        return SourceIngestError("unavailable", "This video is private, removed, or unavailable.")
     if any(word in text for word in ("timed out", "timeout", "connection", "resolve", "network")):
         return SourceIngestError("network_error", "The platform could not be reached. Check connectivity and try again later.")
-    if "no video formats" in text:
-        return SourceIngestError("no_video", "No accessible video stream was found; image posts/carousels and restricted media are unsupported.")
     if "unsupported url" in text:
         return SourceIngestError("unsupported_url", "The installed yt-dlp extractor does not support this URL. Use a canonical video URL or permitted local video.")
     return SourceIngestError("extractor_error", "The installed yt-dlp extractor could not read this video. Check its platform support or use a permitted local video.")

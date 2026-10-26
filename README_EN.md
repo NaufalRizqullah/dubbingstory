@@ -99,6 +99,8 @@ Native/animated output defaults to bounded narration rewrite and re-synthesis wh
 
 See the [native storytelling and Kaggle validation guide](docs/native-storytelling.md) for settings, optional alignment dependencies, source limitations, and output files (Indonesian guide, runnable CLI examples).
 
+For YouTube notebook download failures, see [Kaggle download diagnostics](docs/native-storytelling.md#download-youtube-di-kaggle). The repository notebook installs `yt-dlp[default]` before downloading and reports its versions; the downloader uses yt-dlp's maintained default client selection.
+
 To recompose an existing 16:9 export onto a 9:16 canvas:
 
 ```bash
