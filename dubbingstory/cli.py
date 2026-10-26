@@ -1139,8 +1139,9 @@ def cmd_summary(args, cfg):
                     )
 
         for ratio in ratios:
-            ratio_label = ratio.replace(":", "x")
-            output_path = os.path.join(project_dir, f"final_summary_{lang}_{ratio_label}.mp4")
+            output_path = os.path.join(
+                project_dir, video_render.final_video_filename(lang, ratio, mode="summary", cfg=cfg),
+            )
             print(f"   🎬 Rendering Summary: {lang.upper()} ({ratio})...")
             try:
                 video_render.render_final(

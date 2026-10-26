@@ -66,7 +66,7 @@ Preset hanya berlaku pada output **9:16**. Dalam permintaan multi-ratio, output 
 
 Mode summary tetap memilih dan memotong adegan sesuai pipeline summary. Preset ini hanya mengatur susunan visual setelah kompilasi selesai. `render --project` menggunakan artefak full secara default; `render --project ... --mode summary` menggunakan kompilasi dan audio summary yang tersimpan. Untuk MP4 summary yang sudah diekspor, gunakan `reframe`.
 
-Output pipeline tetap memakai nama existing, misalnya `final_id_9x16.mp4` atau `final_summary_id_9x16.mp4`. Rerender project dapat mengganti hasil render dengan nama yang sama; simpan salinan lebih dahulu jika ingin membandingkan dengan hasil lama. `reframe` menyediakan path output eksplisit yang harus baru.
+Output canvas `layered` pada rasio 9:16 memakai penanda `_canvas`, misalnya `final_id_canvas_9x16.mp4` atau `final_summary_id_canvas_9x16.mp4`. Nama output original/source dan layout `pad` tetap seperti sebelumnya, misalnya `final_summary_id_16x9.mp4` dan `final_summary_id_9x16.mp4`. Aturan ini berlaku pada pipeline dan render ulang; file lama tidak diganti namanya otomatis. Rerender dapat mengganti hasil dengan nama yang sama. `reframe` tetap memakai path `--output` yang Anda tentukan secara eksplisit.
 
 ## Flag dan konfigurasi
 
@@ -175,7 +175,7 @@ subprocess.run([
 ], check=True)
 ```
 
-Perintah ini tidak menjalankan analisis, Gemini, vLLM, scene selection, atau TTS. Artefak summary harus masih tersedia di direktori project (default `outputs/my_dubbing_project`); gunakan config yang sama jika direktori output diubah. Output tetap `final_summary_id_16x9.mp4` dan `final_summary_id_9x16.mp4`. Status tiap rasio disimpan dalam `summary_render_manifest.json`; kegagalan salah satu rasio menghasilkan exit nonzero setelah rasio lain dicoba. Perintah tidak memakai artefak full sebagai pengganti artefak summary yang hilang.
+Perintah ini tidak menjalankan analisis, Gemini, vLLM, scene selection, atau TTS. Artefak summary harus masih tersedia di direktori project (default `outputs/my_dubbing_project`); gunakan config yang sama jika direktori output diubah. Output adalah `final_summary_id_16x9.mp4` dan `final_summary_id_canvas_9x16.mp4`. Status tiap rasio disimpan dalam `summary_render_manifest.json`; kegagalan salah satu rasio menghasilkan exit nonzero setelah rasio lain dicoba. Perintah tidak memakai artefak full sebagai pengganti artefak summary yang hilang.
 
 Pada log kegagalan 26 Oktober 2026, kedua rasio berhenti pada `sidechaincompress` dengan `No channel layout for input 1`. Sumber AAC stereo 44,1 kHz dan narasi PCM mono 24 kHz memerlukan penetapan channel layout/format audio yang jelas sebelum ducking. Perbaikan diterapkan pada audio mixer bersama; konfigurasi canvas notebook tidak perlu diubah untuk kasus ini. Tetap gunakan build yang menyertakan perbaikan tersebut.
 

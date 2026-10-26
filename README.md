@@ -111,6 +111,8 @@ dubbingstory reframe --input final_summary_id_16x9.mp4 --output final_summary_id
 
 Preset ini juga tersedia pada `run` dan `render` dengan `--ratio 9:16 --vertical-layout layered`. Lihat [panduan layered vertical dan contoh Kaggle](docs/layered-vertical.md) untuk arti zoom 0–100, konfigurasi, serta cara menghasilkan output 16:9 dan 9:16 sekaligus.
 
+Output canvas layered diberi penanda `_canvas`, misalnya `final_summary_id_canvas_9x16.mp4`; output original 16:9 tetap `final_summary_id_16x9.mp4`.
+
 DubbingStory membedah dan memproses video Anda secara otomatis melalui beberapa tahapan cerdas, khususnya saat Anda menggunakan **Mode Summary (Ringkasan)**:
 
 1. **Pemotongan Visual (Scene Detection):** Algoritma akan menonton video dari awal hingga akhir dan mendeteksi perubahan drastis pada kamera (*camera cuts*). Video 30 menit mungkin akan terpecah menjadi ~150 adegan (*scenes*). *(Anda dapat mengatur parameter kecepatan seperti `--min-scene-duration` dan `--scene-threshold` untuk mengurangi jumlah potongan kecil).*

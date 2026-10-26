@@ -11,7 +11,10 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
-## [Unreleased]
+## [0.9.1]
+
+### Changed
+- Add `_canvas` to automatically named layered 9:16 outputs in full/summary pipelines and render recovery, for example `final_summary_id_canvas_9x16.mp4`. Original/source and padded output names, explicit `reframe --output` paths, and existing files remain unchanged.
 
 ### Fixed
 - Let the installed yt-dlp select its maintained YouTube player clients for video

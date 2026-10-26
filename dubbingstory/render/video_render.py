@@ -293,6 +293,13 @@ def _summary_source_for_audio(project_dir: str, source_video: str, audio_path: s
     return source_video
 
 
+def final_video_filename(lang: str, ratio: str, *, mode: str = "full", cfg=None) -> str:
+    """Use the same canvas label for pipeline and saved-artifact renders."""
+    prefix = "final_summary_" if mode == "summary" else "final_"
+    canvas = "_canvas" if ratio == "9:16" and getattr(cfg, "render_vertical_layout", "pad") == "layered" else ""
+    return f"{prefix}{lang}{canvas}_{ratio.replace(':', 'x')}.mp4"
+
+
 def render_project(project_dir: str, ratios: list[str] | None = None, cfg=None, mode: str = "full") -> list[str]:
     """Render saved full or summary artifacts without repeating AI/TTS stages."""
     if mode not in {"full", "summary"}:
@@ -304,7 +311,6 @@ def render_project(project_dir: str, ratios: list[str] | None = None, cfg=None, 
         raise FileNotFoundError(f"Source video not found: {source_video}")
     audio_prefix = "summary_audio_" if summary else "audio_"
     script_prefix = "summary_script_" if summary else "script_"
-    output_prefix = "final_summary_" if summary else "final_"
     manifest_name = "summary_render_manifest.json" if summary else "render_manifest.json"
     audio_files = sorted(glob.glob(os.path.join(project_dir, "audio", f"{audio_prefix}*.wav")))
     requested_languages = getattr(cfg, "requested_languages", None)
@@ -326,7 +332,7 @@ def render_project(project_dir: str, ratios: list[str] | None = None, cfg=None, 
         lang = os.path.basename(audio_path)[len(audio_prefix):-len(".wav")]
         subtitle_path = os.path.join(project_dir, "scripts", f"{script_prefix}{lang}.srt")
         for ratio in ratios:
-            output_path = os.path.join(project_dir, f"{output_prefix}{lang}_{ratio.replace(':', 'x')}.mp4")
+            output_path = os.path.join(project_dir, final_video_filename(lang, ratio, mode=mode, cfg=cfg))
             try:
                 language_source = _summary_source_for_audio(project_dir, source_video, audio_path, lang) if summary else source_video
                 render_final(language_source, audio_path, output_path, subtitle_path,

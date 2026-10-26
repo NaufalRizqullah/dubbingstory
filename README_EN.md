@@ -109,6 +109,8 @@ dubbingstory reframe --input final_summary_id_16x9.mp4 --output final_summary_id
 
 The same preset works with `run` and `render` using `--ratio 9:16 --vertical-layout layered`. See the [layered vertical and Kaggle guide](docs/layered-vertical.md) for the 0–100 fit-to-fill zoom scale, configuration, and simultaneous 16:9/9:16 outputs (Indonesian guide with runnable examples).
 
+Layered canvas outputs include `_canvas`, for example `final_summary_id_canvas_9x16.mp4`; the original 16:9 output remains `final_summary_id_16x9.mp4`.
+
 DubbingStory automatically dissects and processes your video through several smart stages, particularly when using **Summary Mode (Highlight Recap)**:
 
 1. **Visual Segmentation (Scene Detection):** The algorithm watches the video from start to finish and detects drastic camera angle changes (*cuts*). A 30-minute video might be split into ~150 scenes. *(You can adjust speed optimization parameters like `--min-scene-duration` and `--scene-threshold` to prevent too many micro-cuts).*

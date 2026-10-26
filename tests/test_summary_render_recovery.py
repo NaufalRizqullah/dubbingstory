@@ -34,7 +34,7 @@ def test_summary_rerender_reuses_saved_artifacts_and_both_ratios(tmp_path, monke
     calls = []
     monkeypatch.setattr(video_render, "render_final", lambda *args, **kwargs: calls.append((args, kwargs)))
     outputs = video_render.render_project(str(tmp_path), cfg=config(), mode="summary")
-    assert [Path(path).name for path in outputs] == ["final_summary_id_16x9.mp4", "final_summary_id_9x16.mp4"]
+    assert [Path(path).name for path in outputs] == ["final_summary_id_16x9.mp4", "final_summary_id_canvas_9x16.mp4"]
     assert [entry[1]["target_ratio"] for entry in calls] == [None, "9:16"]
     for args, kwargs in calls:
         assert Path(args[0]).name == "summary_source.mp4"
@@ -58,6 +58,25 @@ def test_default_mode_retains_full_artifact_selection(tmp_path, monkeypatch):
     assert Path(calls[0][3]).name == "script_id.srt"
     assert Path(outputs[0]).name == "final_id_16x9.mp4"
     assert not (tmp_path / "summary_render_manifest.json").exists()
+
+
+@pytest.mark.parametrize("mode,prefix", [("full", "final_id"), ("summary", "final_summary_id")])
+def test_canvas_render_keeps_original_output_separate(tmp_path, monkeypatch, mode, prefix):
+    artifacts(tmp_path)
+    original = tmp_path / f"{prefix}_9x16.mp4"
+    original.write_bytes(b"existing original export")
+
+    def render(source, audio, output, *args, **kwargs):
+        Path(output).write_bytes(b"canvas export")
+
+    monkeypatch.setattr(video_render, "render_final", render)
+    outputs = video_render.render_project(str(tmp_path), ["9:16"], config(), mode=mode)
+    assert [Path(path).name for path in outputs] == [f"{prefix}_canvas_9x16.mp4"]
+    assert original.read_bytes() == b"existing original export"
+    assert Path(outputs[0]).read_bytes() == b"canvas export"
+    manifest_name = "summary_render_manifest.json" if mode == "summary" else "render_manifest.json"
+    manifest = json.loads((tmp_path / manifest_name).read_text(encoding="utf-8"))
+    assert manifest["rendered_videos"] == outputs
 
 
 @pytest.mark.parametrize("missing", ["summary_source.mp4", "audio/summary_audio_id.wav"])
