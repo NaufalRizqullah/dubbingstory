@@ -74,6 +74,28 @@ vision:
   domain_hint: ""                   # e.g., "workshop", "cooking", "repair"
   batch_size: 4                     # Number of keyframes sent per API call
 
+# ── Bounded Text Generation ─────────────────────────────────────────────────
+llm:
+  provider: "gemini"               # "gemini" | "local" (local needs no Gemini key)
+  gemini:                          # Also bounds Gemini vision calls
+    max_attempts: 3                # TOTAL calls including the first
+    timeout_seconds: 30
+    budget_seconds: 90             # Shared deadline including backoff
+    initial_wait_seconds: 5
+    wait_increment_seconds: 5      # Waits 5s then 10s; never after final attempt
+  fallback:
+    enabled: false                 # Notebook enables local fallback explicitly
+    state_path: ""                # Optional shared JSON routing state for CLI stages
+    run_id: ""                    # Fresh ID per pipeline invocation when using a file
+  local:
+    base_url: "http://127.0.0.1:8000/v1"
+    model: "Qwen/Qwen3-VL-4B-Instruct"
+    max_attempts: 2
+    timeout_seconds: 60
+    budget_seconds: 120
+    max_tokens: 2048
+    context_window: 10240          # Must agree with server --max-model-len
+
 # ── Global Story Understanding (V2) ─────────────────────────────────────────
 story:
   enabled: true                     # Build scene_cards/story_plan/story_memory after vision

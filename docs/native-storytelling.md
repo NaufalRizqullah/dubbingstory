@@ -170,12 +170,55 @@ dubbingstory render --project proyek_lama --ratio source --subtitle-style karaok
 
 Structured script dan video sumber harus tersedia. Tidak ada alignment perkiraan otomatis terhadap project yang tidak lengkap.
 
+## Retry Gemini dan fallback teks lokal
+
+Notebook [TikTok/RedNote](../notebooks/mereska-dubbingstory-tiktok-rednote.ipynb) sekarang mengikuti pola source mode: Python kernel Kaggle, dependency dari `pyproject.toml`, dan `main.py` dari checkout. Setup tidak membuat venv atau membangun editable package. vLLM tetap dipin ke `0.27.1`, versi yang berhasil memuat Qwen pada log yang diberikan pengguna; ini bukan klaim bahwa revisi notebook telah diuji. Dependency project dan vLLM diselesaikan bersama, tanpa `--upgrade` massal. `INSTALL_DEPENDENCIES=False` hanya untuk runtime yang sudah memenuhi dependency tersebut.
+
+Log terbaru yang diberikan pengguna memperlihatkan ingest RedNote 720x1280 sekitar 22,17 detik serta analisis Qwen berhasil. Penundaan berikutnya terjadi pada 429/503 Gemini saat memendekkan narasi setelah durasi TTS diukur. Log tersebut belum membuktikan final render selesai. Masalah setup pada laporan lama tidak berarti seluruh tahap pada notebook terbaru masih gagal.
+
+Pengaturan default aplikasi ada di `configs/default.yaml`. Fallback lokal **nonaktif pada CLI biasa**, dan **aktif pada preset notebook sosial**:
+
+```yaml
+llm:
+  provider: gemini                 # local untuk langsung memakai Qwen
+  gemini:
+    max_attempts: 3                # total termasuk panggilan pertama
+    timeout_seconds: 30
+    budget_seconds: 90
+    initial_wait_seconds: 5
+    wait_increment_seconds: 5      # jeda 5 lalu 10 detik
+  fallback:
+    enabled: true
+    state_path: /kaggle/working/dubbingstory_social_outputs/contoh/llm_runtime_state.json
+    run_id: contoh-run-unik        # notebook membuat UUID baru per eksekusi pipeline
+  local:
+    base_url: http://127.0.0.1:8000/v1
+    model: Qwen/Qwen3-VL-4B-Instruct
+    max_attempts: 2
+    timeout_seconds: 60
+    budget_seconds: 120
+    max_tokens: 2048
+    context_window: 10240
+```
+
+Semua tahap CLI dalam satu pipeline harus memakai `state_path` dan `run_id` yang sama. Setelah kegagalan layanan Gemini menghabiskan jumlah percobaan atau budget, routing disimpan sebagai lokal untuk sisa run. Run baru dengan ID berbeda boleh mencoba Gemini lagi. JSON/bahasa/struktur yang ditolak mencoba lokal untuk tugas itu saja, tanpa menandai layanan Gemini mati. Kesalahan autentikasi atau request yang tidak dapat di-retry langsung gagal. State hanya menyimpan versi skema, ID run, provider, alasan tetap dan jumlah percobaan; tidak berisi key, prompt atau jawaban. File rusak harus diperiksa atau gunakan `state_path` baru. Jangan menjalankan dua pipeline paralel dengan path state yang sama.
+
+`budget_seconds` adalah budget penjadwalan retry per tugas, bukan batas waktu seluruh stage/video. Timeout transport membatasi operasi request; koneksi/read SDK dan requests bukan hard wall-clock deadline. Respons yang tiba setelah budget ditolak, dan tidak ada retry tambahan setelah budget habis. Upload/pemrosesan video pada Gemini Files API, startup/download model, TTS dan render berada di luar budget ini. `FIT_RETRIES` membatasi jumlah revisi naskah berdasarkan pengukuran audio; tiap revisi memiliki budget LLM sendiri. Retry SDK dinonaktifkan agar tidak melipatgandakan tiga percobaan aplikasi.
+
+Local fallback hanya untuk **teks**. Vision tetap memakai provider yang dikonfigurasi. Notebook memakai server Qwen yang sama untuk vision dan penulisan, tetap hidup sampai `dub` selesai, termasuk resume langsung dari `narrate`/`dub`, lalu dihentikan sebelum render dan melalui cleanup jika pipeline gagal. Dengan `TEXT_LLM_PROVIDER="local"` serta vision Qwen, Secret Gemini tidak diperlukan. `START_FROM="render"` tidak memuat model atau mengambil key.
+
+Endpoint lokal harus loopback dan menyediakan `/tokenize` serta `/v1/chat/completions`. Router memeriksa jumlah token prompt yang telah dibangun, batas server, ruang output dan margin sebelum generation. Prompt tidak dipotong lagi oleh router; beberapa pembuat prompt existing masih merangkum/membatasi evidence. Jika konteks tidak cukup, perbesar `MAX_MODEL_LEN` sesuai kemampuan GPU atau kurangi cakupan analisis secara sadar. Output terpotong, bahasa salah, scene/claim tidak valid, dan rewrite yang melebihi target kata ditolak. Setelah kedua provider gagal pada routing baru, pipeline berhenti; tidak membuat narasi template pengganti. Validasi struktur ini tidak menjamin kualitas cerita atau kesetiaan seluruh klaim visual; review hasil tetap diperlukan.
+
+Untuk melanjutkan hasil log pengguna, set nama project existing dan `START_FROM="dub"` jika source, storyboard, naskah dan metadata masih tersedia. Gunakan `OUTPUT_ROOT` yang menunjuk folder artefak tersebut. Jalankan ulang konfigurasi/ingest agar cache diverifikasi; jangan menjalankan analisis dari awal hanya untuk mencoba fitting ulang. Notebook dan **kode repository** harus sama-sama memuat perubahan ini. Mengunggah notebook saja tidak memperbarui remote Git atau checkout Kaggle; preflight akan menolak checkout lama. Pada checkout existing notebook sengaja tidak melakukan pull/reset otomatis.
+
+Landasan API: [Google GenAI 1.28.0](https://github.com/googleapis/python-genai/blob/main/CHANGELOG.md#1280-2025-07-30) menambahkan retry pada level request; [protokol tokenize vLLM 0.27.1](https://github.com/vllm-project/vllm/blob/v0.27.1/vllm/entrypoints/serve/tokenize/protocol.py) menyediakan hitungan token dan batas model; [model card Qwen3-VL-4B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct) mendukung tugas teks di samping vision. Kualitas narasi Indonesia dan performa fallback pada Kaggle tetap harus diukur.
+
 ## Pengujian di Kaggle
 
 Perubahan ini belum diuji dengan menjalankan tests, TTS, alignment, atau rendering pada komputer development, sesuai permintaan. Perintah berikut **untuk Anda jalankan di Kaggle**, dari root checkout repository yang sudah memuat perubahan ini.
 
 ```bash
-python -m pip install -e '.[test]'
+python -m pip install 'pytest>=8,<10' 'jsonschema>=4.21'
 ffmpeg -hide_banner -version
 ffmpeg -hide_banner -filters
 python -m pytest -q tests

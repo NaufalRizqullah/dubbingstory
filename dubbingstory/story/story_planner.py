@@ -19,7 +19,10 @@ from typing import Any
 from dubbingstory.story.scene_cards import build_scene_cards, compact_scene_cards
 from dubbingstory.story.scene_continuity import build_scene_deltas
 from dubbingstory.story.scene_signature import build_scene_signatures
-from dubbingstory.story.gemini_json import generate_story_json
+from dubbingstory.story.gemini_json import (
+    generate_story_json, raise_if_strict_text_error, strict_text_routing,
+    text_llm_available, validate_scene_items, validate_string_list,
+)
 
 
 STORY_PLANNER_PROMPT = """You are the global story planner for a video narration system.
@@ -242,6 +245,42 @@ def _string_list(value: Any) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def _story_response_validator(storyboard: dict):
+    expected_ids = {str(scene.get("scene_id")) for scene in storyboard.get("scenes", []) or []}
+
+    def validator(payload: Any) -> str | None:
+        if not isinstance(payload, dict) or not isinstance(payload.get("premise"), str) or not payload["premise"].strip():
+            return "story plan must be an object with a nonempty premise"
+        error = validate_scene_items(payload.get("scene_roles"), expected_ids)
+        if error:
+            return error
+        for item in payload["scene_roles"]:
+            if not isinstance(item.get("role"), str) or not item["role"].strip():
+                return "every scene role requires a nonempty role"
+            for key in ("story_importance", "causal_importance", "bridge_importance"):
+                value = item.get(key)
+                if type(value) not in (int, float) or not 0 <= value <= 1:
+                    return "scene importance fields must be numbers from zero to one"
+        arc, memory = payload.get("story_arc"), payload.get("story_memory")
+        if not isinstance(arc, dict) or not isinstance(memory, dict):
+            return "story_arc and story_memory must be objects"
+        for ids in arc.values():
+            if not validate_string_list(ids) or not set(ids) <= expected_ids:
+                return "story_arc may only reference supplied scene IDs"
+        for key in ("known_facts", "continuity_rules", "open_questions"):
+            if not validate_string_list(memory.get(key)):
+                return "story_memory fields must be arrays of strings"
+        for key in ("characters", "important_objects"):
+            value = payload.get(key)
+            if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+                return "characters and important_objects must be arrays of objects"
+        if not validate_string_list(payload.get("unresolved_threads")):
+            return "unresolved_threads must be an array of strings"
+        return None
+
+    return validator
+
+
 def generate_story_artifacts(
     storyboard: dict,
     *,
@@ -256,8 +295,7 @@ def generate_story_artifacts(
     plan, memory = fallback_story_artifacts(storyboard)
 
     enabled = bool(getattr(cfg, "story_enabled", True))
-    api_key = getattr(cfg, "api_key_gemini", "")
-    if enabled and api_key:
+    if enabled and text_llm_available(cfg):
         compact = compact_scene_cards(cards)
         delta_map = {str(item.get("scene_id")): item for item in deltas if item.get("scene_id")}
         for item in compact:
@@ -275,7 +313,8 @@ def generate_story_artifacts(
             video_summary=storyboard.get("video_summary", ""),
             narrative_arc=storyboard.get("narrative_arc", ""),
             transcript_source=storyboard.get("video_transcript_source", "none"),
-            scene_cards_json=_clip_json_payload(compact, max_chars=max_chars),
+            scene_cards_json=(json.dumps(compact, ensure_ascii=False, indent=2)
+                              if strict_text_routing(cfg) else _clip_json_payload(compact, max_chars=max_chars)),
         )
 
         try:
@@ -285,13 +324,15 @@ def generate_story_artifacts(
                 task_name="story-planner",
                 temperature=0.15,
                 model_attr="story_model",
+                response_validator=_story_response_validator(storyboard) if strict_text_routing(cfg) else None,
             )
             plan, memory = _normalize_story_artifacts(raw, storyboard)
             print("   🧠 Story planner: global story plan generated")
         except Exception as exc:
+            raise_if_strict_text_error(cfg, exc, "story-planner")
             print(f"   ⚠️ Story planner failed; using temporal fallback: {exc}")
     elif enabled:
-        print("   ⚠️ Story planner: GOOGLE_API_KEY unavailable; using temporal fallback")
+        print("   ⚠️ Story planner: text provider unavailable; using temporal fallback")
 
     if project_dir:
         _save_json(os.path.join(project_dir, "scene_cards.json"), cards)

@@ -110,6 +110,8 @@ def _create_analyzer(cfg):
         )
 
     elif provider == "gemini":
+        from dubbingstory.llm.text_client import gemini_retry_options
+
         api_key = getattr(cfg, "api_key_gemini", "")
         if not api_key:
             raise ValueError(
@@ -123,6 +125,7 @@ def _create_analyzer(cfg):
             api_key=api_key,
             model=model,
             fallback_model=fallback,
+            **gemini_retry_options(cfg),
         )
 
     else:

@@ -396,6 +396,9 @@ def cmd_analyze(args, cfg):
         )
         print("   🧠 Story artifacts: scene_cards.json, story_plan.json, story_memory.json")
     except Exception as exc:
+        from dubbingstory.story.gemini_json import raise_if_strict_text_error
+
+        raise_if_strict_text_error(cfg, exc, "story-artifact-generation")
         # Analysis remains usable even if the optional global planner fails.
         print(f"   ⚠️ Story artifact generation failed; narration will use fallback context: {exc}")
 

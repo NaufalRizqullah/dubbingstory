@@ -11,7 +11,10 @@ import math
 from typing import Any
 
 from dubbingstory.story.beat_dedup import deduplicate_beats
-from dubbingstory.story.gemini_json import generate_story_json
+from dubbingstory.story.gemini_json import (
+    generate_story_json, raise_if_strict_text_error, strict_text_routing,
+    text_llm_available, validate_string_list,
+)
 
 
 BEAT_PLANNER_VERSION = "v2.1.0"
@@ -195,6 +198,33 @@ def _normalize(raw: Any, target_duration: float, target_count: int) -> list[dict
     return beats
 
 
+def _beat_response_validator(payload: Any) -> str | None:
+    if isinstance(payload, dict):
+        payload = payload.get("beats", payload.get("items"))
+    if not isinstance(payload, list) or not payload or any(not isinstance(item, dict) for item in payload):
+        return "beats must be a nonempty array of objects"
+    seen: set[str] = set()
+    last_ratio = 0.0
+    for item in payload:
+        beat_id = item.get("beat_id")
+        if not isinstance(beat_id, str) or not beat_id or beat_id in seen:
+            return "every beat requires a unique nonempty beat_id"
+        seen.add(beat_id)
+        if not isinstance(item.get("intent"), str) or not item["intent"].strip():
+            return "every beat requires a nonempty intent"
+        for key in ("required_facts", "forbidden_claims"):
+            if not validate_string_list(item.get(key)):
+                return "fact and claim fields must be arrays of strings"
+        ratio = item.get("approx_ratio")
+        if type(ratio) not in (int, float) or not last_ratio <= ratio <= 1:
+            return "approx_ratio must increase chronologically from zero to one"
+        last_ratio = ratio
+        duration = item.get("target_duration_sec")
+        if type(duration) not in (int, float) or not math.isfinite(duration) or duration <= 0:
+            return "target_duration_sec must be a positive finite number"
+    return None
+
+
 def plan_story_beats(
     *,
     story_plan: dict,
@@ -208,11 +238,13 @@ def plan_story_beats(
     target_count = _target_count(target_duration, cfg)
     beats: list[dict] = []
 
-    if bool(getattr(cfg, "semantic_match_beat_planner_llm", True)) and getattr(cfg, "api_key_gemini", ""):
+    if bool(getattr(cfg, "semantic_match_beat_planner_llm", True)) and text_llm_available(cfg):
         evidence = _compact_evidence(signatures)
+        plan_json = json.dumps(story_plan, ensure_ascii=False, indent=2)
+        memory_json = json.dumps(story_memory, ensure_ascii=False, indent=2)
         prompt = BEAT_PLANNER_PROMPT.format(
-            story_plan_json=json.dumps(story_plan, ensure_ascii=False, indent=2)[:26000],
-            story_memory_json=json.dumps(story_memory, ensure_ascii=False, indent=2)[:14000],
+            story_plan_json=plan_json if strict_text_routing(cfg) else plan_json[:26000],
+            story_memory_json=memory_json if strict_text_routing(cfg) else memory_json[:14000],
             evidence_json=json.dumps(evidence, ensure_ascii=False, indent=2),
             target_duration=target_duration,
             target_count=target_count,
@@ -224,9 +256,11 @@ def plan_story_beats(
                 task_name="v21-beat-planner",
                 temperature=0.2,
                 model_attr="story_model",
+                response_validator=_beat_response_validator if strict_text_routing(cfg) else None,
             )
             beats = _normalize(raw, target_duration, target_count)
         except Exception as exc:
+            raise_if_strict_text_error(cfg, exc, "v21-beat-planner")
             print(f"   ⚠️ V2.1 beat planner LLM failed; deterministic fallback: {exc}")
 
     if not beats:

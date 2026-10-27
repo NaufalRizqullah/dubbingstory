@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Callable
 
+from dubbingstory.story.gemini_json import (
+    build_story_client, raise_if_strict_text_error, strict_text_routing,
+    validate_scene_items, validate_string_list,
+)
 from dubbingstory.story.language_guard import payload_language_mismatch_reason
 from dubbingstory.story.narration_planner import build_narration_plan
 from dubbingstory.story.narration_qa import evaluate_narration
@@ -29,14 +33,7 @@ def _style_config(cfg, style: str) -> dict:
 
 
 def _client(cfg):
-    from dubbingstory.vision.gemini_analyzer import GeminiVideoAnalyzer
-
-    api_key = getattr(cfg, "api_key_gemini", "")
-    if not api_key:
-        raise ValueError("❌ GOOGLE_API_KEY not found for narration generation.")
-    model = getattr(cfg, "narration_model", None) or getattr(cfg, "story_model", None) or getattr(cfg, "vision_gemini_model", "gemini-2.5-flash")
-    fallback = getattr(cfg, "vision_gemini_fallback_model", "gemini-2.0-flash")
-    return GeminiVideoAnalyzer(api_key=api_key, model=model, fallback_model=fallback), model
+    return build_story_client(cfg, model_attr="narration_model")
 
 
 def _call_json(
@@ -47,6 +44,7 @@ def _call_json(
     temperature: float = 0.45,
     language: str | None = None,
     task_name: str = "narration",
+    payload_validator: Callable[[Any], str | None] | None = None,
 ) -> Any:
     """Generate JSON with retries while preserving the selected language.
 
@@ -58,18 +56,24 @@ def _call_json(
     """
 
     def response_validator(payload: Any) -> str | None:
-        if not language:
-            return None
-        return payload_language_mismatch_reason(payload, language)
+        if payload_validator:
+            error = payload_validator(payload)
+            if error:
+                return error
+        return payload_language_mismatch_reason(payload, language) if language else None
 
     if hasattr(analyzer, "generate_json_with_retry"):
-        return analyzer.generate_json_with_retry(
+        payload = analyzer.generate_json_with_retry(
             prompt,
             temperature=temperature,
-            response_validator=response_validator if language else None,
+            response_validator=response_validator if language or payload_validator else None,
             task_name=f"{task_name}-{language or 'generic'}",
             model=model,
         )
+        validation_error = response_validator(payload)
+        if validation_error:
+            raise ValueError(validation_error)
+        return payload
 
     # Backward-compatible one-shot path for custom analyzers. Keep the same
     # semantic validation even though retry support is unavailable.
@@ -109,6 +113,30 @@ def _plan_map(narration_plan: dict) -> dict[str, dict]:
         for item in narration_plan.get("segments", []) or []
         if item.get("scene_id")
     }
+
+
+def _narration_response_validator(narration_plan: dict):
+    expected_ids = set(_plan_map(narration_plan))
+
+    def validator(payload: Any) -> str | None:
+        # Accept the historical envelopes, but never silently discard bad rows.
+        if isinstance(payload, dict):
+            payload = next((payload[key] for key in ("segments", "narration", "items")
+                            if isinstance(payload.get(key), list)), None)
+        error = validate_scene_items(payload, expected_ids)
+        if error:
+            return error
+        for item in payload:
+            if not isinstance(item.get("text"), str) or not item["text"].strip():
+                return "every narration beat requires nonempty text"
+            if not validate_string_list(item.get("claims")):
+                return "claims must be an array of nonempty strings (or an empty array)"
+            importance = item.get("importance", 0.5)
+            if type(importance) not in (int, float) or not 0 <= importance <= 1:
+                return "importance must be a number from zero to one"
+        return None
+
+    return validator
 
 
 def _validate_narration(
@@ -354,6 +382,7 @@ def _maybe_rewrite(
                 temperature=0.25,
                 language=language,
                 task_name="narration-rewrite",
+                payload_validator=_narration_response_validator(narration_plan) if strict_text_routing(cfg) else None,
             )
         )
         revised = _validate_narration(revised_raw, scenes, narration_plan, language)
@@ -366,6 +395,7 @@ def _maybe_rewrite(
             print(f"   🧪 {language.upper()} QA rewrite applied: {qa.get('issues', [])} -> {revised_qa.get('issues', [])}")
             return revised, revised_qa
     except Exception as exc:
+        raise_if_strict_text_error(cfg, exc, "narration-rewrite")
         print(f"   ⚠️ {language.upper()} QA rewrite failed: {exc}")
     return narration, qa
 
@@ -391,6 +421,7 @@ def shorten_for_measured_duration(
     style = str(getattr(cfg, "narration_style", "natural") or "natural")
     analyzer, model = _client(cfg)
     original_claims = [str(value) for value in segment.get("claims", []) or []]
+    evidence_json = json.dumps(evidence or [], ensure_ascii=False)
     prompt = (
         "Shorten this already approved narration beat to fit its measured TTS window. "
         "Preserve chronological meaning, the visible action, uncertainty, and the selected style. "
@@ -404,18 +435,28 @@ def shorten_for_measured_duration(
         f"Style: {json.dumps(_style_config(cfg, style), ensure_ascii=False)}\n"
         f"Original: {json.dumps(original, ensure_ascii=False)}\n"
         f"original_claims: {json.dumps(original_claims, ensure_ascii=False)}\n"
-        f"Visual evidence: {json.dumps(evidence or [], ensure_ascii=False)[:16000]}"
+        f"Visual evidence: {evidence_json if strict_text_routing(cfg) else evidence_json[:16000]}"
     )
+    def duration_validator(payload: Any) -> str | None:
+        if not isinstance(payload, dict):
+            return "Duration rewrite must return an object"
+        text = payload.get("text")
+        if not isinstance(text, str) or not text.strip() or len(text.split()) > target_words or text.strip() == original:
+            return f"Duration rewrite must produce a shorter beat within {target_words} words"
+        indices = payload.get("retained_claim_indices")
+        if not isinstance(indices, list) or any(type(i) is not int or not 0 <= i < len(original_claims) for i in indices):
+            return "Duration rewrite returned invalid claim references"
+        return None
+
     payload = _call_json(analyzer, model, prompt, temperature=0.15,
-                         language=language, task_name="measured-duration-rewrite")
-    if not isinstance(payload, dict):
-        raise ValueError("Duration rewrite must return an object")
-    text = str(payload.get("text", "") or "").strip()
-    if not text or len(text.split()) > target_words or text == original:
-        raise ValueError(f"Duration rewrite did not produce a shorter beat within {target_words} words")
-    indices = payload.get("retained_claim_indices", [])
-    if not isinstance(indices, list) or any(type(i) is not int or not 0 <= i < len(original_claims) for i in indices):
-        raise ValueError("Duration rewrite returned invalid claim references")
+                         language=language, task_name="measured-duration-rewrite",
+                         payload_validator=duration_validator)
+    # Retain the gate for custom clients that do not apply supplied validators.
+    error = duration_validator(payload)
+    if error:
+        raise ValueError(error)
+    text = payload["text"].strip()
+    indices = payload["retained_claim_indices"]
     revised = dict(segment)
     revised.update(text=text, word_count=len(text.split()),
                    claims=[original_claims[i] for i in dict.fromkeys(indices)],
@@ -480,6 +521,7 @@ def _generate(
                     temperature=0.45,
                     language=language,
                     task_name=f"{mode}-narration",
+                    payload_validator=_narration_response_validator(narration_plan) if strict_text_routing(cfg) else None,
                 )
             )
             narration = _validate_narration(raw, scenes, narration_plan, language)
@@ -507,6 +549,7 @@ def _generate(
                 f"QA issues={len(qa.get('issues', []))}"
             )
         except Exception as exc:
+            raise_if_strict_text_error(cfg, exc, f"{mode}-narration")
             print(f"   ❌ {language.upper()} narration failed: {exc}")
             result[language] = _fallback_narration(scenes, narration_plan, language)
 

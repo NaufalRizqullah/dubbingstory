@@ -11,6 +11,18 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.9.3]
+
+### Changed
+- Bound Gemini generation to three total attempts by default, with a 30-second transport timeout, a 90-second retry budget and 5/10-second backoff. Disable SDK retries so they cannot multiply application attempts. Require `google-genai>=1.28.0` for request-level retry options.
+- Simplify the TikTok/RedNote Kaggle notebook to the current kernel interpreter and `main.py` source mode. Resolve project dependencies and pinned vLLM together without mandatory venv/editable installation or blanket upgrades.
+
+### Added
+- Opt-in text routing to the existing local Qwen vLLM server for story planning, narration and measured-duration TTS rewrites. Exhausted Gemini service failures select local text for the rest of one run, including separate CLI stages; invalid output falls back for that task only, while invalid access/configuration fails promptly.
+- Local text-only mode without a Gemini key; two local attempts, 60-second transport timeout and 120-second retry budget by default. Exact server tokenization checks the constructed prompt before generation, without truncating it. Validate JSON shape, scene/claim references, language and measured rewrite word limits before accepting output.
+- Notebook lifecycle keeps Qwen available through TTS fitting and resumed narrate/dub stages, then stops it before render or on failure. Per-run routing metadata contains no prompt, response or credentials.
+- Offline regression tests for bounded retries, routing persistence, local validation and notebook lifecycle. Tests were authored and reviewed statically; runtime, Kaggle and audiovisual validation have not been executed locally.
+
 ## [0.9.2]
 
 ### Added

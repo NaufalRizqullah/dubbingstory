@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from dubbingstory.story.gemini_json import generate_story_json
+from dubbingstory.story.gemini_json import (
+    generate_story_json, raise_if_strict_text_error, strict_text_routing,
+    text_llm_available, validate_string_list,
+)
 from dubbingstory.story.language_guard import payload_language_mismatch_reason
 from dubbingstory.story.semantic_matcher import SimilarityEngine, make_similarity_engine
 
@@ -96,6 +99,10 @@ def verify_narration(
         beat_id = str(segment.get("scene_id", ""))
         plan = plan_map.get(beat_id, {}) or {}
         scene_ids = [str(s) for s in segment.get("covers_scene_ids", plan.get("covers_scene_ids", [])) or [] if s]
+        evidence_json = json.dumps(
+            [signature_map.get(sid, {}) for sid in scene_ids if sid in signature_map],
+            ensure_ascii=False, indent=2,
+        )
         evidence = _evidence_text(scene_ids, signature_map)
         claims = [str(v).strip() for v in segment.get("claims", []) or [] if str(v).strip()]
         if not claims:
@@ -169,7 +176,7 @@ def repair_unsupported_beats(
         return narration, []
     if not bool(getattr(cfg, "semantic_verifier_auto_repair", True)):
         return narration, []
-    if not getattr(cfg, "api_key_gemini", ""):
+    if not text_llm_available(cfg):
         return narration, []
 
     failed = {
@@ -200,11 +207,7 @@ def repair_unsupported_beats(
             language_code=language,
             language_name=_language_name(language),
             plan_json=json.dumps(plan, ensure_ascii=False, indent=2),
-            evidence_json=json.dumps(
-                [signature_map.get(sid, {}) for sid in scene_ids if sid in signature_map],
-                ensure_ascii=False,
-                indent=2,
-            )[:18000],
+            evidence_json=evidence_json if strict_text_routing(cfg) else evidence_json[:18000],
             current_json=json.dumps(
                 {"scene_id": beat_id, "text": segment.get("text", ""), "claims": segment.get("claims", [])},
                 ensure_ascii=False,
@@ -221,8 +224,10 @@ def repair_unsupported_beats(
                 return "repair response must be an object"
             if str(payload.get("scene_id", "")) != beat_id:
                 return f"scene_id must remain {beat_id}"
-            if not str(payload.get("text", "") or "").strip():
+            if not isinstance(payload.get("text"), str) or not payload["text"].strip():
                 return "repair text is empty"
+            if strict_text_routing(cfg) and not validate_string_list(payload.get("claims")):
+                return "repair claims must be an array of strings"
             return None
 
         try:
@@ -240,6 +245,7 @@ def repair_unsupported_beats(
             ][:8]
             repair_log.append({"beat_id": beat_id, "action": "rewrite_beat", "status": "applied"})
         except Exception as exc:
+            raise_if_strict_text_error(cfg, exc, "v21-beat-repair")
             repair_log.append({"beat_id": beat_id, "action": "rewrite_beat", "status": "failed", "error": str(exc)})
 
     # Re-normalize word counts/timing with the existing writer validation logic.
@@ -255,6 +261,6 @@ def repair_unsupported_beats(
                     scene_stubs.append({"scene_id": sid})
                     seen.add(sid)
         revised_raw = _validate_narration(revised_raw, scene_stubs, narration_plan, language)
-    except Exception:
-        pass
+    except Exception as exc:
+        raise_if_strict_text_error(cfg, exc, "v21-beat-repair-normalization")
     return revised_raw, repair_log

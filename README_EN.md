@@ -41,7 +41,7 @@ pip install -e .
 cp .env.sample .env
 ```
 Edit the `.env` file and configure the following variables:
-- `GOOGLE_API_KEY`: (Required) API key for Gemini (used for script writing).
+- `GOOGLE_API_KEY`: Required when vision or text uses Gemini. With Qwen vision and `llm.provider: local`, no Gemini key is needed. See [bounded retries and local fallback](docs/native-storytelling.md#retry-gemini-dan-fallback-teks-lokal).
 - `OPENAI_VISION_IMAGE_MODE`: (Optional) How images are sent to a local vision model (vLLM).
   - `data` (default): base64 encoding (safe and always works).
   - `file`: Send local file paths (much faster and memory-efficient, highly recommended for Kaggle/Colab). **Note**: If using `file`, you must add the `--allowed-local-media-path <path>` flag when starting the vLLM server.

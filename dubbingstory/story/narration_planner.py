@@ -10,7 +10,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from dubbingstory.story.gemini_json import generate_story_json
+from dubbingstory.story.gemini_json import (
+    generate_story_json, raise_if_strict_text_error, strict_text_routing,
+    text_llm_available, validate_scene_items, validate_string_list,
+)
 
 
 PLAN_REFINEMENT_PROMPT = """You are planning a coherent video narration, not writing the narration itself.
@@ -342,6 +345,27 @@ def build_narration_plan(
     }
 
 
+def _refinement_response_validator(entries: list[dict]):
+    expected_ids = {str(entry["scene_id"]) for entry in entries}
+
+    def validator(payload: Any) -> str | None:
+        error = validate_scene_items(payload, expected_ids)
+        if error:
+            return error
+        for item in payload:
+            if not isinstance(item.get("intent"), str) or not item["intent"].strip():
+                return "every refinement requires a nonempty intent"
+            for key in ("must_explain", "avoid_repeating"):
+                if not validate_string_list(item.get(key)):
+                    return "must_explain and avoid_repeating must be arrays of strings"
+            for key in ("continuity_from_previous", "transition_strategy"):
+                if not isinstance(item.get(key), str):
+                    return "continuity and transition fields must be strings"
+        return None
+
+    return validator
+
+
 def _refine_plan_with_gemini(
     entries: list[dict],
     *,
@@ -353,8 +377,7 @@ def _refine_plan_with_gemini(
 ) -> None:
     if not bool(getattr(cfg, "narration_plan_llm_refine", True)):
         return
-    api_key = getattr(cfg, "api_key_gemini", "")
-    if not api_key or not entries:
+    if not text_llm_available(cfg) or not entries:
         return
 
     scene_map = {str(s.get("scene_id")): s for s in scenes}
@@ -375,9 +398,11 @@ def _refine_plan_with_gemini(
             }
         )
 
+    plan_json = json.dumps(story_plan, ensure_ascii=False, indent=2)
+    memory_json = json.dumps(story_memory, ensure_ascii=False, indent=2)
     prompt = PLAN_REFINEMENT_PROMPT.format(
-        story_plan_json=json.dumps(story_plan, ensure_ascii=False, indent=2)[:24000],
-        story_memory_json=json.dumps(story_memory, ensure_ascii=False, indent=2)[:12000],
+        story_plan_json=plan_json if strict_text_routing(cfg) else plan_json[:24000],
+        story_memory_json=memory_json if strict_text_routing(cfg) else memory_json[:12000],
         mode=mode,
         scenes_json=json.dumps(compact_scenes, ensure_ascii=False, indent=2),
     )
@@ -389,6 +414,7 @@ def _refine_plan_with_gemini(
             task_name="narration-plan-refine",
             temperature=0.2,
             model_attr="story_model",
+            response_validator=_refinement_response_validator(entries) if strict_text_routing(cfg) else None,
         )
         if not isinstance(raw, list):
             return
@@ -411,4 +437,5 @@ def _refine_plan_with_gemini(
                     entry[key] = [str(v) for v in extra[key] if str(v).strip()][:6]
         print("   🧭 Narration planner: continuity intents refined")
     except Exception as exc:
+        raise_if_strict_text_error(cfg, exc, "narration-plan-refine")
         print(f"   ⚠️ Narration planner refinement skipped: {exc}")
