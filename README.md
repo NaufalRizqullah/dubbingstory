@@ -101,6 +101,8 @@ Pilihan `source` dan caption animasi mengaktifkan fitting narasi yang ketat: nar
 
 Lihat [panduan native storytelling, konfigurasi subtitle, dan pengujian Kaggle](docs/native-storytelling.md) untuk instalasi opsional alignment, ingest platform, output files, serta batas kompatibilitas.
 
+Notebook Kaggle khusus TikTok/RedNote tersedia di [mereska-dubbingstory-tiktok-rednote.ipynb](notebooks/mereska-dubbingstory-tiktok-rednote.ipynb). Default mempertahankan seluruh video dengan rasio `source`, voice-over Indonesia Edge, dan subtitle karaoke. `ENABLE_CANVAS = False` mematikan canvas tambahan; `True` menambah output layered 9:16 tanpa mengganti output source. Notebook menyediakan ingest terpisah, resume per tahap, render ulang, dan ZIP hasil. Atur hak penggunaan serta Kaggle Secret sebelum menjalankan; notebook belum dieksekusi pada saat ditambahkan.
+
 Jika download YouTube gagal di notebook, ikuti [diagnostik download Kaggle](docs/native-storytelling.md#download-youtube-di-kaggle). Notebook repository memasang `yt-dlp[default]` sebelum download dan mencetak versi yang digunakan; downloader mengikuti pilihan client bawaan yt-dlp.
 
 Untuk mengubah video 16:9 menjadi canvas 9:16 dengan dua layer seperti editor video:

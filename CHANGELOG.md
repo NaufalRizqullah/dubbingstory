@@ -11,6 +11,12 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.9.2]
+
+### Added
+- Dedicated Kaggle notebook `mereska-dubbingstory-tiktok-rednote.ipynb`, adapted from the user's YouTube notebook: native full-video storytelling, Indonesian Edge voice-over, karaoke/word captions, optional additional layered canvas (off by default), staged ingest before model startup, per-stage resume, render recovery, and downloadable output bundle.
+- Notebook contract tests covering native defaults, canvas output selection, source provenance, rights confirmation, resume stages, Python cell syntax, and clean unexecuted metadata. Tests and notebook have not been run locally; runtime validation is left to Kaggle.
+
 ## [0.9.1]
 
 ### Changed
