@@ -11,6 +11,16 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.9.4]
+
+### Fixed
+- Preserve the original `rednote.com` host instead of rewriting it to `xiaohongshu.com`. The reported item exposes video on the original public RedNote page while the rewritten URL returns an error page. Register a small `RedNoteIE` subclass that reuses yt-dlp's existing XiaoHongShu extraction logic without authentication or alternate-access workarounds.
+- Keep source identity/cache compatibility across RedNote/Xiaohongshu aliases, preserve share queries only for extraction, and retain the correct public host in saved canonical URLs.
+- Add safe missing-title diagnostics and surface metadata-only extraction warnings. Notebook preflight now rejects checkouts missing the RedNote adapter.
+
+### Validation
+- Public metadata probe for the reported RedNote item on 2026-10-28 succeeded through the updated adapter: three formats, including 720x1280 at 22.167 seconds. The local probe used existing yt-dlp `2026.06.21.235142`; the user's failing Kaggle log used `2026.10.26`. No dependency installation, full media/pipeline run, or local test-suite execution was performed. Offline regressions were added for Kaggle.
+
 ## [0.9.3]
 
 ### Changed

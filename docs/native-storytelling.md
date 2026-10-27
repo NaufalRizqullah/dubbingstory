@@ -47,6 +47,26 @@ Nama project URL otomatis sekarang mencakup provider/video identity. Gunakan `--
 
 **Hasil probe contoh RedNote, 24 Oktober 2026:** yt-dlp terpasang `2026.06.21.235142` belum mengenali URL `rednote.com` langsung. Alias `xiaohongshu.com` dengan ID sama menghasilkan extractor error tanpa metadata. Probe hanya meminta metadata, tanpa cookie/login, instalasi, atau download video. Adapter sudah tersedia, tetapi keberhasilan download contoh tersebut belum terverifikasi. Jika platform menolak akses di Kaggle, gunakan file lokal yang Anda berhak gunakan.
 
+### RedNote: domain asli harus dipertahankan
+
+Adapter sekarang mempertahankan `rednote.com` untuk URL RedNote dan `xiaohongshu.com` untuk URL Xiaohongshu. Keduanya tetap memakai provider identity `xiaohongshu:<id>` agar source cache lama dengan hash/quality yang cocok dapat dipakai kembali. Domain pada `canonical_url` mengikuti sumber publik yang digunakan; share query tetap hanya di memori extractor.
+
+**Temuan 28 Oktober 2026 untuk item `6ad206ee000000001400240a`:** URL RedNote asli mengembalikan halaman note dan tiga format video, sedangkan URL dengan ID sama yang ditulis ulang ke Xiaohongshu mengarah ke halaman error HTTP 200 tanpa data note/video. Karena itu, respons HTTP 200 atau pesan `no_video` saja tidak cukup untuk menyimpulkan bahwa post telah dihapus atau hanya berisi gambar. Probe historis di atas memakai item berbeda; kegagalan alias juga tidak membuktikan sumber RedNote aslinya gagal.
+
+`dubbingstory/ingest/rednote.py` memperluas URL matching melalui subclass `RedNoteIE`; seluruh parsing tetap memakai [extractor XiaoHongShu upstream yt-dlp](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/xiaohongshu.py). Tidak ada login, cookies, browser impersonation, atau pergantian otomatis ke domain lain saat akses ditolak. URL Xiaohongshu tetap memakai extractor upstream seperti sebelumnya.
+
+Metadata dengan selector `max` pada adapter yang sudah diperbaiki berhasil menemukan tiga format, termasuk 720x1280 dengan durasi 22,167 detik. Probe lokal hanya memakai yt-dlp existing `2026.06.21.235142`, tanpa download file video atau menjalankan pipeline. Log Kaggle yang dilaporkan memakai `2026.10.26`; download/render lengkap pada runtime itu masih perlu diuji pengguna.
+
+Untuk memakai perbaikan di Kaggle:
+
+1. Gunakan kode repository yang sudah memuat `dubbingstory/ingest/rednote.py` dan registrasinya di `ingest/youtube.py`, serta notebook terbaru. Notebook saja tidak memperbarui checkout Git yang sudah ada.
+2. Pertahankan `VIDEO_INPUT` dengan URL RedNote asli. Setelah normalisasi, log `Source` harus tetap menampilkan `www.rednote.com`.
+3. Jika checkout lama masih dipakai, perbarui secara sadar dari perubahan terbaru atau pilih checkout baru. Notebook tidak melakukan pull/reset otomatis dan sekarang memeriksa keberadaan adapter sebelum setup.
+4. Jalankan ulang ingest. Jika file `source.mp4` hasil run sebelumnya masih ada dengan metadata/hash/quality cocok, gunakan `PROJECT_NAME` dan `OUTPUT_ROOT` yang sama agar cache dipakai. Jangan menghapus hasil lama hanya untuk mencoba downloader ulang.
+5. Jika versi terbaru tetap ditolak platform, gunakan file lokal yang Anda berhak gunakan; jangan mengubah cookies atau menambahkan workaround akses.
+
+Regresi offline terkait ada pada `tests/test_multisource_ingest.py` dan `tests/test_social_notebook.py`; tests belum dijalankan di komputer development.
+
 ### Download YouTube di Kaggle
 
 Log notebook 27 Oktober 2026 berhenti di `download_video`, sebelum vision, TTS, atau render. Pesan lama `[no_video]` berasal dari klasifikasi kegagalan pemilihan format yt-dlp; pesan itu sendiri tidak membuktikan bahwa link rusak atau hanya berisi gambar. Logger lama membuang peringatan extractor, sehingga log tersebut tidak cukup untuk memastikan apakah client YouTube, JavaScript/EJS, filter format, atau pembatasan akses yang menjadi pemicu akhirnya.

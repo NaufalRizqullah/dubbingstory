@@ -62,6 +62,8 @@ class SourceURL:
 
     @property
     def extractor_key(self) -> str:
+        if urlsplit(self.url).hostname in {"rednote.com", "www.rednote.com"}:
+            return "RedNote"
         return _EXTRACTOR_KEYS[self.provider]
 
 
@@ -130,8 +132,11 @@ def normalize_source_url(value: str) -> SourceURL:
         if not match:
             raise SourceIngestError("unsupported_url", "Provide a Xiaohongshu/RedNote video item or xhslink.com share link.")
         video_id = match.group(1).lower()
-        # The official XiaoHongShu extractor accepts www.xiaohongshu.com only.
-        canonical = f"https://www.xiaohongshu.com/discovery/item/{video_id}"
+        # These public frontends can expose different page data for the same ID.
+        # Keep RedNote on its original host; the local adapter reuses yt-dlp's
+        # XiaoHongShu parser without rewriting the requested site.
+        canonical_host = "www.rednote.com" if host in {"rednote.com", "www.rednote.com"} else "www.xiaohongshu.com"
+        canonical = f"https://{canonical_host}/discovery/item/{video_id}"
     return SourceURL(provider, canonical + (f"?{query}" if query else ""), canonical, video_id)
 
 
@@ -202,8 +207,7 @@ def resolve_source_url(value: str, *, timeout: float = 15, max_redirects: int = 
                 except SourceIngestError:
                     raise SourceIngestError("restricted", "The platform redirected to a login or unsupported landing page. Use an accessible video URL or local file.") from None
                 if not resolved.is_short_link:
-                    # Normalization may map a RedNote alias to Xiaohongshu.
-                    # Validate the actual extractor destination as well.
+                    # Validate the normalized public extractor destination too.
                     _ensure_public_host(urlsplit(resolved.url).hostname)
                     return resolved
                 current = destination

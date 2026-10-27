@@ -87,6 +87,7 @@ _DIAGNOSTIC_MESSAGES = {
     "youtube_delivery_unavailable": "YouTube did not expose ordinary downloadable URLs for some client formats (SABR delivery).",
     "no_video_formats": "The extractor reported no usable video formats. This alone does not establish that the link is invalid or the post contains only images.",
     "format_selection": "No extracted format matched the requested height/codec policy. Extraction warnings may explain why formats are missing.",
+    "page_title_missing": "The extractor could not find the post title. Together with missing video formats this can indicate an error or incomplete page, not necessarily an image-only post.",
     "extractor_warning": "The extractor emitted an additional warning; its raw text was suppressed to avoid exposing credentials or signed media URLs.",
     "extractor_error": "The extractor failed without a recognized diagnostic marker; its raw text was suppressed.",
 }
@@ -141,6 +142,8 @@ class _SafeLogger:
             codes.add("no_video_formats")
         if "requested format is not available" in text:
             codes.add("format_selection")
+        if 'extractor failed to obtain "title"' in text:
+            codes.add("page_title_missing")
         self.codes.update(codes or {fallback})
 
     def report(self):
@@ -206,6 +209,15 @@ def _metadata(info: dict, source, requested_source=None) -> dict:
     }
 
 
+def _extract_source_info(ydl, source) -> dict:
+    """Register the public RedNote URL adapter without changing other sites."""
+    if source.extractor_key == "RedNote":
+        from .rednote import RedNoteIE
+
+        ydl.add_info_extractor(RedNoteIE())
+    return _require_single_video(ydl.extract_info(source.url, download=False, ie_key=source.extractor_key))
+
+
 def extract_video_info(url: str, cookies: str | None = None) -> dict:
     """Extract safe metadata for a supported single video, without downloading."""
     requested = normalize_source_url(url)
@@ -214,11 +226,14 @@ def extract_video_info(url: str, cookies: str | None = None) -> dict:
     opts["skip_download"] = True
     try:
         with YoutubeDL(opts) as ydl:
-            info = _require_single_video(ydl.extract_info(source.url, download=False, ie_key=source.extractor_key))
+            info = _extract_source_info(ydl, source)
         return _metadata(info, source, requested)
     except SourceIngestError:
+        opts["logger"].report()
         raise
     except Exception as exc:
+        opts["logger"].error(exc)
+        opts["logger"].report()
         raise classify_download_error(exc) from None
 
 
@@ -312,7 +327,7 @@ def download_video(
         })
         try:
             with YoutubeDL(opts) as ydl:
-                info = _require_single_video(ydl.extract_info(source.url, download=False, ie_key=source.extractor_key))
+                info = _extract_source_info(ydl, source)
                 # Prevalidate metadata/identity before transferring the media.
                 metadata = _metadata(info, source, requested)
                 processed = ydl.process_ie_result(info, download=True)

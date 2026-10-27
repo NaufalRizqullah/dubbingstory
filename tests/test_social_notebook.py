@@ -266,8 +266,11 @@ def test_canvas_toggle_keeps_source_output(enabled, ratios, layout, names):
     assert functions["expected_output_names"](enabled) == names
 
 
-def test_remote_ingest_keeps_share_query_and_rights_flag():
-    url = "https://www.xiaohongshu.com/discovery/item/abc123?share=example"
+@pytest.mark.parametrize("url", [
+    "https://www.xiaohongshu.com/discovery/item/abc123?share=example",
+    "https://www.rednote.com/discovery/item/6ad206ee000000001400240a?share=example",
+])
+def test_remote_ingest_keeps_original_host_share_query_and_rights_flag(url):
     arguments = helpers()["ingestion_arguments"](url, True, "sample", "max", True)
     assert arguments[arguments.index("--url") + 1] == url
     assert "--i-have-rights" in arguments
@@ -302,6 +305,18 @@ def test_feature_preflight_matches_current_repository():
     for relative, markers in ast.literal_eval(assignment.value).items():
         content = (ROOT / relative).read_text(encoding="utf-8")
         assert all(marker in content for marker in markers), relative
+
+
+def test_preflight_requires_rednote_domain_adapter_before_installation():
+    setup = source("setup")
+    assignments = [node for node in ast.parse(setup).body if isinstance(node, ast.Assign)]
+    assignment = next(node for node in assignments if any(
+        isinstance(target, ast.Name) and target.id == "required_markers" for target in node.targets))
+    markers = ast.literal_eval(assignment.value)
+    assert "class RedNoteIE" in markers["dubbingstory/ingest/rednote.py"]
+    assert 'return "RedNote"' in markers["dubbingstory/ingest/sources.py"]
+    assert "add_info_extractor(RedNoteIE())" in markers["dubbingstory/ingest/youtube.py"]
+    assert setup.index("required_markers") < setup.index("if INSTALL_DEPENDENCIES:")
 
 
 def test_no_original_cleanup_or_youtube_downloader_is_copied():

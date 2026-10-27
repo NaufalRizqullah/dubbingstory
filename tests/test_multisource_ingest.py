@@ -12,6 +12,7 @@ from urllib.error import HTTPError
 from unittest.mock import patch
 
 from dubbingstory.ingest import local_video, sources, youtube
+from dubbingstory.ingest.rednote import RedNoteIE
 
 
 REDNOTE_ID = "6a47c2cc000000001700a073"
@@ -26,11 +27,33 @@ class SourceURLTests(unittest.TestCase):
         source = sources.normalize_source_url(REDNOTE_URL + "?xsec_token=example-only")
         self.assertEqual(source.provider, "xiaohongshu")
         self.assertEqual(source.video_id, REDNOTE_ID)
-        self.assertEqual(source.canonical_url, XHS_URL)
-        self.assertIn("xsec_token=example-only", source.url)
+        self.assertEqual(source.canonical_url, REDNOTE_URL)
+        self.assertEqual(source.url, REDNOTE_URL + "?xsec_token=example-only")
+        self.assertEqual(source.extractor_key, "RedNote")
+        self.assertEqual(sources.sanitized_source_url(source.url), REDNOTE_URL)
         self.assertNotIn("example-only", repr(source))
         self.assertNotIn("example-only", source.identity)
         self.assertEqual(sources.source_project_name(REDNOTE_URL), f"xiaohongshu_{REDNOTE_ID}")
+
+    def test_rednote_and_xhs_keep_their_hosts_but_share_cache_identity(self):
+        rednote = sources.normalize_source_url(REDNOTE_URL)
+        xhs = sources.normalize_source_url(XHS_URL)
+        self.assertEqual(rednote.identity, xhs.identity)
+        self.assertEqual(xhs.url, XHS_URL)
+        self.assertEqual(xhs.extractor_key, "XiaoHongShu")
+        self.assertEqual(sources.source_project_name(REDNOTE_URL), sources.source_project_name(XHS_URL))
+        apex = sources.normalize_source_url(f"https://rednote.com/explore/{REDNOTE_ID}")
+        self.assertEqual(apex.canonical_url, REDNOTE_URL)
+        self.assertEqual(apex.extractor_key, "RedNote")
+
+    def test_rednote_adapter_does_not_claim_other_hosts_or_nonvideo_pages(self):
+        self.assertTrue(RedNoteIE.suitable(REDNOTE_URL))
+        self.assertTrue(RedNoteIE.suitable(f"https://www.rednote.com/explore/{REDNOTE_ID}"))
+        for url in (XHS_URL, YOUTUBE_URL, TIKTOK_URL,
+                    f"https://www.rednote.com.evil.example/discovery/item/{REDNOTE_ID}",
+                    "https://www.rednote.com/user/profile/123"):
+            with self.subTest(url=url):
+                self.assertFalse(RedNoteIE.suitable(url))
 
     def test_youtube_variants_share_identity_but_different_videos_do_not(self):
         urls = [YOUTUBE_URL + "&list=discarded", "https://youtu.be/abcdefghijk?t=10",
@@ -84,9 +107,22 @@ class SourceURLTests(unittest.TestCase):
         build.return_value.open.side_effect = HTTPError(
             "https://xhslink.com/a/123", 302, "Found", {"Location": REDNOTE_URL}, None)
         resolved = sources.resolve_source_url("https://xhslink.com/a/123")
-        self.assertEqual(resolved.canonical_url, XHS_URL)
-        public.assert_any_call("www.xiaohongshu.com")
+        self.assertEqual(resolved.canonical_url, REDNOTE_URL)
+        self.assertEqual(resolved.extractor_key, "RedNote")
+        public.assert_any_call("www.rednote.com")
+        self.assertNotIn("www.xiaohongshu.com", [call.args[0] for call in public.call_args_list])
         self.assertEqual(build.return_value.open.call_count, 1)
+
+    @patch.object(sources, "_ensure_public_host")
+    @patch.object(sources, "build_opener")
+    def test_share_redirect_preserves_rednote_query_only_for_extractor(self, build, public):
+        target = REDNOTE_URL + "?xsec_token=redirect-fixture-only&xsec_source=share"
+        build.return_value.open.side_effect = HTTPError(
+            "https://xhslink.com/a/123", 302, "Found", {"Location": target}, None)
+        resolved = sources.resolve_source_url("https://xhslink.com/a/123")
+        self.assertEqual(resolved.url, target)
+        self.assertEqual(resolved.canonical_url, REDNOTE_URL)
+        self.assertNotIn("redirect-fixture-only", repr(resolved))
 
     @patch.object(sources, "_ensure_public_host")
     @patch.object(sources, "build_opener")
@@ -157,6 +193,7 @@ class DownloaderDiagnosticsTests(unittest.TestCase):
             ("Some formats are missing a url. YouTube is forcing SABR streaming", "youtube_delivery_unavailable"),
             ("Only images are available for download", "no_video_formats"),
             ("Requested format is not available", "format_selection"),
+            ('Extractor failed to obtain "title". Creating a generic title instead', "page_title_missing"),
         ]
         for message, code in cases:
             with self.subTest(code=code, message=message):
@@ -193,6 +230,78 @@ class DownloaderDiagnosticsTests(unittest.TestCase):
 
 
 class DownloadBackendTests(unittest.TestCase):
+    @patch.object(youtube, "resolve_source_url")
+    @patch.object(youtube, "YoutubeDL")
+    def test_metadata_failure_reports_safe_missing_page_diagnostics(self, downloader, resolve):
+        resolve.return_value = sources.normalize_source_url(REDNOTE_URL)
+        session = downloader.return_value.__enter__.return_value
+
+        def missing_page(*args, **kwargs):
+            logger = downloader.call_args.args[0]["logger"]
+            logger.warning('Extractor failed to obtain "title". Creating a generic title instead')
+            raise RuntimeError("No video formats found https://media.example/?signature=private-fixture")
+
+        session.extract_info.side_effect = missing_page
+        captured = io.StringIO()
+        with redirect_stdout(captured), self.assertRaises(sources.SourceIngestError) as error:
+            youtube.extract_video_info(REDNOTE_URL)
+        self.assertEqual(error.exception.category, "no_video")
+        self.assertIn("page_title_missing", captured.getvalue())
+        self.assertIn("no_video_formats", captured.getvalue())
+        self.assertEqual(captured.getvalue().count("yt-dlp [page_title_missing]"), 1)
+        self.assertNotIn("media.example", captured.getvalue())
+        self.assertNotIn("private-fixture", captured.getvalue())
+        session.process_ie_result.assert_not_called()
+
+    @patch.object(youtube, "resolve_source_url")
+    @patch.object(youtube, "YoutubeDL")
+    def test_rednote_metadata_registers_adapter_and_extracts_original_public_host(self, downloader, resolve):
+        requested = REDNOTE_URL + "?xsec_token=metadata-fixture-only"
+        resolve.return_value = sources.normalize_source_url(requested)
+        session = downloader.return_value.__enter__.return_value
+        session.extract_info.return_value = {
+            "id": REDNOTE_ID, "title": "Fixture video", "extractor_key": "RedNote",
+            "formats": [{"url": "https://media.example/file", "vcodec": "h264"}],
+        }
+        metadata = youtube.extract_video_info(requested)
+        session.add_info_extractor.assert_called_once()
+        self.assertIsInstance(session.add_info_extractor.call_args.args[0], RedNoteIE)
+        session.extract_info.assert_called_once_with(requested, download=False, ie_key="RedNote")
+        session.process_ie_result.assert_not_called()
+        self.assertEqual(metadata["canonical_url"], REDNOTE_URL)
+        self.assertEqual(metadata["extractor"], "RedNote")
+        self.assertNotIn("metadata-fixture-only", json.dumps(metadata))
+        self.assertNotIn("media.example", json.dumps(metadata))
+
+    @patch.object(youtube, "resolve_source_url")
+    @patch.object(youtube, "YoutubeDL")
+    def test_native_xhs_metadata_keeps_upstream_extractor_without_rednote_registration(self, downloader, resolve):
+        resolve.return_value = sources.normalize_source_url(XHS_URL)
+        session = downloader.return_value.__enter__.return_value
+        session.extract_info.return_value = {
+            "id": REDNOTE_ID,
+            "formats": [{"url": "https://media.example/file", "vcodec": "h264"}],
+        }
+        metadata = youtube.extract_video_info(XHS_URL)
+        session.add_info_extractor.assert_not_called()
+        session.extract_info.assert_called_once_with(XHS_URL, download=False, ie_key="XiaoHongShu")
+        self.assertEqual(metadata["canonical_url"], XHS_URL)
+
+    @patch.object(youtube, "resolve_source_url")
+    @patch.object(youtube, "YoutubeDL")
+    def test_rednote_failure_does_not_retry_other_domain_or_authentication(self, downloader, resolve):
+        resolve.return_value = sources.normalize_source_url(REDNOTE_URL)
+        session = downloader.return_value.__enter__.return_value
+        session.extract_info.side_effect = RuntimeError("HTTP 403")
+        with self.assertRaises(sources.SourceIngestError) as error:
+            youtube.extract_video_info(REDNOTE_URL, cookies="unused-browser")
+        self.assertEqual(error.exception.category, "restricted")
+        session.extract_info.assert_called_once_with(REDNOTE_URL, download=False, ie_key="RedNote")
+        opts = downloader.call_args.args[0]
+        self.assertNotIn("cookiefile", opts)
+        self.assertNotIn("cookiesfrombrowser", opts)
+        self.assertNotIn("remote_components", opts)
+
     def test_new_sources_do_not_read_cookies_or_use_youtube_options(self):
         with patch.object(youtube, "_apply_cookies") as cookies:
             opts = youtube._base_options("xiaohongshu", "unused-browser")
@@ -325,6 +434,23 @@ class DownloadBackendTests(unittest.TestCase):
             self.assertEqual(error.exception.category, "cache_invalid")
 
     @patch.object(youtube, "resolve_source_url")
+    @patch.object(youtube, "YoutubeDL")
+    def test_existing_xhs_named_cache_is_reused_for_rednote_without_network(self, downloader, resolve):
+        legacy_source = sources.normalize_source_url(XHS_URL)
+        with tempfile.TemporaryDirectory() as directory:
+            output = os.path.join(directory, "source.mp4")
+            with open(output, "wb") as handle:
+                handle.write(b"verified-legacy-video")
+            metadata = {"canonical_url": XHS_URL, "source_identity": legacy_source.identity,
+                        "request_identity": legacy_source.identity, "download_quality": "max",
+                        "sha256": hashlib.sha256(b"verified-legacy-video").hexdigest()}
+            with open(os.path.join(directory, "video_metadata.json"), "w") as handle:
+                json.dump(metadata, handle)
+            self.assertEqual(youtube.download_video(REDNOTE_URL, directory, "max"), output)
+            resolve.assert_not_called()
+            downloader.assert_not_called()
+
+    @patch.object(youtube, "resolve_source_url")
     def test_new_share_link_can_reuse_same_resolved_video(self, resolve):
         resolved = sources.normalize_source_url(REDNOTE_URL)
         resolve.return_value = resolved
@@ -351,6 +477,9 @@ class DownloadBackendTests(unittest.TestCase):
             with self.assertRaises(sources.SourceIngestError):
                 youtube.download_video(REDNOTE_URL, directory, "max")
             self.assertEqual(os.listdir(directory), [])
+        session.add_info_extractor.assert_called_once()
+        self.assertIsInstance(session.add_info_extractor.call_args.args[0], RedNoteIE)
+        session.extract_info.assert_called_once_with(REDNOTE_URL, download=False, ie_key="RedNote")
 
     @patch.object(local_video, "get_video_metadata")
     @patch.object(youtube, "resolve_source_url")
@@ -376,6 +505,9 @@ class DownloadBackendTests(unittest.TestCase):
                 metadata = json.load(handle)
             self.assertEqual(metadata["height"], 1920)
             self.assertEqual(metadata["sha256"], hashlib.sha256(b"fixture-video").hexdigest())
+            self.assertEqual(metadata["canonical_url"], REDNOTE_URL)
+            session.add_info_extractor.assert_called_once()
+            session.extract_info.assert_called_once_with(REDNOTE_URL, download=False, ie_key="RedNote")
             resolve.reset_mock()
             self.assertEqual(youtube.download_video(REDNOTE_URL, directory, "max"), output)
             resolve.assert_not_called()
