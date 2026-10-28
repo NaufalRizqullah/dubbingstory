@@ -252,6 +252,27 @@ Regresi notebook memakai subprocess palsu dan tidak memuat model. Tests hanya di
 
 ## Pengujian di Kaggle
 
+### Pemulihan error canvas audio pada tahap dub
+
+Pada log berikutnya yang diterima 28 Oktober 2026, ingest, segment, analisis Qwen dan narrate sudah berhasil. Ketiga beat TTS juga lolos fitting: 5,59 detik mulai 0,00; 5,26 detik mulai 7,27; dan 5,28 detik mulai 14,72. Error `Rendered narration duration differs from the video timeline` baru terjadi setelah penggabungan canvas audio. Log lama tidak menyertakan durasi WAV hasil atau selisihnya, sehingga besar dan penyebab spesifik drift belum dapat dipastikan dari log itu.
+
+Implementasi sebelumnya mengandalkan batas timestamp `-t`, termasuk ketika `loudnorm` dan resampling aktif. Canvas sekarang memakai jumlah sampel `round(durasi_video * 24000)`, timestamp clip yang dimulai dari nol sebelum penempatan, dan endpoint sampel setelah normalisasi/resampling. Ada tambahan silence internal tiga detik sebelum normalisasi untuk menguras buffer filter; bagian ini dibuang dari output. Tidak ada padding setelah normalisasi untuk menyamarkan ucapan yang hilang. Durasi WAV dibaca dari jumlah sampelnya. [Dokumentasi filter FFmpeg](https://github.com/FFmpeg/FFmpeg/blob/n4.4/doc/filters.texi) menjelaskan resampling 192 kHz pada `loudnorm` dinamis serta endpoint berbasis sampel pada `atrim`.
+
+Guard produksi tetap 20 ms dan narasi yang melampaui window tetap ditolak. Error kini mencantumkan `expected`, `actual`, `delta`, serta status normalisasi. Ini bukan alasan untuk menaikkan toleransi atau melewati validasi. Hasil gagal tidak diterbitkan sebagai audio/manifest lengkap; naskah asli tetap dapat dipakai untuk mencoba `dub` lagi.
+
+Untuk kasus ini, perbarui **kode repository Kaggle dan notebook**, lalu jalankan kembali setup/configuration dengan `PROJECT_NAME`/`OUTPUT_ROOT` yang sama dan `START_FROM="dub"`. Notebook menolak checkout yang belum memuat perbaikan canvas; notebook baru saja tidak memperbarui checkout existing. Pastikan `source.mp4`, `storyboard.json`, `scripts/script_id.json` dan `.txt` masih tersedia. Ingest memverifikasi cache; segment/analyze/narrate tidak perlu diulang. Tahap dub masih melakukan TTS dan fitting ulang karena percobaan sebelumnya belum menerbitkan hasil lengkap. Jangan langsung memilih render.
+
+Regresi media berikut bersifat opt-in dan **hanya untuk dijalankan di Kaggle** setelah checkout diperbarui:
+
+```bash
+python -m pytest -q tests/test_native_tts_validation.py tests/test_tts_canvas.py tests/test_social_notebook.py
+DUBBINGSTORY_FFMPEG_TESTS=1 python -m pytest -q tests/test_tts_canvas.py
+```
+
+Tests media menggunakan WAV sintetis, tanpa Edge/Gemini/Qwen. Durasi pecahan detik, jumlah sampel, gap dan audio dekat ujung diperiksa dengan normalisasi aktif maupun nonaktif. Belum ada klaim tests atau render revisi ini lulus di runtime pengguna.
+
+### Suite dan pemeriksaan audiovisual
+
 Perubahan ini belum diuji dengan menjalankan tests, TTS, alignment, atau rendering pada komputer development, sesuai permintaan. Perintah berikut **untuk Anda jalankan di Kaggle**, dari root checkout repository yang sudah memuat perubahan ini.
 
 ```bash

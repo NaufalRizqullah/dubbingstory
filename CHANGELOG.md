@@ -11,6 +11,17 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.9.6]
+
+### Fixed
+- Build the narration canvas with an explicit 24 kHz sample count instead of input/output timestamp `-t` limits. Reset clip timestamps before placement and set the final sample endpoint after loudness normalization/resampling; finite pre-normalization silence flushes the filter before that endpoint is applied.
+- Measure PCM WAV duration from its sample count, retain the probe fallback for other formats, and reject invalid/nonfinite durations. Keep the strict 20 ms canvas check and per-beat overflow protection; duration failures now report expected/actual/delta without publishing completed audio or rewritten scripts.
+- Require the updated canvas renderer in the social notebook preflight and document resuming the reported failure from `dub` with existing source/storyboard/scripts.
+
+### Validation
+- Latest user-supplied Kaggle logs confirm ingest, segmentation, Qwen analysis, narration and all three fitted speech clips succeeded. Failure occurs during the final canvas duration check; the old log omits the measured output duration, so the exact drift remains unverified.
+- Add mocked duration/publication regressions and opt-in FFmpeg tests for fractional video durations, normalization on/off, gaps and speech near the endpoint. Tests, FFmpeg, model startup and the pipeline were not executed on the development computer; validate in Kaggle.
+
 ## [0.9.5]
 
 ### Fixed

@@ -136,6 +136,17 @@ def test_native_social_defaults_and_explicit_rights_gate():
     assert literal_setting("NARRATION_FIT") == "rewrite"
 
 
+def test_setup_requires_canvas_fix_before_resuming_existing_scripts():
+    setup = source("setup")
+    assignment = next(node for node in ast.parse(setup).body if isinstance(node, ast.Assign)
+                      and any(isinstance(target, ast.Name) and target.id == "required_markers"
+                              for target in node.targets))
+    markers = ast.literal_eval(assignment.value)["dubbingstory/tts/voice_manager.py"]
+    assert {"strict_timing_validated", "atrim=end_sample", "Narration canvas:"} <= set(markers)
+    renderer = (ROOT / "dubbingstory" / "tts" / "voice_manager.py").read_text(encoding="utf-8")
+    assert all(marker in renderer for marker in markers)
+
+
 def test_text_retry_defaults_and_shared_interpreter_setup():
     assert literal_setting("TEXT_LLM_PROVIDER") == "gemini"
     assert literal_setting("LOCAL_FALLBACK_ENABLED") is True

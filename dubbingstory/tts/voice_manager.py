@@ -461,7 +461,7 @@ def _generate_timeline_audio(
                 else:
                     engine.synthesize(text=text, output_path=raw_path, language=language, speaking_rate=speaking_rate)
                 actual = _get_audio_duration(raw_path)
-                if actual <= 0:
+                if not math.isfinite(actual) or actual <= 0:
                     raise RuntimeError(f"Cannot determine synthesized duration: {raw_path}")
                 if not strict or actual <= available + 0.001:
                     break
@@ -564,8 +564,18 @@ def _generate_timeline_audio(
             total_duration=timeline_duration,
             normalize_loudness=normalize,
         )
-        if strict and abs(_get_audio_duration(partial_path) - timeline_duration) > 0.02:
-            raise ValueError("Rendered narration duration differs from the video timeline")
+        rendered_duration = _get_audio_duration(partial_path)
+        duration_delta = rendered_duration - timeline_duration
+        if strict and (not math.isfinite(rendered_duration) or rendered_duration <= 0
+                       or abs(duration_delta) > 0.02):
+            raise ValueError(
+                "Rendered narration duration differs from the video timeline: "
+                f"expected={timeline_duration:.6f}s, actual={rendered_duration:.6f}s, "
+                f"delta={duration_delta:+.6f}s (tolerance=0.020000s, "
+                f"normalize_loudness={normalize}). No completed audio was published."
+            )
+        print(f"   🎚️ Narration canvas: expected={timeline_duration:.6f}s, "
+              f"actual={rendered_duration:.6f}s, delta={duration_delta:+.6f}s")
         os.replace(partial_path, output_path)
     finally:
         if os.path.isfile(partial_path):
@@ -597,12 +607,20 @@ def _render_timeline_canvas(
     total_duration: float,
     normalize_loudness: bool,
 ) -> None:
+    sample_rate = 24000
+    if not math.isfinite(total_duration) or total_duration <= 0:
+        raise ValueError("A finite positive timeline duration is required for narration mixing")
+    target_samples = round(total_duration * sample_rate)
+    if target_samples < 1:
+        raise ValueError("Narration timeline must contain at least one audio sample")
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
+    # An input/output -t works on timestamps and frame boundaries. Bound the
+    # silent source by samples instead, including fractional video durations.
     cmd = [
         "ffmpeg", "-y",
-        "-f", "lavfi", "-t", f"{total_duration:.3f}",
-        "-i", "anullsrc=r=24000:cl=mono",
+        "-f", "lavfi", "-i",
+        f"anullsrc=r={sample_rate}:cl=mono,atrim=end_sample={target_samples},asetpts=N/SR/TB",
     ]
     for item in placements:
         cmd.extend(["-i", item["path"]])
@@ -613,7 +631,7 @@ def _render_timeline_canvas(
         delay_ms = max(0, int(round(float(item["actual_start"]) * 1000)))
         label = f"p{index}"
         filters.append(
-            f"[{index}:a]aresample=24000,adelay={delay_ms}:all=1[{label}]"
+            f"[{index}:a]aresample={sample_rate},asetpts=N/SR/TB,adelay={delay_ms}:all=1[{label}]"
         )
         mix_labels.append(f"[{label}]")
 
@@ -624,17 +642,26 @@ def _render_timeline_canvas(
     )
     final_label = output_label
     if normalize_loudness:
+        # Flush loudnorm's lookahead using silence beyond the video endpoint.
+        # Padding AFTER loudnorm could conceal a lost speech tail. This guard
+        # is removed below; it never extends the video or the published audio.
         filters.append(
-            f"[{output_label}]loudnorm=I=-16:LRA=11:TP=-1.5[norm]"
+            f"[{output_label}]apad=pad_dur=3,loudnorm=I=-16:LRA=11:TP=-1.5[norm]"
         )
         final_label = "norm"
 
+    # loudnorm can negotiate 192 kHz internally. Establish the final sample
+    # rate BEFORE counting samples, then regenerate a zero-based audio clock.
+    # Strict speech-window checks above ensure the endpoint cannot cut speech.
+    filters.append(
+        f"[{final_label}]aresample={sample_rate},atrim=end_sample={target_samples},"
+        "asetpts=N/SR/TB[timeline]"
+    )
     cmd.extend(
         [
             "-filter_complex", ";".join(filters),
-            "-map", f"[{final_label}]",
-            "-t", f"{total_duration:.3f}",
-            "-ar", "24000", "-ac", "1",
+            "-map", "[timeline]",
+            "-ar", str(sample_rate), "-ac", "1",
             "-c:a", "pcm_s16le",
             output_path,
         ]
@@ -676,6 +703,13 @@ def _concatenate_audio(audio_paths: list[str], output_path: str) -> str:
 
 
 def _get_audio_duration(audio_path: str) -> float:
+    # TTS/canvas outputs are PCM WAV: count samples rather than estimating a
+    # container duration. Preserve the ffprobe fallback for other audio types.
+    from dubbingstory.tts.word_alignment import WordAlignmentError, wav_duration
+    try:
+        return wav_duration(audio_path)
+    except WordAlignmentError:
+        pass
     result = subprocess.run(
         [
             "ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -686,8 +720,11 @@ def _get_audio_duration(audio_path: str) -> float:
         text=True,
         check=False,
     )
+    if result.returncode:
+        return 0.0
     try:
-        return float(result.stdout.strip())
+        duration = float(result.stdout.strip())
+        return duration if math.isfinite(duration) and duration > 0 else 0.0
     except (TypeError, ValueError):
         return 0.0
 

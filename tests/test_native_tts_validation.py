@@ -84,6 +84,32 @@ def test_overflow_stops_before_canvas_and_invalidates_old_completion(tmp_path, m
     assert json.loads((audio / "audio_id.manifest.json").read_text())["status"] == "failed"
 
 
+@pytest.mark.parametrize("rendered_duration", [4.9, 5.1, 0.0, float("nan"), float("inf")])
+def test_invalid_canvas_duration_cannot_publish_audio_or_rewritten_script(tmp_path, monkeypatch, rendered_duration):
+    scripts, audio, engine, cfg = prepare(tmp_path, monkeypatch, {"Awal": 1, "Akhir": 1}, policy="error")
+    original_script = (scripts / "script_id.json").read_bytes()
+    original_text = (scripts / "script_id.txt").read_bytes()
+    (audio / "audio_id.wav").write_bytes(b"previous completed audio")
+
+    def measured_duration(path):
+        return rendered_duration if str(path).endswith(".synthesizing.wav") else wav_duration(path)
+
+    monkeypatch.setattr(voices, "_get_audio_duration", measured_duration)
+    with pytest.raises(ValueError, match="Rendered narration duration") as error:
+        voices.generate_all_audio(str(scripts), str(audio), cfg=cfg, timeline_duration=5)
+    assert "expected=" in str(error.value)
+    assert "actual=" in str(error.value)
+    assert "delta=" in str(error.value)
+    assert engine.texts == ["Awal", "Akhir"]  # Every individual beat fit first.
+    assert not (audio / "audio_id.wav").exists()
+    assert not (audio / "audio_id.synthesizing.wav").exists()
+    assert (scripts / "script_id.json").read_bytes() == original_script
+    assert (scripts / "script_id.txt").read_bytes() == original_text
+    manifest = json.loads((audio / "audio_id.manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "failed"
+    assert manifest["strict_timing_validated"] is False
+
+
 def test_explicit_language_avoids_other_cached_scripts(tmp_path, monkeypatch):
     scripts, audio, engine, cfg = prepare(tmp_path, monkeypatch, {"Awal": 1, "Akhir": 1}, languages=("id", "en"))
     cfg.requested_languages = ["id"]
