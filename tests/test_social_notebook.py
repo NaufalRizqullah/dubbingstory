@@ -1,10 +1,13 @@
 """Notebook contract checks for Kaggle; never run installation or media cells."""
 import ast
 import json
+import os
 import re
 import subprocess
+import sys
+import zipfile
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -419,6 +422,106 @@ def test_canvas_toggle_keeps_source_output(enabled, ratios, layout, names):
     functions = helpers()
     assert functions["render_options"](enabled) == {"ratios": ratios, "vertical_layout": layout}
     assert functions["expected_output_names"](enabled) == names
+
+
+def outputs_harness(tmp_path, monkeypatch, *, preview_failure=None, manifest_failure=None):
+    """Run packaging with dummy MP4 bytes and fake display objects, never video decoding."""
+    project = tmp_path / "outputs" / "sample"
+    project.mkdir(parents=True)
+    names = helpers()["expected_output_names"](True)
+    for name in names:
+        (project / name).write_bytes(b"rendered video fixture")
+    config_path = project / "notebook.yaml"
+    config_path.write_text("render: {}\n", encoding="utf-8")
+    manifest = {"status": "complete", "rendered_videos": [str(project / name) for name in names]}
+    if manifest_failure == "incomplete":
+        manifest["status"] = "failed"
+    elif manifest_failure == "missing":
+        (project / names[0]).unlink()
+    elif manifest_failure == "unreported":
+        manifest["rendered_videos"] = []
+    (project / "render_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    bundle = tmp_path / "sample_dubbing_results.zip"
+    videos, displayed = [], []
+
+    def video(data=None, **kwargs):
+        # Reproduce the Kaggle IPython path check: filename= alone leaves data
+        # as None. This stub never reads or decodes actual video content.
+        if data is None:
+            raise AssertionError("Video must receive a positional path")
+        assert bundle.is_file(), "Packaging must finish before optional previews"
+        assert kwargs == {"embed": True, "width": 360}
+        videos.append(data)
+        if preview_failure == "constructor" and len(videos) == 1:
+            raise TypeError("simulated IPython preview error")
+        return ("video", data)
+
+    def display(value):
+        if preview_failure == "display" and value == ("video", str(project / names[0])):
+            raise RuntimeError("simulated display rendering error")
+        displayed.append(value)
+
+    fake_display = ModuleType("IPython.display")
+    fake_display.Video, fake_display.display = video, display
+    fake_display.FileLink = lambda path: ("link", path)
+    fake_ipython = ModuleType("IPython")
+    fake_ipython.display = fake_display
+    monkeypatch.setitem(sys.modules, "IPython", fake_ipython)
+    monkeypatch.setitem(sys.modules, "IPython.display", fake_display)
+    monkeypatch.chdir(tmp_path)  # Restore cwd after the notebook's os.chdir.
+    namespace = {**helpers(), "Path": Path, "json": json, "os": os,
+                 "PROJECT_DIR": project, "WORK_ROOT": tmp_path, "ACTIVE_PROJECT": "sample",
+                 "CONFIG_PATH": config_path, "ENABLE_CANVAS": True}
+
+    def run():
+        exec(compile(source("outputs"), str(NOTEBOOK), "exec"), namespace)
+
+    return run, project, names, bundle, videos, displayed
+
+
+@pytest.mark.parametrize("failure", [None, "constructor", "display"])
+def test_output_bundle_and_downloads_survive_optional_preview_failure(tmp_path, monkeypatch, failure):
+    run, project, names, bundle, videos, displayed = outputs_harness(
+        tmp_path, monkeypatch, preview_failure=failure)
+    run()
+    assert videos == [str(project / name) for name in names]
+    assert ("link", bundle.name) in displayed
+    for name in names:
+        assert ("link", str((project / name).relative_to(tmp_path))) in displayed
+        assert (project / name).read_bytes() == b"rendered video fixture"
+    with zipfile.ZipFile(bundle) as archive:
+        assert set(names) <= set(archive.namelist())
+        assert "render_manifest.json" in archive.namelist()
+        assert all(archive.read(name) == b"rendered video fixture" for name in names)
+
+
+@pytest.mark.parametrize("failure", ["incomplete", "missing", "unreported"])
+def test_outputs_reject_incomplete_or_unverified_render_before_packaging(tmp_path, monkeypatch, failure):
+    run, _, _, bundle, videos, displayed = outputs_harness(
+        tmp_path, monkeypatch, manifest_failure=failure)
+    with pytest.raises(RuntimeError):
+        run()
+    assert not bundle.exists()
+    assert videos == displayed == []
+
+
+@pytest.mark.parametrize("burn", [False, True])
+def test_rerender_applies_subtitle_burn_toggle_without_repeating_pipeline(burn):
+    # Execute only the action gate, as if the user edited the cell's toggles.
+    gate = next(node for node in ast.parse(source("rerender")).body
+                if isinstance(node, ast.If) and isinstance(node.test, ast.Name)
+                and node.test.id == "RUN_RENDER_AGAIN")
+    config = {"render": {"burn_subtitles": not burn}, "subtitle": {"style": "classic"}}
+    events = []
+    namespace = {**helpers(), "RUN_RENDER_AGAIN": True, "RERENDER_CANVAS": False,
+                 "RERENDER_SUBTITLE_STYLE": "karaoke", "RERENDER_BURN_SUBTITLES": burn,
+                 "BURN_SUBTITLES": not burn, "CONFIG": config, "ACTIVE_PROJECT": "sample",
+                 "save_config": lambda: events.append(("saved", json.loads(json.dumps(config)))),
+                 "run_cli": lambda arguments, stage: events.append((stage, arguments))}
+    exec(compile(ast.Module(body=[gate], type_ignores=[]), str(NOTEBOOK), "exec"), namespace)
+    assert events == [("saved", {"render": {"burn_subtitles": burn, "ratios": ["source"],
+                                           "vertical_layout": "pad"}, "subtitle": {"style": "karaoke"}}),
+                      ("render", ["render", "--project", "sample", "--mode", "full"])]
 
 
 @pytest.mark.parametrize("url", [

@@ -271,6 +271,14 @@ DUBBINGSTORY_FFMPEG_TESTS=1 python -m pytest -q tests/test_tts_canvas.py
 
 Tests media menggunakan WAV sintetis, tanpa Edge/Gemini/Qwen. Durasi pecahan detik, jumlah sampel, gap dan audio dekat ujung diperiksa dengan normalisasi aktif maupun nonaktif. Belum ada klaim tests atau render revisi ini lulus di runtime pengguna.
 
+### Preview tahap 7 dan render tanpa subtitle
+
+Log Kaggle berikutnya pada 28 Oktober 2026 menunjukkan tahap pipeline sampai render berhasil: canvas audio `expected=22.166667s`, `actual=22.166667s`, dan `final_id_source.mp4` selesai dibuat. Error `TypeError: stat ... NoneType` terjadi sesudahnya pada `Video(filename=..., embed=True)` di tahap 7. Pada runtime tersebut, constructor IPython memeriksa argumen `data` yang masih `None`. Notebook kini memakai `Video(str(path), embed=True, width=360)`, membuat ZIP terlebih dahulu, dan menangani kegagalan preview per video sebagai pemberitahuan. Bentuk path positional didukung oleh [API Video IPython](https://github.com/ipython/ipython/blob/main/IPython/core/display.py).
+
+Jika MP4 sudah tersedia dan hanya tahap 7 gagal, cukup salin cell **Hasil dan file download** yang diperbarui ke sesi Kaggle yang sama lalu jalankan cell itu. Tidak perlu mengulang setup, analisis, TTS, atau render. Perbaikan ini berada di notebook; tidak memerlukan perubahan renderer atau instalasi dependency.
+
+`BURN_SUBTITLES=False` pada konfigurasi mematikan burn caption untuk render berikutnya. SRT/ASS dan word timing dapat tetap dihasilkan sebagai file terpisah. Untuk MP4 yang sudah dibuat, gunakan cell render ulang dengan `RUN_RENDER_AGAIN=True` dan `RERENDER_BURN_SUBTITLES=False`, lalu jalankan tahap 7 lagi. Cell ini menyimpan pilihan tersebut ke konfigurasi, memakai video sumber dan audio existing, dan mengganti MP4 dengan nama output yang sama. Subtitle yang memang sudah menjadi bagian gambar video sumber tidak dihapus. Jika hanya mengubah nilai konfigurasi tanpa menjalankan render ulang, MP4 lama tetap seperti sebelumnya.
+
 ### Suite dan pemeriksaan audiovisual
 
 Perubahan ini belum diuji dengan menjalankan tests, TTS, alignment, atau rendering pada komputer development, sesuai permintaan. Perintah berikut **untuk Anda jalankan di Kaggle**, dari root checkout repository yang sudah memuat perubahan ini.

@@ -11,6 +11,17 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.9.7]
+
+### Fixed
+- Pass the video path positionally to IPython's preview widget in the social notebook, avoiding the reported `os.path.exists(None)` failure on runtimes that inspect `data` before `filename`.
+- Build the download ZIP before optional previews and keep per-video preview errors nonfatal; completed MP4 files and their links remain available.
+- Add `RERENDER_BURN_SUBTITLES` to the render-only recovery cell and save its value into the render configuration, allowing existing source/audio artifacts to produce a video without burned captions.
+
+### Validation
+- New user-supplied Kaggle logs show successful ingest, segmentation, analysis, narration, TTS and final MP4 rendering. Narration canvas expected/actual duration both report 22.166667 seconds; the remaining exception is in the notebook preview cell.
+- Add mocked notebook regressions for preview compatibility/failure, ZIP creation, manifest validation and render-only subtitle toggles. Reviewed statically only; no tests, installs, models or rendering were run on the development computer.
+
 ## [0.9.6]
 
 ### Fixed
