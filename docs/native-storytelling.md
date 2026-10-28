@@ -194,7 +194,7 @@ Structured script dan video sumber harus tersedia. Tidak ada alignment perkiraan
 
 Notebook [TikTok/RedNote](../notebooks/mereska-dubbingstory-tiktok-rednote.ipynb) sekarang mengikuti pola source mode: Python kernel Kaggle, dependency dari `pyproject.toml`, dan `main.py` dari checkout. Setup tidak membuat venv atau membangun editable package. vLLM tetap dipin ke `0.27.1`, versi yang berhasil memuat Qwen pada log yang diberikan pengguna; ini bukan klaim bahwa revisi notebook telah diuji. Dependency project dan vLLM diselesaikan bersama, tanpa `--upgrade` massal. `INSTALL_DEPENDENCIES=False` hanya untuk runtime yang sudah memenuhi dependency tersebut.
 
-Log terbaru yang diberikan pengguna memperlihatkan ingest RedNote 720x1280 sekitar 22,17 detik serta analisis Qwen berhasil. Penundaan berikutnya terjadi pada 429/503 Gemini saat memendekkan narasi setelah durasi TTS diukur. Log tersebut belum membuktikan final render selesai. Masalah setup pada laporan lama tidak berarti seluruh tahap pada notebook terbaru masih gagal.
+Log sebelumnya yang diberikan pengguna memperlihatkan ingest RedNote 720x1280 sekitar 22,17 detik serta analisis Qwen berhasil. Penundaan berikutnya terjadi pada 429/503 Gemini saat memendekkan narasi setelah durasi TTS diukur. Log tersebut belum membuktikan final render selesai. Pada laporan berikutnya, ingest tetap berhasil tetapi runtime vLLM berbeda dan gagal saat import; lihat bagian CUDA di bawah.
 
 Pengaturan default aplikasi ada di `configs/default.yaml`. Fallback lokal **nonaktif pada CLI biasa**, dan **aktif pada preset notebook sosial**:
 
@@ -232,6 +232,23 @@ Endpoint lokal harus loopback dan menyediakan `/tokenize` serta `/v1/chat/comple
 Untuk melanjutkan hasil log pengguna, set nama project existing dan `START_FROM="dub"` jika source, storyboard, naskah dan metadata masih tersedia. Gunakan `OUTPUT_ROOT` yang menunjuk folder artefak tersebut. Jalankan ulang konfigurasi/ingest agar cache diverifikasi; jangan menjalankan analisis dari awal hanya untuk mencoba fitting ulang. Notebook dan **kode repository** harus sama-sama memuat perubahan ini. Mengunggah notebook saja tidak memperbarui remote Git atau checkout Kaggle; preflight akan menolak checkout lama. Pada checkout existing notebook sengaja tidak melakukan pull/reset otomatis.
 
 Landasan API: [Google GenAI 1.28.0](https://github.com/googleapis/python-genai/blob/main/CHANGELOG.md#1280-2025-07-30) menambahkan retry pada level request; [protokol tokenize vLLM 0.27.1](https://github.com/vllm-project/vllm/blob/v0.27.1/vllm/entrypoints/serve/tokenize/protocol.py) menyediakan hitungan token dan batas model; [model card Qwen3-VL-4B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct) mendukung tugas teks di samping vision. Kualitas narasi Indonesia dan performa fallback pada Kaggle tetap harus diukur.
+
+## Konflik CUDA saat startup vLLM
+
+Log yang diterima pada 28 Oktober 2026 menunjukkan ingest RedNote berhasil, lalu `vllm_server.log` berhenti pada import `transformers.audio_utils` → `torchaudio`, sebelum model dimuat. Pesan akhirnya menyebut **PyTorch CUDA 13.0** dan **TorchAudio CUDA 12.8**. Ini konflik build dependency; menambah retry Gemini atau waktu tunggu server tidak memperbaikinya.
+
+Preset notebook kini memasang `vllm==0.27.1`, `torch==2.13.0+cu130`, `torchvision==0.28.0+cu130`, dan `torchaudio==2.11.0+cu130` bersama dependency project, menggunakan indeks wheel resmi PyTorch. Nomor dasar Torch dan TorchAudio memang berbeda: [requirements resmi vLLM 0.27.1](https://github.com/vllm-project/vllm/blob/v0.27.1/requirements/cuda.txt) menetapkan pasangan tersebut, dan [TorchAudio 2.11 memakai stable ABI](https://docs.pytorch.org/audio/stable/installation.html) untuk PyTorch 2.11 atau lebih baru. Wheel cu130 tersedia untuk Python 3.13 Linux x86_64 pada indeks [Torch](https://download.pytorch.org/whl/cu130/torch/), [TorchVision](https://download.pytorch.org/whl/cu130/torchvision/), dan [TorchAudio](https://download.pytorch.org/whl/cu130/torchaudio/). Mengganti `VLLM_VERSION` memerlukan pembaruan preset pasangan paket; versi yang belum dipetakan ditolak, bukan ditebak.
+
+`pip check` hanya memeriksa metadata dependency. Setup juga wajib memvalidasi versi paket terhadap preset lalu mengimpor Torch/TorchAudio/TorchVision, `transformers.audio_utils`, dan modul API server vLLM dalam subprocess baru, dengan batas 180 detik dan log `dubbingstory_social_install.log`. Preflight ini tetap berjalan ketika `INSTALL_DEPENDENCIES=False`, selama tahap membutuhkan model lokal; runtime versi lama atau varian CUDA berbeda tidak lolos. Mode cloud tanpa fallback dan resume render tidak membutuhkan pemeriksaan vLLM. Import yang berhasil belum membuktikan model akan muat dalam VRAM atau inference berhasil.
+
+Untuk memulihkan sesi yang dilaporkan:
+
+1. Gunakan notebook TikTok/RedNote yang diperbarui dan `INSTALL_DEPENDENCIES=True`. Perbaikan CUDA ini berada di cell notebook; checkout tetap harus memenuhi preflight fitur RedNote existing.
+2. Jika Torch/TorchAudio/TorchVision/vLLM pernah diimpor langsung ke kernel, restart kernel sebelum mengganti wheel. Pertahankan folder output project. Jalur notebook memakai subprocess sehingga restart tidak dipaksakan untuk kernel yang belum mengimpor library tersebut.
+3. Jalankan ulang konfigurasi dan setup. Pastikan preflight import berhasil; jangan lanjut ketika gagal. Jangan menghapus TorchAudio atau menyamakan nomor dasar versinya secara sembarang.
+4. Pakai `PROJECT_NAME` dan `OUTPUT_ROOT` yang sama agar `source.mp4` dapat diverifikasi dan digunakan kembali. Bila `segment_manifest.json` masih tersedia, pilih `START_FROM="analyze"`; bila belum, gunakan `segment`. Artefak yang hilang dari sesi Kaggle sebelumnya tetap perlu dibuat kembali.
+
+Regresi notebook memakai subprocess palsu dan tidak memuat model. Tests hanya disiapkan untuk Kaggle; instalasi wheel, startup model dan pipeline revisi ini belum dijalankan pada komputer development.
 
 ## Pengujian di Kaggle
 

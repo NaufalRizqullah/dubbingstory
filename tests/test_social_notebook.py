@@ -1,6 +1,8 @@
 """Notebook contract checks for Kaggle; never run installation or media cells."""
 import ast
 import json
+import re
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -41,6 +43,15 @@ def runtime_policy():
     definitions = [node for node in ast.parse(source("settings")).body
                    if isinstance(node, ast.FunctionDef) and node.name in allowed]
     namespace = {}
+    exec(compile(ast.Module(body=definitions, type_ignores=[]), str(NOTEBOOK), "exec"), namespace)
+    return namespace
+
+
+def setup_helpers(names, **namespace):
+    """Load selected setup functions only; never execute installation cells."""
+    definitions = [node for node in ast.parse(source("setup")).body
+                   if isinstance(node, ast.FunctionDef) and node.name in names]
+    assert {node.name for node in definitions} == set(names)
     exec(compile(ast.Module(body=definitions, type_ignores=[]), str(NOTEBOOK), "exec"), namespace)
     return namespace
 
@@ -134,11 +145,144 @@ def test_text_retry_defaults_and_shared_interpreter_setup():
     assert literal_setting("LOCAL_MAX_ATTEMPTS") == 2
     setup = source("setup")
     assert "RUNTIME_PYTHON = Path(sys.executable)" in setup
-    assert 'pip_stage(["install", "--prefer-binary", *packages]' in setup
-    assert 'packages.append(f"vllm=={VLLM_VERSION}")' in setup
+    assert 'pip_stage(["install", "--prefer-binary", *runtime_index_args, *packages]' in setup
+    assert "local_runtime_install_spec(VLLM_VERSION)" in setup
     assert 'pip_stage(["check"]' in setup
-    for forbidden in ("VENV_DIR", '"venv"', '"-e"', '"--upgrade"', '"torch=='):
+    for forbidden in ("VENV_DIR", '"venv"', '"-e"', '"--upgrade"'):
         assert forbidden not in setup
+
+
+def test_local_runtime_uses_vllm_supported_versions_with_one_cuda_variant():
+    get_spec = setup_helpers({"local_runtime_install_spec"})["local_runtime_install_spec"]
+    packages, index_args = get_spec(literal_setting("VLLM_VERSION"))
+    versions = dict(requirement.split("==", 1) for requirement in packages)
+    assert versions == {"vllm": "0.27.1", "torch": "2.13.0+cu130",
+                        "torchvision": "0.28.0+cu130", "torchaudio": "2.11.0+cu130"}
+    assert index_args == ["--extra-index-url", "https://download.pytorch.org/whl/cu130"]
+    # TorchAudio 2.11 uses PyTorch's stable ABI: different base versions are
+    # intentional. The original failure was the CUDA build, not base inequality.
+    assert versions["torch"].split("+")[0] != versions["torchaudio"].split("+")[0]
+    assert {versions[name].split("+")[1] for name in ("torch", "torchvision", "torchaudio")} == {"cu130"}
+
+
+@pytest.mark.parametrize("version", ["0.27.0", "unknown", ""])
+def test_unknown_vllm_version_does_not_guess_torch_wheels(version):
+    get_spec = setup_helpers({"local_runtime_install_spec"})["local_runtime_install_spec"]
+    with pytest.raises(ValueError):
+        get_spec(version)
+
+
+@pytest.mark.parametrize("install", [False, True])
+@pytest.mark.parametrize("needs_local", [False, True])
+def test_local_preflight_is_mandatory_even_when_installation_is_skipped(install, needs_local):
+    # Execute only the top-level preflight gate with a fake function. Its
+    # top-level position is deliberate: nesting under INSTALL_DEPENDENCIES
+    # would reproduce the stale/broken-runtime failure on resumed notebooks.
+    statements = ast.parse(source("setup")).body
+    gates = [node for node in statements if isinstance(node, ast.If)
+             and isinstance(node.test, ast.Name) and node.test.id == "NEED_LOCAL_MODEL"
+             and any(isinstance(item, ast.Call) and isinstance(item.func, ast.Name)
+                     and item.func.id == "verify_local_runtime" for item in ast.walk(node))]
+    assert len(gates) == 1
+    calls = []
+    namespace = {"INSTALL_DEPENDENCIES": install, "NEED_LOCAL_MODEL": needs_local,
+                 "verify_local_runtime": lambda: calls.append("checked")}
+    exec(compile(ast.Module(body=gates, type_ignores=[]), str(NOTEBOOK), "exec"), namespace)
+    assert calls == (["checked"] if needs_local else [])
+
+
+def local_preflight_code():
+    assignment = next(node for node in ast.parse(source("setup")).body
+                      if isinstance(node, ast.Assign) and any(
+                          isinstance(target, ast.Name) and target.id == "local_verify_code"
+                          for target in node.targets))
+    return ast.literal_eval(assignment.value)
+
+
+def test_local_preflight_imports_the_reported_failure_path_without_loading_model():
+    code = local_preflight_code()
+    tree = ast.parse(code)
+    imports = {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import)
+               for alias in node.names}
+    assert {"torch", "torchaudio", "torchvision"} <= imports
+    module_imports = {ast.literal_eval(node.args[0]) for node in ast.walk(tree)
+                      if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                      and isinstance(node.func.value, ast.Name)
+                      and node.func.value.id == "importlib" and node.func.attr == "import_module"}
+    assert {"transformers.audio_utils", "vllm.entrypoints.openai.api_server"} <= module_imports
+    for forbidden in ("from_pretrained", "snapshot_download", "LLM(", "run_server("):
+        assert forbidden not in code
+
+
+@pytest.mark.parametrize("overrides", [{}, {"torchaudio": "2.11.0+cu128"}, {"vllm": "0.27.0"}])
+def test_local_preflight_rejects_wrong_cuda_wheel_and_stale_runtime_before_import(overrides):
+    packages, _ = setup_helpers({"local_runtime_install_spec"})["local_runtime_install_spec"]("0.27.1")
+    expected = dict(requirement.split("==", 1) for requirement in packages)
+    installed = {**expected, **overrides}
+    # Only execute the metadata check with a fake lookup, never GPU imports.
+    statements = ast.parse(local_preflight_code()).body
+    start = next(index for index, node in enumerate(statements) if isinstance(node, ast.Assign)
+                 and any(isinstance(target, ast.Name) and target.id == "actual" for target in node.targets))
+    end = next(index for index, node in enumerate(statements) if isinstance(node, ast.Import)
+               and any(alias.name == "torch" for alias in node.names))
+    check = compile(ast.Module(body=statements[start:end], type_ignores=[]), str(NOTEBOOK), "exec")
+    namespace = {"expected": expected, "version": installed.__getitem__, "json": json}
+    if overrides:
+        with pytest.raises(RuntimeError, match="Runtime belum sesuai preset"):
+            exec(check, namespace)
+    else:
+        exec(check, namespace)
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_local_preflight_uses_fresh_interpreter_and_reports_sanitized_failure(tmp_path, capsys, returncode):
+    calls = []
+    code = local_preflight_code()
+    python = tmp_path / "kernel-python"
+    log = tmp_path / "install.log"
+    packages, _ = setup_helpers({"local_runtime_install_spec"})["local_runtime_install_spec"]("0.27.1")
+    expected = dict(requirement.split("==", 1) for requirement in packages)
+
+    def run(arguments, **kwargs):
+        calls.append((arguments, kwargs))
+        return SimpleNamespace(returncode=returncode, stdout="runtime versions\n",
+                               stderr="probe: https://example.invalid/report?test=hidden\n")
+
+    namespace = setup_helpers(
+        {"verify_local_runtime", "setup_log_line"}, re=re, json=json, runtime_packages=packages,
+        RUNTIME_PYTHON=python, REPO_DIR=tmp_path, INSTALL_LOG=log, local_verify_code=code,
+        subprocess=SimpleNamespace(run=run, TimeoutExpired=subprocess.TimeoutExpired),
+    )
+    if returncode:
+        with pytest.raises(RuntimeError, match="Preflight vLLM gagal sebelum model dimuat"):
+            namespace["verify_local_runtime"]()
+    else:
+        namespace["verify_local_runtime"]()
+    assert calls == [([str(python), "-c", code, json.dumps(expected)], {
+        "cwd": tmp_path, "capture_output": True, "text": True,
+        "encoding": "utf-8", "errors": "replace", "timeout": 180,
+    })]
+    recorded = log.read_text(encoding="utf-8")
+    printed = capsys.readouterr().out
+    for output in (recorded, printed):
+        assert "runtime versions" in output
+        assert "https://example.invalid/report?[redacted]" in output
+        assert "test=hidden" not in output
+    assert ("Import runtime lokal berhasil" in printed) is (returncode == 0)
+
+
+def test_local_preflight_timeout_stops_setup_without_loading_model(tmp_path):
+    def run(arguments, **kwargs):
+        raise subprocess.TimeoutExpired(arguments, kwargs["timeout"])
+
+    namespace = setup_helpers(
+        {"verify_local_runtime"}, RUNTIME_PYTHON=tmp_path / "kernel-python",
+        REPO_DIR=tmp_path, INSTALL_LOG=tmp_path / "install.log", local_verify_code="import-only",
+        runtime_packages=["vllm==0.27.1"], json=json,
+        subprocess=SimpleNamespace(run=run, TimeoutExpired=subprocess.TimeoutExpired),
+    )
+    with pytest.raises(RuntimeError, match="melebihi 180 detik"):
+        namespace["verify_local_runtime"]()
 
 
 @pytest.mark.parametrize("start, vision, provider, fallback, expected", [

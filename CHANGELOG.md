@@ -11,6 +11,16 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.9.5]
+
+### Fixed
+- Pin the TikTok/RedNote notebook's vLLM 0.27.1 runtime to matching CUDA 13.0 wheels: Torch 2.13.0, TorchVision 0.28.0 and TorchAudio 2.11.0 (stable ABI). Resolve these with project dependencies in one transaction so a preinstalled TorchAudio CUDA 12.8 wheel cannot satisfy only the base version and break vLLM imports.
+- Add a bounded fresh-process preset-version and import preflight for TorchAudio, TorchVision, Transformers audio utilities and the vLLM API server before pipeline startup, including when installation is skipped. Refuse to replace GPU packages already imported into the notebook kernel; cloud-only/render-only runs skip the local runtime check.
+
+### Validation
+- The supplied Kaggle logs confirm RedNote ingest succeeded; vLLM then failed at import because Torch used CUDA 13.0 and TorchAudio used CUDA 12.8. No model had been loaded at that failure point.
+- Add notebook regressions for the supported wheel preset, unknown versions, preflight gating, subprocess failure/timeout and sanitized diagnostics. Reviewed statically only; no local tests, dependency installation, model startup or pipeline execution. Validate the updated notebook in Kaggle.
+
 ## [0.9.4]
 
 ### Fixed
