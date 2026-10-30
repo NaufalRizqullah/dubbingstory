@@ -8,7 +8,10 @@ stage does not need to manufacture long silent pads per scene.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
+
+from dubbingstory.story.action_anchors import compact_visual_events, scene_visual_events, select_anchor_events
 
 from dubbingstory.story.gemini_json import (
     generate_story_json, raise_if_strict_text_error, strict_text_routing,
@@ -200,9 +203,20 @@ def build_narration_plan(
     base_coverage = float(getattr(cfg, "narration_speech_coverage", 0.84) or 0.84)
     min_wpm = float(getattr(cfg, "narration_min_wpm", 135) or 135)
     max_wpm = float(getattr(cfg, "narration_max_wpm", 175) or 175)
-    strict_fit = getattr(cfg, "tts_narration_fit", "legacy") != "legacy"
+    action_sync = mode == "full" and bool(getattr(cfg, "narration_action_sync", False))
+    strict_fit = getattr(cfg, "tts_narration_fit", "legacy") != "legacy" or action_sync
     source_duration = float(getattr(cfg, "narration_source_duration", 0) or 0) if mode == "full" else 0.0
     min_gap = max(0.0, float(getattr(cfg, "tts_min_gap", 0.2))) if strict_fit else 0.0
+    anchor_confidence = float(getattr(cfg, "vision_temporal_min_confidence", 0.55))
+    max_anchors = int(getattr(cfg, "narration_max_action_anchors", 1))
+    if action_sync and (not math.isfinite(anchor_confidence) or not 0 <= anchor_confidence <= 1
+                        or not 1 <= max_anchors <= 2):
+        raise ValueError("Action sync requires confidence in [0, 1] and one or two anchors per beat")
+    if action_sync and any("events" not in (scene.get("analysis", {}) or {}) for scene in scenes):
+        raise ValueError(
+            "Action sync requires timestamped visual analysis. Enable temporal analysis and rerun "
+            "analyze, then narrate; existing scene summaries do not contain action timing."
+        )
 
     roles = _scene_role_map(story_plan)
     matched_specs = _matched_group_specs(scenes, story_beats, match_report) if mode == "summary" else []
@@ -310,6 +324,21 @@ def build_narration_plan(
                 "avoid_repeating": [],
             }
         )
+        if action_sync:
+            events = [event for scene in group for event in scene_visual_events(scene)]
+            events.sort(key=lambda event: (event["start_time"], event["event_id"]))
+            if len({event["event_id"] for event in events}) != len(events):
+                raise ValueError(f"{beat_id}: visual event IDs must be unique")
+            events = [event for event in events
+                      if timeline_start <= event["start_time"] < event["end_time"] <= timeline_end + 0.001]
+            # Very short thoughts cannot naturally accommodate two mandatory
+            # action phrases even when a caller requests the higher limit.
+            limit = max_anchors if duration >= 10.0 and target_words >= 18 else 1
+            required = select_anchor_events(events, minimum_confidence=anchor_confidence, limit=limit)
+            entries[-1].update(
+                action_sync_enabled=True, visual_events=events, anchor_event_ids=required,
+                action_sync_status="pending" if required else "no_eligible_events",
+            )
 
     # Story-first beats already carry explicit intent/required facts. The legacy
     # refinement remains for full mode and summary fallback, avoiding a second
@@ -331,7 +360,7 @@ def build_narration_plan(
         if strict_fit and source_duration > 0:
             total_duration = source_duration
     total_target_words = sum(int(e["target_words"]) for e in entries)
-    return {
+    result = {
         "mode": mode,
         "target_wpm": target_wpm,
         "speech_coverage_target": base_coverage,
@@ -343,6 +372,9 @@ def build_narration_plan(
         "semantic_match_active": bool(matched_specs),
         "segments": entries,
     }
+    if action_sync:
+        result["action_sync_enabled"] = True
+    return result
 
 
 def _refinement_response_validator(entries: list[dict]):
@@ -395,16 +427,20 @@ def _refine_plan_with_gemini(
                 "changes": [a.get("changes", "") for a in analyses if a.get("changes")],
                 "likely_context": [a.get("likely_context", "") for a in analyses if a.get("likely_context")],
                 "transcript": " ".join(str(a.get("transcript_text", "") or "") for a in analyses).strip(),
+                **({**compact_visual_events(entry["visual_events"], required_ids=entry["anchor_event_ids"]),
+                    "anchor_event_ids": entry["anchor_event_ids"]}
+                   if entry.get("action_sync_enabled") else {}),
             }
         )
 
-    plan_json = json.dumps(story_plan, ensure_ascii=False, indent=2)
-    memory_json = json.dumps(story_memory, ensure_ascii=False, indent=2)
+    anchored = any(entry.get("action_sync_enabled") for entry in entries)
+    plan_json = json.dumps(story_plan, ensure_ascii=False, indent=None if anchored else 2)
+    memory_json = json.dumps(story_memory, ensure_ascii=False, indent=None if anchored else 2)
     prompt = PLAN_REFINEMENT_PROMPT.format(
-        story_plan_json=plan_json if strict_text_routing(cfg) else plan_json[:24000],
-        story_memory_json=memory_json if strict_text_routing(cfg) else memory_json[:12000],
+        story_plan_json=plan_json if anchored or strict_text_routing(cfg) else plan_json[:24000],
+        story_memory_json=memory_json if anchored or strict_text_routing(cfg) else memory_json[:12000],
         mode=mode,
-        scenes_json=json.dumps(compact_scenes, ensure_ascii=False, indent=2),
+        scenes_json=json.dumps(compact_scenes, ensure_ascii=False, indent=None if anchored else 2),
     )
 
     try:

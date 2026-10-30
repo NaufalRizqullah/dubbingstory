@@ -137,6 +137,7 @@ def build_config(
     # from Edge-TTS, which does not use an Azure resource/key.
     flat["azure_speech_key"] = os.getenv("AZURE_SPEECH_KEY", "").strip()
     flat["azure_speech_region"] = os.getenv("AZURE_SPEECH_REGION", "").strip()
+    flat["elevenlabs_api_key"] = os.getenv("ELEVENLABS_API_KEY", "").strip()
     env_azure_endpoint = os.getenv("AZURE_SPEECH_ENDPOINT", "").strip()
     if env_azure_endpoint:
         flat["tts_azure_endpoint"] = env_azure_endpoint

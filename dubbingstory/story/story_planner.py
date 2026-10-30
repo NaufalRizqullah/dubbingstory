@@ -100,6 +100,10 @@ Rules:
 - Mark bridge scenes when removing them would make cause/effect or process flow confusing.
 - Prefer causal explanation over generic excitement.
 - If evidence is uncertain, leave the field empty or state uncertainty in the reason.
+- When visual_events are supplied, read their source-time order within each scene.
+  Combine repeated observations into the larger process; do not describe every
+  sampled frame separately or infer unseen intermediate actions. A state_change
+  records what changed, not proof of a technical cause or an actor's intention.
 """
 
 
@@ -307,14 +311,25 @@ def generate_story_artifacts(
                 "state_change": delta.get("state_change", {}),
             }
         max_chars = int(getattr(cfg, "story_prompt_max_chars", 60000) or 60000)
+        temporal_evidence = any("visual_events" in card for card in compact)
+        # Dense analysis must not lose the ending of the video through the
+        # historical prefix-only prompt clipping path. Keep every scene or give
+        # the operator an explicit budget error before starting text generation.
+        compact_json = json.dumps(compact, ensure_ascii=False, indent=None if temporal_evidence else 2)
+        if temporal_evidence and len(compact_json) > max_chars:
+            raise ValueError(
+                "Timestamped story evidence exceeds story.prompt_max_chars. Increase the text "
+                "context budget or use a longer temporal sampling interval and rerun analyze; "
+                "no trailing scenes were discarded."
+            )
         prompt = STORY_PLANNER_PROMPT.format(
             video_title=storyboard.get("video_title", ""),
             video_description=storyboard.get("video_description", ""),
             video_summary=storyboard.get("video_summary", ""),
             narrative_arc=storyboard.get("narrative_arc", ""),
             transcript_source=storyboard.get("video_transcript_source", "none"),
-            scene_cards_json=(json.dumps(compact, ensure_ascii=False, indent=2)
-                              if strict_text_routing(cfg) else _clip_json_payload(compact, max_chars=max_chars)),
+            scene_cards_json=(compact_json if temporal_evidence or strict_text_routing(cfg)
+                              else _clip_json_payload(compact, max_chars=max_chars)),
         )
 
         try:
@@ -334,6 +349,13 @@ def generate_story_artifacts(
     elif enabled:
         print("   ⚠️ Story planner: text provider unavailable; using temporal fallback")
 
+    timeline_hash = (storyboard.get("visual_timeline", {}) or {}).get("artifact_sha256")
+    if timeline_hash:
+        # A new dense analysis can change events without changing source media.
+        # Bind both artifacts to that exact completed analysis, so resume cannot
+        # reuse an older plan after a later planner request fails.
+        plan["visual_timeline_sha256"] = timeline_hash
+        memory["visual_timeline_sha256"] = timeline_hash
     if project_dir:
         _save_json(os.path.join(project_dir, "scene_cards.json"), cards)
         _save_json(os.path.join(project_dir, "scene_delta.json"), deltas)
@@ -385,6 +407,14 @@ def load_story_artifacts(project_dir: str, storyboard: dict) -> tuple[dict, dict
 
     plan = _load_json(plan_path, fallback_plan)
     memory = _load_json(memory_path, fallback_memory)
+    timeline_hash = (storyboard.get("visual_timeline", {}) or {}).get("artifact_sha256")
+    if timeline_hash and (
+        not isinstance(plan, dict) or not isinstance(memory, dict)
+        or plan.get("visual_timeline_sha256") != timeline_hash
+        or memory.get("visual_timeline_sha256") != timeline_hash
+    ):
+        print("   ⚠️ Stored story artifacts do not match current visual evidence; using current storyboard context.")
+        return fallback_plan, fallback_memory
     return plan, memory
 
 

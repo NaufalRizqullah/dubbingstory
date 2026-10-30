@@ -73,6 +73,15 @@ vision:
   analysis_mode: "keyframes"        # "keyframes" | "video_upload" (gemini only)
   domain_hint: ""                   # e.g., "workshop", "cooking", "repair"
   batch_size: 4                     # Number of keyframes sent per API call
+  # Dense source-time observations, independent of the legacy keyframe cap.
+  # Opt in for full-mode storytelling; each requested frame must be accounted for.
+  temporal:
+    enabled: false
+    interval_seconds: 0.5           # 0.5 = two frames/second; 1 or 2 reduces work
+    batch_size: 4
+    max_tokens: 1536
+    max_frames: 0                   # 0 = no total cap; positive cap fails before excess work
+    min_confidence: 0.55
 
 # ── Bounded Text Generation ─────────────────────────────────────────────────
 llm:
@@ -166,10 +175,14 @@ narration:
   max_beat_duration: 14.0
   plan_llm_refine: true             # Let Gemini refine intent/continuity, not timing budgets
   auto_rewrite: true                # One QA rewrite when narration is sparse/repetitive/hype-heavy
+  action_sync: false                # Full mode: place selected spoken phrases inside visual events
+  max_action_anchors: 1             # One key action per thought; at most 2 supported
+  action_sync_tolerance: 0.5         # Seconds allowed beyond the observed event interval
+  action_sync_policy: "best_effort" # best_effort reports misses; error refuses an unresolved anchor
 
 # ── TTS ──────────────────────────────────────────────────────────────────────
 tts:
-  engine: "edge"                    # "edge" | "azure" | "piper" | "chirp"
+  engine: "edge"                    # "edge" | "azure" | "piper" | "chirp" | "elevenlabs"
   narration_fit: "legacy"           # native/animated CLI options promote this to "rewrite"
   fit_retries: 2                    # Bounded per-beat rewrite + resynthesis attempts
   use_timeline_scheduler: true       # V2: do not pad every short sentence to full scene length
@@ -190,6 +203,7 @@ tts:
   azure_timeout_seconds: 60
   azure_rate_limit_per_minute: 20    # F0 real-time TTS limit; set 0 to disable client throttle on S0
   azure_max_retries: 4
+  azure_metadata_backend: "auto"     # auto | sdk | alignment; SDK provides native word boundaries
   # Piper voices (offline fallback)
   voices:
     id: "id_ID-news_tts-medium"
@@ -198,6 +212,14 @@ tts:
   chirp_voices:
     id: "id-ID-Chirp3-HD-Charon"
     en: "en-US-Chirp3-HD-Charon"
+  # Optional provider; supply a voice ID from your ElevenLabs account.
+  # Credentials belong in ELEVENLABS_API_KEY, never in this configuration.
+  elevenlabs_voices:
+    id: ""
+    en: ""
+  elevenlabs_model: "eleven_multilingual_v2"
+  elevenlabs_timeout_seconds: 60
+  elevenlabs_max_attempts: 3
   speaking_rate: 1.0                # Speed multiplier
 
 # ── Render ───────────────────────────────────────────────────────────────────
@@ -221,7 +243,7 @@ render:
 # Animated caption styling. SRT remains available for every language.
 subtitle:
   style: "classic"                 # "classic" | "word" | "karaoke"
-  alignment: "auto"                # Edge word metadata first, otherwise optional WhisperX
+  alignment: "auto"                # Native provider metadata first, otherwise optional WhisperX
   alignment_device: "cpu"          # "cuda" can be selected on Kaggle
   alignment_model: null             # null uses the aligner's model for the narration language
   alignment_min_score: 0.05         # Reject low-confidence forced-alignment words

@@ -181,14 +181,19 @@ def resolve_word_timings(
 ) -> tuple[list[dict], str]:
     """Choose provider boundaries or optional forced alignment with validation."""
     backend = getattr(cfg, "subtitle_alignment", "auto")
-    if backend not in {"auto", "edge", "whisperx"}:
+    if backend not in {"auto", "provider", "edge", "whisperx"}:
         raise WordAlignmentError(f"Unsupported word alignment selection: {backend}")
     provider_error = None
-    if backend in {"auto", "edge"} and provider_words:
+    if backend == "edge" and provider_source not in {None, "edge"}:
+        raise WordAlignmentError("Edge alignment was selected for another TTS provider. Use --word-alignment auto or provider when switching engines.")
+    if backend in {"auto", "provider", "edge"} and provider_words:
         try:
-            return validate_word_timings(provider_words, text, wav_duration(audio_path)), provider_source or "edge"
+            source = provider_source or ("edge" if backend == "edge" else "provider")
+            return validate_word_timings(provider_words, text, wav_duration(audio_path)), source
         except WordAlignmentError as exc:
             provider_error = str(exc)
+    if backend == "provider":
+        raise WordAlignmentError(provider_error or "Native word timestamps are missing. Enable this engine's metadata support, or use --word-alignment auto with the optional alignment extra.")
     if backend == "edge":
         raise WordAlignmentError(provider_error or "Edge word boundaries are missing. Use a compatible edge-tts version, regenerate TTS, or select --word-alignment whisperx.")
     try:

@@ -303,3 +303,72 @@ Setelah suite lulus, jalankan contoh native di atas pada local video pendek, lal
 7. Jalur klasik YouTube/local, full/summary, Edge/Piper tetap dapat digunakan. Uji provider live hanya dengan video yang Anda berhak gunakan.
 
 Simpan log pytest dan contoh output gagal jika ada; keberhasilan review statis tidak menggantikan validasi runtime dan review audiovisual ini.
+
+## Analisis visual rapat dan sinkronisasi tindakan
+
+Mode ini ditujukan untuk video proses, pembuatan, dan perbaikan yang sudah diedit. Seluruh video tetap dipertahankan. Pengamatan visual dibuat rapat; naskah tetap berupa cerita yang mengalir, bukan satu kalimat untuk setiap frame.
+
+```bash
+python main.py run --input video.mp4 --mode full --ratio source --lang id \
+  --style jozzr_social --temporal-analysis --frame-interval 0.5 \
+  --action-sync --engine edge --word-alignment auto \
+  --subtitle-style karaoke --no-burn-subtitles
+```
+
+`--frame-interval 0.5` berarti dua frame per detik. Nilai `1` atau `2` mengurangi pekerjaan vision. Frame dianalisis dalam batch kecil sesuai `vision.temporal.batch_size`, terpisah dari batas `keyframes.max_per_scene` lama. Jika konteks model terlalu kecil, batch dibagi; frame tidak boleh hilang diam-diam. `vision.temporal.max_frames` positif menghentikan pekerjaan yang melewati batas tersebut, sedangkan `0` tidak membatasi total. Gambar/batch yang cocok dengan source, konfigurasi, dan versi schema dapat dipakai ulang saat `analyze` dilanjutkan.
+
+Observasi lengkap disimpan di `visual_timeline.json`, termasuk `per_second` untuk meninjau hasil setiap detik tanpa panggilan LLM tambahan. Detik yang tidak memiliki sampel ditandai `unsampled`; tidak diisi dengan deskripsi rekaan. Event visual menggunakan rentang sampel, bukan klaim bahwa onset tindakan diketahui persis sampai milidetik. Ketepatan timestamp decoder, terutama video VFR, tetap harus diperiksa dengan media nyata di Kaggle.
+
+Perencana menggabungkan bukti tersebut dengan story plan/memory existing. Prompt memilih bukti yang cukup dan mencatat jumlah yang tidak dimasukkan agar tetap muat dalam konteks model lokal; seluruh frame tetap ada pada artifact. Satu frasa tindakan penting per bagian narasi dipilih secara default (`narration.max_action_anchors`, maksimum dua). Model teks hanya memilih ID kejadian dan frasa dari naskahnya; waktu kejadian diambil dari bukti visual. Penulisan ulang durasi mempertahankan frasa itu dan menerima konteks narasi sebelum/sesudahnya.
+
+Setelah TTS, waktu kata sebenarnya digunakan untuk memilih waktu mulai ucapan di dalam jendela video. Sistem tidak mengubah laju video atau memalsukan durasi kata untuk memenuhi anchor. Penempatan tetap tunduk pada urutan, jarak antarucapan, akhir bagian narasi, dan akhir sumber. Beberapa anchor dapat bertentangan dan tidak selalu dapat dipenuhi hanya dengan menggeser satu klip audio.
+
+- `narration.action_sync_tolerance: 0.5`: toleransi terhadap interval visual, dalam detik; ini target konfigurasi, bukan hasil akurasi terukur.
+- `--action-sync-policy best_effort`: tempatkan sebaik mungkin dan laporkan frasa yang meleset.
+- `--action-sync-policy error`: hentikan sebelum publikasi audio bila anchor masih meleset. Perbaiki naskah/pengelompokan, lalu ulangi `dub`.
+- `no_anchors` berarti tidak ada kejadian cukup pasti yang dipilih, bukan semua aksi sudah tersinkron.
+
+Output tambahan:
+
+| Artifact | Isi |
+|---|---|
+| `visual_timeline.json` | Status, source hash, konfigurasi sampling, seluruh observasi, event dan ringkasan per detik |
+| `temporal_frames/`, `temporal_cache/` | Frame sumber dan cache batch yang tervalidasi |
+| `narration_plan.json`, `scripts/script_id.json` | Bukti kejadian, ID anchor, frasa narasi dan jendela waktunya |
+| `scripts/script_id.words.json` | Timing kata audio final; tetap dibuat saat action sync aktif tanpa caption |
+| `audio/audio_id.actions.json` | Waktu frasa yang diucapkan, jarak dari interval visual, status matched/missed dan hash audio/teks |
+
+ZIP hasil notebook menyertakan timeline visual, storyboard, rencana/memory cerita, naskah, timing kata, dan laporan aksi bila tersedia. Laporan `partial` tetap disertakan pada kebijakan `best_effort` agar frasa yang meleset dapat ditinjau; keberhasilan render tidak sama dengan semua anchor cocok.
+
+Untuk migrasi proyek existing, ulangi `analyze` dengan temporal analysis, kemudian `narrate` dan `dub`. Source dan hasil analisis diikat dengan hash ke naskah; hasil yang tidak cocok ditolak saat resume. `START_FROM="dub"` sesudah mengganti engine memakai naskah final yang sama dan membuat ulang audio/timing. Jika ingin menyimpan kedua versi untuk A/B, salin project output ke nama lain terlebih dahulu. Jangan mengedit timing kata untuk memaksa laporan lulus.
+
+Default CLI tetap kompatibel: `vision.temporal.enabled: false` dan `narration.action_sync: false`. Notebook sosial mengaktifkan keduanya. Fitur ini khusus `full`; `summary` memakai alur existing dan menolak flag temporal/action-sync eksplisit.
+
+### Mengganti engine TTS di notebook
+
+Pilih `TTS_ENGINE`, biarkan `VOICE_ID=""` untuk memakai preset `TTS_VOICES` engine tersebut, dan gunakan `WORD_ALIGNMENT="auto"`. Pergantian engine tidak membawa nama voice dari provider sebelumnya. Pengaturan dan credential awal tetap diperlukan:
+
+| Engine | Timing yang digunakan | Persiapan Kaggle |
+|---|---|---|
+| `edge` | WordBoundary dari sintesis yang sama | Dependency bawaan; tanpa API key |
+| `azure` | WordBoundary melalui SDK opsional | Extra `azure`, Kaggle Secrets `AZURE_SPEECH_KEY` dan `AZURE_SPEECH_REGION`; notebook memilih backend SDK |
+| `elevenlabs` | Alignment karakter diubah menjadi kata dan divalidasi | `ELEVENLABS_API_KEY` dan ID voice akun Anda; default model `eleven_multilingual_v2` |
+| `piper` | Forced alignment pada audio akhir | Model suara Piper dan extra `alignment` |
+| `chirp` | Forced alignment pada audio akhir | Extra `chirp` + `alignment`, Google Cloud ADC yang sudah dikonfigurasi |
+
+Extra dipasang hanya ketika cell setup dijalankan di Kaggle. CLI dapat memasangnya dengan `pip install '.[azure]'`, `'.[chirp,alignment]'`, atau `'.[alignment]'` sesuai kebutuhan. Memilih `--word-alignment provider` mewajibkan timing native; `edge` tetap tersedia sebagai pilihan kompatibilitas khusus Edge. `auto` mencoba timing native yang valid, kemudian WhisperX. Jika metadata native Azure/ElevenLabs/Edge tidak lengkap dan extra alignment belum terpasang, proses berhenti dengan instruksi pemulihan: pilih `WORD_ALIGNMENT="whisperx"`, jalankan setup Kaggle untuk memasang extra tersebut, kemudian ulangi `dub`. Tidak ada pembagian waktu kata secara rata.
+
+Backend Azure REST lama tetap tersedia: `tts.azure_metadata_backend: alignment` memakai audio REST dan forced alignment. Backend `auto` memakai SDK bila tersedia dan endpoint mendukungnya. Kemampuan layanan tertentu, misalnya emotional style atau SSML bebas, tidak otomatis didukung setiap suara/adapter. Kualitas suara baru belum dinilai melalui pengujian dengar.
+
+### Penerimaan di Kaggle
+
+Revisi ini diperiksa secara statis; test suite, model, API TTS, dan render tidak dijalankan pada komputer development. Dari checkout yang memuat perubahan, jalankan suite terlebih dahulu:
+
+```bash
+python -m pytest -q tests/test_temporal_analysis.py tests/test_action_story.py \
+  tests/test_action_alignment.py tests/test_tts_provider_metadata.py \
+  tests/test_enhancement_cli.py tests/test_social_notebook.py
+python -m pytest -q tests
+```
+
+Lalu gunakan satu video pendek dengan tindakan yang mudah dikenali. Periksa status lengkap semua frame; kecocokan penjelasan dengan urutan proses; tidak ada fakta teknis tanpa bukti; tidak ada ucapan bertabrakan/terpotong; dan tindakan terpilih diucapkan selama interval visual atau toleransi yang ditetapkan. Bandingkan hasil dengan subtitle on/off: timeline ucapan harus sama. Uji Edge dahulu, baru A/B engine lain dengan naskah dan tingkat volume yang sama. Catat durasi proses, kegagalan alignment, pelafalan, kesinambungan, dan penilaian dengar; jangan menyimpulkan kualitas vendor hanya dari keberhasilan render.

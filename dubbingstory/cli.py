@@ -53,6 +53,7 @@ def _strict_output(cfg) -> bool:
         "source" in (getattr(cfg, "render_ratios", []) or [])
         or getattr(cfg, "subtitle_style", "classic") in {"word", "karaoke"}
         or getattr(cfg, "tts_narration_fit", "legacy") != "legacy"
+        or bool(getattr(cfg, "narration_action_sync", False))
     )
 
 
@@ -377,6 +378,10 @@ def cmd_analyze(args, cfg):
         domain_hint=getattr(cfg, "vision_domain_hint", ""),
     )
 
+    if getattr(cfg, "vision_temporal_enabled", False) and getattr(args, "mode", "full") == "full":
+        from dubbingstory.vision.temporal_analysis import run_temporal_analysis
+        storyboard = run_temporal_analysis(segment_data, storyboard, project_dir, cfg)
+
     # Save storyboard
     storyboard_path = os.path.join(project_dir, "storyboard.json")
     with open(storyboard_path, "w", encoding="utf-8") as f:
@@ -434,6 +439,23 @@ def cmd_narrate(args, cfg):
     with open(storyboard_path, "r", encoding="utf-8") as f:
         storyboard = json.load(f)
 
+    visual_proof = {}
+    if getattr(cfg, "narration_action_sync", False):
+        from dubbingstory.tts.word_alignment import file_sha256
+        timeline_path = os.path.join(project_dir, "visual_timeline.json")
+        if not os.path.isfile(timeline_path):
+            raise ValueError("Action synchronization requires complete temporal analysis; rerun analyze with --temporal-analysis")
+        with open(timeline_path, encoding="utf-8") as handle:
+            visual_timeline = json.load(handle)
+        source_hash = file_sha256(os.path.join(project_dir, "source.mp4"))
+        if (visual_timeline.get("status") != "complete"
+                or visual_timeline.get("provenance", {}).get("source_sha256") != source_hash
+                or storyboard.get("visual_timeline", {}).get("source_sha256") != source_hash
+                or storyboard.get("visual_timeline", {}).get("artifact_sha256") != file_sha256(timeline_path)):
+            raise ValueError("Visual timeline is incomplete or belongs to another source; rerun analyze before narrate")
+        visual_proof = {"visual_source_sha256": source_hash,
+                        "visual_timeline_sha256": file_sha256(timeline_path)}
+
     languages = args.lang if hasattr(args, "lang") and args.lang else \
         getattr(cfg, "narration_languages", ["id", "en"])
     style = args.style if hasattr(args, "style") and args.style else \
@@ -490,6 +512,8 @@ def cmd_narrate(args, cfg):
                     "language": lang,
                     "total_duration": narration_plan.get("total_duration", 0),
                     "target_wpm": narration_plan.get("target_wpm", 160),
+                    "action_sync_enabled": narration_plan.get("action_sync_enabled", False),
+                    **visual_proof,
                     "segments": segments,
                 },
                 f,
@@ -1216,8 +1240,8 @@ def _add_caption_arguments(parser, *, synthesis: bool = False) -> None:
         help="Caption style; animated styles require validated word timing (SRT is retained).",
     )
     parser.add_argument(
-        "--word-alignment", choices=["auto", "edge", "whisperx"], default=None,
-        help="Word timing backend; auto prefers Edge metadata, otherwise optional WhisperX.",
+        "--word-alignment", choices=["auto", "provider", "edge", "whisperx"], default=None,
+        help="Word timing backend; auto prefers provider metadata, otherwise optional WhisperX.",
     )
     if synthesis:
         parser.add_argument(
@@ -1231,6 +1255,20 @@ def _add_caption_arguments(parser, *, synthesis: bool = False) -> None:
         )
 
 
+def _add_temporal_arguments(parser) -> None:
+    parser.add_argument("--temporal-analysis", action=argparse.BooleanOptionalAction, default=None,
+                        help="Analyze dense timestamped frames for full-video storytelling.")
+    parser.add_argument("--frame-interval", type=float, default=None,
+                        help="Seconds between analyzed frames (0.5 = two per second); enables temporal analysis.")
+
+
+def _add_action_sync_arguments(parser) -> None:
+    parser.add_argument("--action-sync", action=argparse.BooleanOptionalAction, default=None,
+                        help="Align selected spoken phrases with observed actions (full mode).")
+    parser.add_argument("--action-sync-policy", choices=["best_effort", "error"], default=None,
+                        help="Report remaining action timing misses or stop before publishing audio.")
+
+
 def _configure_enhancements(args, cfg) -> None:
     """Apply additive options without replacing configured values with parser defaults."""
     for arg_name, config_name in (
@@ -1239,15 +1277,37 @@ def _configure_enhancements(args, cfg) -> None:
         ("narration_fit", "tts_narration_fit"),
         ("burn_subtitles", "render_burn_subtitles"),
         ("narration_source", "narration_source"),
+        ("temporal_analysis", "vision_temporal_enabled"),
+        ("frame_interval", "vision_temporal_interval_seconds"),
+        ("action_sync", "narration_action_sync"),
+        ("action_sync_policy", "narration_action_sync_policy"),
     ):
         value = getattr(args, arg_name, None)
         if value is not None:
             setattr(cfg, config_name, value)
+    if getattr(args, "frame_interval", None) is not None:
+        if getattr(args, "temporal_analysis", None) is False:
+            raise ValueError("--frame-interval cannot be combined with --no-temporal-analysis")
+        cfg.vision_temporal_enabled = True
+    if getattr(args, "mode", "full") == "summary":
+        if getattr(args, "action_sync", None) or getattr(args, "temporal_analysis", None) or getattr(args, "frame_interval", None) is not None:
+            raise ValueError("Dense temporal analysis and action synchronization currently require --mode full")
+        # A shared YAML can still render/run the existing summary workflow.
+        cfg.narration_action_sync = False
+        cfg.vision_temporal_enabled = False
+    interval = float(getattr(cfg, "vision_temporal_interval_seconds", 0.5))
+    if not math.isfinite(interval) or not 0.1 <= interval <= 10:
+        raise ValueError("vision.temporal.interval_seconds must be finite and between 0.1 and 10")
+    tolerance = float(getattr(cfg, "narration_action_sync_tolerance", 0.5))
+    if not math.isfinite(tolerance) or not 0 <= tolerance <= 2:
+        raise ValueError("narration.action_sync_tolerance must be between 0 and 2 seconds")
+    if getattr(cfg, "narration_action_sync_policy", "best_effort") not in {"best_effort", "error"}:
+        raise ValueError("narration.action_sync_policy must be best_effort or error")
     style = getattr(cfg, "subtitle_style", "classic")
     if style not in {"classic", "word", "karaoke"}:
         raise ValueError("subtitle.style must be classic, word, or karaoke")
-    if getattr(cfg, "subtitle_alignment", "auto") not in {"auto", "edge", "whisperx"}:
-        raise ValueError("subtitle.alignment must be auto, edge, or whisperx")
+    if getattr(cfg, "subtitle_alignment", "auto") not in {"auto", "provider", "edge", "whisperx"}:
+        raise ValueError("subtitle.alignment must be auto, provider, edge, or whisperx")
     if getattr(cfg, "narration_source", "visual") not in {"visual", "audio"}:
         raise ValueError("narration.source must be visual or audio")
     ratios = getattr(cfg, "render_ratios", ["16:9"])
@@ -1258,7 +1318,7 @@ def _configure_enhancements(args, cfg) -> None:
     fit = getattr(cfg, "tts_narration_fit", "legacy")
     if fit not in {"legacy", "rewrite", "error"}:
         raise ValueError("tts.narration_fit must be legacy, rewrite, or error")
-    if ("source" in ratios or style != "classic") and fit == "legacy":
+    if ("source" in ratios or style != "classic" or getattr(cfg, "narration_action_sync", False)) and fit == "legacy":
         if getattr(args, "narration_fit", None) == "legacy":
             raise ValueError("Native/animated output requires --narration-fit rewrite or error.")
         cfg.tts_narration_fit = "rewrite"
@@ -1287,7 +1347,7 @@ def main():
     p_run.add_argument("--style", type=str, default=None,
                         choices=["viral_fb", "jozzr_social", "documentary", "technical", "calm_educational"])
     p_run.add_argument("--lang", nargs="+", default=None, help="Languages (e.g., id en)")
-    p_run.add_argument("--engine", type=str, default=None, choices=["edge", "azure", "piper", "chirp"], help="TTS engine (default: edge)")
+    p_run.add_argument("--engine", type=str, default=None, choices=["edge", "azure", "piper", "chirp", "elevenlabs"], help="TTS engine (default: edge)")
     p_run.add_argument("--voice-id", type=str, default=None, help="Specific voice name/ID for Indonesian (e.g., id-ID-ArdiNeural or id_ID-news_tts-medium)")
     p_run.add_argument("--voice-en", type=str, default=None, help="Specific voice name/ID for English")
     p_run.add_argument("--speech-coverage", type=float, default=None, help="Target ratio of narration time vs video time (e.g. 0.85)")
@@ -1296,6 +1356,8 @@ def main():
                        help="Output ratios; source preserves original composition and duration")
     _add_layout_arguments(p_run)
     _add_caption_arguments(p_run, synthesis=True)
+    _add_temporal_arguments(p_run)
+    _add_action_sync_arguments(p_run)
     p_run.add_argument("--burn-subtitles", action=argparse.BooleanOptionalAction, default=None)
     p_run.add_argument("--disable-adaptive-keyframes", action="store_true", help="Disable adaptive keyframe count capping")
     p_run.add_argument(
@@ -1464,6 +1526,7 @@ def main():
     # ── analyze ───────────────────────────────────────────────────────────
     p_analyze = subparsers.add_parser("analyze", help="Visual understanding")
     p_analyze.add_argument("--project", "-p", type=str, required=True)
+    _add_temporal_arguments(p_analyze)
     p_analyze.add_argument("--domain", type=str, default="",
                             help="Domain hint (workshop, cooking, etc.)")
     p_analyze.add_argument(
@@ -1491,6 +1554,7 @@ def main():
     # ── narrate ───────────────────────────────────────────────────────────
     p_narrate = subparsers.add_parser("narrate", help="Generate narration scripts")
     p_narrate.add_argument("--project", "-p", type=str, required=True)
+    _add_action_sync_arguments(p_narrate)
     p_narrate.add_argument("--style", type=str, default=None,
                             choices=["viral_fb", "jozzr_social", "documentary", "technical", "calm_educational"])
     p_narrate.add_argument("--lang", nargs="+", default=None)
@@ -1499,7 +1563,8 @@ def main():
     # ── dub ───────────────────────────────────────────────────────────────
     p_dub = subparsers.add_parser("dub", help="Generate TTS audio")
     p_dub.add_argument("--project", "-p", type=str, required=True)
-    p_dub.add_argument("--engine", type=str, default=None, choices=["edge", "azure", "piper", "chirp"], help="TTS engine (default: edge)")
+    p_dub.add_argument("--engine", type=str, default=None, choices=["edge", "azure", "piper", "chirp", "elevenlabs"], help="TTS engine (default: edge)")
+    _add_action_sync_arguments(p_dub)
     p_dub.add_argument("--voice-id", type=str, default=None, help="Specific voice name/ID for Indonesian")
     p_dub.add_argument("--voice-en", type=str, default=None, help="Specific voice name/ID for English")
     _add_caption_arguments(p_dub, synthesis=True)

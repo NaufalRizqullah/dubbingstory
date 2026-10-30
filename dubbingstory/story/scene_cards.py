@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from dubbingstory.story.action_anchors import compact_visual_events, scene_visual_events
+
 
 def _overlapping_transcript(
     subtitle_context: dict | None,
@@ -94,6 +96,8 @@ def build_scene_cards(
             },
             "confidence": float(analysis.get("confidence", 0) or 0),
         }
+        if "events" in analysis:
+            card["visual_events"] = scene_visual_events(scene)
         cards.append(card)
 
     return cards
@@ -138,6 +142,8 @@ def compact_scene_cards(
                 "confidence": card.get("confidence", 0),
                 "deep_evidence": bool(card.get("selected_for_deep_analysis", True)),
                 "screen_score": card.get("screen_score", 0),
+                **(compact_visual_events(card["visual_events"], max_events=6)
+                   if "visual_events" in card else {}),
             }
         )
     return compact

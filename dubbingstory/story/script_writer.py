@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
+from dubbingstory.story.action_anchors import canonical_action_anchors, preserve_action_phrases
+
 from dubbingstory.story.gemini_json import (
     build_story_client, raise_if_strict_text_error, strict_text_routing,
     validate_scene_items, validate_string_list,
@@ -116,7 +118,8 @@ def _plan_map(narration_plan: dict) -> dict[str, dict]:
 
 
 def _narration_response_validator(narration_plan: dict):
-    expected_ids = set(_plan_map(narration_plan))
+    plan_map = _plan_map(narration_plan)
+    expected_ids = set(plan_map)
 
     def validator(payload: Any) -> str | None:
         # Accept the historical envelopes, but never silently discard bad rows.
@@ -134,6 +137,12 @@ def _narration_response_validator(narration_plan: dict):
             importance = item.get("importance", 0.5)
             if type(importance) not in (int, float) or not 0 <= importance <= 1:
                 return "importance must be a number from zero to one"
+            planned = plan_map[str(item["scene_id"])]
+            if planned.get("action_sync_enabled"):
+                try:
+                    canonical_action_anchors(item.get("action_anchors"), item["text"], planned)
+                except (KeyError, TypeError, ValueError) as exc:
+                    return f"{item['scene_id']}: {exc}"
         return None
 
     return validator
@@ -162,6 +171,8 @@ def _validate_narration(
         raw_claims = [str(v).strip() for v in raw.get("claims", []) or [] if str(v).strip()][:8]
         covered_ids = [str(sid) for sid in planned.get("covers_scene_ids", [scene_id]) if sid]
         if not text:
+            if planned.get("action_sync_enabled") and planned.get("anchor_event_ids"):
+                raise ValueError(f"{scene_id}: anchored narration cannot use an ungrounded fallback")
             covered_scenes = [scene_map.get(sid, {}) for sid in covered_ids]
             text = _fallback_beat_text(covered_scenes, language, planned)
 
@@ -189,6 +200,15 @@ def _validate_narration(
                 "importance": float(raw.get("importance", planned.get("story_importance", 0.5)) or 0.5),
             }
         )
+        if planned.get("action_sync_enabled"):
+            anchors = canonical_action_anchors(raw.get("action_anchors"), text, planned)
+            validated[-1].update(
+                action_sync_enabled=True,
+                visual_events=planned.get("visual_events", []),
+                anchor_event_ids=planned.get("anchor_event_ids", []),
+                action_anchors=anchors,
+                action_sync_status="pending" if anchors else "no_eligible_events",
+            )
     return validated
 
 
@@ -364,6 +384,8 @@ def _maybe_rewrite(
                     "text": item["text"],
                     "claims": item.get("claims", []),
                     "importance": item.get("importance", 0.5),
+                    **({"action_anchors": item.get("action_anchors", [])}
+                       if item.get("action_sync_enabled") else {}),
                 }
                 for item in narration
             ],
@@ -382,10 +404,19 @@ def _maybe_rewrite(
                 temperature=0.25,
                 language=language,
                 task_name="narration-rewrite",
-                payload_validator=_narration_response_validator(narration_plan) if strict_text_routing(cfg) else None,
+                payload_validator=_narration_response_validator(narration_plan)
+                if strict_text_routing(cfg) or narration_plan.get("action_sync_enabled") else None,
             )
         )
         revised = _validate_narration(revised_raw, scenes, narration_plan, language)
+        if narration_plan.get("action_sync_enabled"):
+            original_by_id = {item["scene_id"]: item for item in narration}
+            for item in revised:
+                original_anchors = original_by_id[item["scene_id"]].get("action_anchors", [])
+                preserve_action_phrases(item["text"], original_anchors)
+                # An improving rewrite may move surrounding prose, never swap
+                # the selected phrase for another word referring to the event.
+                item["action_anchors"] = canonical_action_anchors(original_anchors, item["text"], item)
         revised_qa = evaluate_narration(revised, narration_plan, language=language)
 
         # Keep rewrite only when it improves issue count or word-budget accuracy.
@@ -408,6 +439,8 @@ def shorten_for_measured_duration(
     available_duration: float,
     cfg,
     evidence: list[dict] | None = None,
+    previous_text: str = "",
+    next_text: str = "",
 ) -> dict:
     """Shorten one beat after measuring TTS; never invent a replacement fallback.
 
@@ -422,6 +455,14 @@ def shorten_for_measured_duration(
     analyzer, model = _client(cfg)
     original_claims = [str(value) for value in segment.get("claims", []) or []]
     evidence_json = json.dumps(evidence or [], ensure_ascii=False)
+    anchors = segment.get("action_anchors", []) or []
+    if segment.get("action_sync_enabled"):
+        anchors = canonical_action_anchors(anchors, original, segment)
+    anchor_context = (
+        "Preserve these exact spoken action phrases, each once and in the same order. "
+        "They must still describe their original visual events. Remove secondary prose first.\n"
+        f"Required action anchors: {json.dumps(anchors, ensure_ascii=False)}\n"
+    ) if anchors else ""
     prompt = (
         "Shorten this already approved narration beat to fit its measured TTS window. "
         "Preserve chronological meaning, the visible action, uncertainty, and the selected style. "
@@ -434,6 +475,9 @@ def shorten_for_measured_duration(
         f"Measured audio: {measured_duration:.3f}s; available: {available_duration:.3f}s\n"
         f"Style: {json.dumps(_style_config(cfg, style), ensure_ascii=False)}\n"
         f"Original: {json.dumps(original, ensure_ascii=False)}\n"
+        f"Previous narration (context only; do not repeat): {json.dumps(previous_text, ensure_ascii=False)}\n"
+        f"Next narration (context only; do not steal its actions): {json.dumps(next_text, ensure_ascii=False)}\n"
+        f"{anchor_context}"
         f"original_claims: {json.dumps(original_claims, ensure_ascii=False)}\n"
         f"Visual evidence: {evidence_json if strict_text_routing(cfg) else evidence_json[:16000]}"
     )
@@ -446,6 +490,10 @@ def shorten_for_measured_duration(
         indices = payload.get("retained_claim_indices")
         if not isinstance(indices, list) or any(type(i) is not int or not 0 <= i < len(original_claims) for i in indices):
             return "Duration rewrite returned invalid claim references"
+        try:
+            preserve_action_phrases(text, anchors)
+        except ValueError as exc:
+            return str(exc)
         return None
 
     payload = _call_json(analyzer, model, prompt, temperature=0.15,
@@ -461,6 +509,8 @@ def shorten_for_measured_duration(
     revised.update(text=text, word_count=len(text.split()),
                    claims=[original_claims[i] for i in dict.fromkeys(indices)],
                    duration_fit_rewritten=True)
+    if segment.get("action_sync_enabled"):
+        revised["action_anchors"] = canonical_action_anchors(anchors, text, revised)
     return revised
 
 
@@ -521,7 +571,8 @@ def _generate(
                     temperature=0.45,
                     language=language,
                     task_name=f"{mode}-narration",
-                    payload_validator=_narration_response_validator(narration_plan) if strict_text_routing(cfg) else None,
+                    payload_validator=_narration_response_validator(narration_plan)
+                    if strict_text_routing(cfg) or narration_plan.get("action_sync_enabled") else None,
                 )
             )
             narration = _validate_narration(raw, scenes, narration_plan, language)
@@ -549,6 +600,8 @@ def _generate(
                 f"QA issues={len(qa.get('issues', []))}"
             )
         except Exception as exc:
+            if narration_plan.get("action_sync_enabled"):
+                raise RuntimeError(f"{language} action-grounded narration failed: {exc}") from exc
             raise_if_strict_text_error(cfg, exc, f"{mode}-narration")
             print(f"   ❌ {language.upper()} narration failed: {exc}")
             result[language] = _fallback_narration(scenes, narration_plan, language)

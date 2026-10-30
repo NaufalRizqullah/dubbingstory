@@ -8,6 +8,7 @@ to a service-account JSON file or otherwise configure ADC before using
 
 from __future__ import annotations
 
+import math
 import os
 
 from dubbingstory.tts.base_engine import BaseTTSEngine
@@ -34,7 +35,11 @@ class GoogleChirpTTSEngine(BaseTTSEngine):
         ],
     }
 
-    def __init__(self, custom_voices: dict[str, str] | None = None, api_endpoint: str | None = None):
+    def __init__(self, custom_voices: dict[str, str] | None = None, api_endpoint: str | None = None,
+                 timeout_seconds: float = 60.0):
+        self.timeout_seconds = float(timeout_seconds)
+        if not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0:
+            raise ValueError("Chirp timeout_seconds must be positive and finite")
         try:
             from google.cloud import texttospeech
         except ImportError as exc:
@@ -47,11 +52,11 @@ class GoogleChirpTTSEngine(BaseTTSEngine):
         client_options = {"api_endpoint": api_endpoint} if api_endpoint else None
         try:
             self.client = texttospeech.TextToSpeechClient(client_options=client_options)
-        except Exception as exc:
+        except Exception:
             raise RuntimeError(
                 "Could not initialize Google Cloud TTS. Configure Application "
                 "Default Credentials (GOOGLE_APPLICATION_CREDENTIALS / ADC)."
-            ) from exc
+            ) from None
 
         self.voices = dict(self.DEFAULT_VOICES)
         if custom_voices:
@@ -83,15 +88,25 @@ class GoogleChirpTTSEngine(BaseTTSEngine):
         # Pace control is supported by current Chirp 3 HD synthesis.  Clamp to
         # a conservative narration range; duration fitting remains a scheduler
         # concern rather than aggressively speeding up the voice.
-        rate = max(0.85, min(1.15, float(speaking_rate or 1.0)))
-        response = self.client.synthesize_speech(
-            input=tts.SynthesisInput(text=text),
-            voice=tts.VoiceSelectionParams(language_code=language_code, name=voice_name),
-            audio_config=tts.AudioConfig(
-                audio_encoding=tts.AudioEncoding.LINEAR16,
-                speaking_rate=rate,
-            ),
-        )
+        rate = float(speaking_rate)
+        if not math.isfinite(rate) or rate <= 0:
+            raise ValueError("TTS speaking_rate must be positive and finite")
+        rate = max(0.85, min(1.15, rate))
+        try:
+            response = self.client.synthesize_speech(
+                input=tts.SynthesisInput(text=text),
+                voice=tts.VoiceSelectionParams(language_code=language_code, name=voice_name),
+                audio_config=tts.AudioConfig(
+                    audio_encoding=tts.AudioEncoding.LINEAR16,
+                    speaking_rate=rate,
+                ),
+                timeout=self.timeout_seconds,
+                retry=None,
+            )
+        except Exception:
+            raise RuntimeError("Chirp synthesis failed; check ADC, voice, quota and service availability. Provider details were omitted.") from None
+        if not response.audio_content:
+            raise RuntimeError("Chirp returned empty audio; no completed clip was published.")
 
         with open(output_path, "wb") as handle:
             handle.write(response.audio_content)

@@ -189,6 +189,7 @@ class GeminiVideoAnalyzer:
         response_validator=None,
         task_name: str = "analysis",
         model_override: str | None = None,
+        max_output_tokens: int | None = None,
     ) -> dict | list:
         """Call Gemini with retry logic and optional semantic validation.
 
@@ -225,6 +226,7 @@ class GeminiVideoAnalyzer:
             config = types.GenerateContentConfig(
                 response_mime_type="application/json", temperature=temperature,
                 http_options=_http_options(min(timeout_seconds, remaining)),
+                **({"max_output_tokens": int(max_output_tokens)} if max_output_tokens is not None else {}),
             )
 
             try:
@@ -316,6 +318,37 @@ class GeminiVideoAnalyzer:
             task_name=task_name,
             model_override=model,
         )
+
+    def analyze_timed_frames(self, frames: list[dict], prompt: str,
+                             max_output_tokens: int = 1536) -> list[dict]:
+        """Preserve every sampled frame and validate the same contract as local vision."""
+        from dubbingstory.vision.schemas import normalize_timed_frames
+
+        if not frames or any(not os.path.isfile(frame["path"]) for frame in frames):
+            raise ValueError("Every temporal frame image must exist")
+        ids = [frame["frame_id"] for frame in frames]
+        parts = [self._load_image_as_part(frame["path"]) for frame in frames]
+        parts.append(types.Part.from_text(text=prompt))
+
+        def validate(payload):
+            try:
+                normalize_timed_frames(payload, ids)
+            except ValueError as exc:
+                return str(exc)
+            return None
+
+        try:
+            payload = self._generate_with_retry(
+                [types.Content(role="user", parts=parts)], response_validator=validate,
+                task_name="timed-frames", max_output_tokens=max_output_tokens,
+            )
+        except GeminiGenerationError as exc:
+            if exc.reason == "response_validation" and not exc.service_failure:
+                # The dense caller can divide a malformed/truncated batch and
+                # retain all frames. Do not multiply retries during an outage.
+                raise ValueError("Gemini timed frame response remained incomplete") from None
+            raise
+        return normalize_timed_frames(payload, ids)
 
     def analyze_scene_from_frames(
         self,

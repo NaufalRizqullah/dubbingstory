@@ -701,6 +701,34 @@ class OpenAIVisionAnalyzer:
                 )
                 return normalize_scene_analysis(result, kind=analysis_kind)
 
+    def analyze_timed_frames(self, frames: list[dict], prompt: str,
+                             max_output_tokens: int = 1536) -> list[dict]:
+        """Analyze all frame IDs without a representative-image rescue.
+
+        The caller may split an oversized batch and analyze every constituent
+        frame; the ordinary scene rescue would erase temporal evidence.
+        """
+        from dubbingstory.vision.schemas import build_timed_frames_schema, normalize_timed_frames
+
+        paths = [frame["path"] for frame in frames]
+        if not paths or any(not os.path.isfile(path) for path in paths):
+            raise ValueError("Every temporal frame image must exist")
+        ids = [frame["frame_id"] for frame in frames]
+        try:
+            result = self._call_with_retry(
+                self._messages_for_scene(paths, prompt),
+                max_tokens_override=int(max_output_tokens),
+                min_output_tokens=min(int(max_output_tokens), max(256, len(frames) * 160)),
+                response_schema=build_timed_frames_schema(ids),
+                schema_name="timed_frame_observations",
+                trace_id=f"timed-{ids[0]}-{ids[-1]}",
+            )
+        except RuntimeError as exc:
+            if isinstance(exc.__cause__, (VisionSchemaValidationError, json.JSONDecodeError)):
+                raise ValueError("Timed frame response remained incomplete after format retries") from None
+            raise
+        return normalize_timed_frames(result, ids)
+
     def analyze_temporal_flow(
         self,
         scene_analyses: list[dict],

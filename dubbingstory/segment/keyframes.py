@@ -7,6 +7,7 @@ reveal the process/action happening in the scene.
 """
 
 import os
+import math
 import cv2
 
 
@@ -323,3 +324,121 @@ def extract_all_scenes(
     print(f"   📊 Total keyframes: {total} across {len(scenes)} scenes")
 
     return all_keyframes
+
+
+def plan_temporal_frames(scenes: list[dict], interval_seconds: float = 0.5,
+                         max_frames: int = 0) -> list[dict]:
+    """Plan dense samples on source time, without the legacy keyframe cap.
+
+    Scene intervals are half-open, so a hard-cut boundary belongs to the next
+    scene. Every scene gets its first sample and then interval-spaced samples;
+    very short scenes therefore still have evidence. A resource limit rejects
+    the plan instead of silently dropping requested samples.
+    """
+    interval = float(interval_seconds)
+    if not math.isfinite(interval) or interval < 0.1 or interval > 10:
+        raise ValueError("Temporal frame interval must be finite and between 0.1 and 10 seconds")
+    if (isinstance(max_frames, bool) or not isinstance(max_frames, (int, float))
+            or not math.isfinite(max_frames) or int(max_frames) != max_frames or max_frames < 0):
+        raise ValueError("Temporal max_frames must be a nonnegative integer (0 means unlimited)")
+    if not scenes:
+        raise ValueError("Temporal analysis requires at least one scene")
+    result = []
+    seen = set()
+    previous_end = 0.0
+    for scene in scenes:
+        sid = str(scene.get("scene_id", ""))
+        if not sid or sid in seen:
+            raise ValueError("Temporal analysis requires unique, nonempty scene IDs")
+        seen.add(sid)
+        start, end = float(scene["start_time"]), float(scene["end_time"])
+        if not all(math.isfinite(t) for t in (start, end)) or start < 0 or end <= start:
+            raise ValueError(f"Invalid source interval for {sid}")
+        if start < previous_end - 0.001:
+            raise ValueError("Temporal scenes must be chronological and nonoverlapping")
+        previous_end = end
+        count = max(1, int(math.ceil((end - start) / interval - 1e-9)))
+        if max_frames and len(result) + count > max_frames:
+            raise ValueError(
+                f"Temporal sampling exceeds max_frames={max_frames}; increase the limit "
+                "or interval_seconds. No samples were silently discarded."
+            )
+        for index in range(count):
+            timestamp = start + index * interval
+            result.append({
+                "frame_id": f"frame_{len(result):06d}", "scene_id": sid,
+                "requested_timestamp": round(timestamp, 6),
+                "timestamp": round(timestamp, 6),
+                "scene_start": start, "scene_end": end,
+                "sample_start": max(start, timestamp - interval / 2),
+                "sample_end": min(end, timestamp + interval / 2),
+            })
+    return result
+
+
+def extract_temporal_frames_from_source(video_path: str, samples: list[dict],
+                                        output_dir: str, max_edge: int = 768,
+                                        jpeg_quality: int = 88) -> list[dict]:
+    """Decode every planned frame and retain its measured source timestamp.
+
+    Failed reads/writes and an unusable decoder clock are fatal. These samples
+    drive spoken-action placement, so the legacy best-effort skipping policy is
+    inappropriate here. The original video is never modified.
+    """
+    if not samples:
+        raise ValueError("No temporal frames were planned")
+    if int(max_edge) < 32 or not 1 <= int(jpeg_quality) <= 100:
+        raise ValueError("Invalid temporal frame image settings")
+    os.makedirs(output_dir, exist_ok=True)
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        cap.release()
+        raise ValueError("Cannot open source video for temporal sampling")
+    records = []
+    try:
+        fps = float(cap.get(cv2.CAP_PROP_FPS))
+        tolerance = max(0.1, 2 / fps) if math.isfinite(fps) and fps > 0 else 0.1
+        previous_timestamp = -1.0
+        for sample in samples:
+            requested = float(sample["requested_timestamp"])
+            cap.set(cv2.CAP_PROP_POS_MSEC, requested * 1000.0)
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                raise ValueError(f"Cannot decode temporal frame {sample['frame_id']} at {requested:.3f}s")
+            timestamp = float(cap.get(cv2.CAP_PROP_POS_MSEC)) / 1000.0
+            # Scene manifests round boundaries to milliseconds. A seek may
+            # return the preceding frame (e.g. 0.966667 for a 0.967 boundary).
+            # Read forward within a small bound instead of relabelling that
+            # frame's clock or accepting evidence from the previous scene.
+            for _ in range(2):
+                if not math.isfinite(timestamp) or timestamp >= float(sample["scene_start"]) or timestamp < 0:
+                    break
+                if abs(timestamp - requested) > tolerance:
+                    break
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    raise ValueError(f"Cannot decode a frame inside scene for {sample['frame_id']}")
+                timestamp = float(cap.get(cv2.CAP_PROP_POS_MSEC)) / 1000.0
+            if (not math.isfinite(timestamp) or timestamp < 0
+                    or abs(timestamp - requested) > tolerance
+                    or timestamp < previous_timestamp - 0.001
+                    or timestamp < float(sample["scene_start"]) - 1e-6
+                    or timestamp >= float(sample["scene_end"])):
+                raise ValueError(f"Unreliable decoder timestamp at {sample['frame_id']}; temporal analysis stopped")
+            previous_timestamp = timestamp
+            height, width = frame.shape[:2]
+            scale = min(1.0, int(max_edge) / max(height, width))
+            if scale < 1:
+                frame = cv2.resize(frame, (max(32, round(width * scale / 32) * 32),
+                                          max(32, round(height * scale / 32) * 32)),
+                                   interpolation=cv2.INTER_AREA)
+            path = os.path.join(output_dir, sample["frame_id"] + ".jpg")
+            if not cv2.imwrite(path, frame, [cv2.IMWRITE_JPEG_QUALITY, int(jpeg_quality)]):
+                raise ValueError(f"Cannot save temporal frame {sample['frame_id']}")
+            delta = timestamp - requested
+            records.append({**sample, "timestamp": round(timestamp, 6), "path": path,
+                            "sample_start": max(float(sample["scene_start"]), sample["sample_start"] + delta),
+                            "sample_end": min(float(sample["scene_end"]), sample["sample_end"] + delta)})
+    finally:
+        cap.release()
+    return records

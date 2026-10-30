@@ -28,6 +28,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+azure = [
+    "azure-cognitiveservices-speech>=1.42,<2",
+]
+chirp = [
+    "google-cloud-texttospeech>=2.27,<3",
+]
 alignment = [
     "whisperx>=3.8.6,<4",
 ]

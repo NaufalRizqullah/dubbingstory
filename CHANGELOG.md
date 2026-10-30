@@ -11,6 +11,19 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.10.0]
+
+### Added
+- Opt-in full-mode dense visual analysis with a configurable 0.5/1/2-second sampling interval, bounded image batches, complete per-frame coverage, content-bound batch caching, and `visual_timeline.json` observations/events/per-second summaries. Context recovery splits batches rather than dropping requested frames.
+- Grounded action phrases in narration plans and scripts. Source event times are validated independently of model output; global story and beat prompts use bounded evidence while complete observations remain inspectable. Duration rewrites retain selected phrases and adjacent narration context.
+- Source-time speech placement using measured word offsets, without changing video speed or word durations. `audio_<lang>.actions.json` records matched/missed anchors; `best_effort` reports misses and `error` stops before audio publication. Timing stays active with classic or unburned captions.
+- Shared provider metadata/capability interface, optional Azure Speech SDK word boundaries, and an ElevenLabs adapter with character-to-word timestamps and neighboring text context. Edge remains the default; Piper/Chirp use the existing optional forced-alignment path. Add optional `azure` and `chirp` dependency extras.
+- Social notebook controls for dense analysis, action synchronization, engine-specific voices, required optional dependencies and selected-provider secrets. Existing source composition, canvas toggle, rights confirmation and render-only recovery remain available.
+
+### Compatibility and validation
+- CLI/config defaults keep dense analysis and action synchronization disabled; the dedicated social notebook enables them. Summary mode retains its existing behavior. Source/analysis hashes reject stale anchored scripts on resume.
+- Add mocked regressions for dense coverage/cache failure, grounded narrative anchors/rewrites, action placement, provider metadata, CLI controls and notebook switching. Only static Python/notebook syntax and diff review are performed on the development computer; tests, API calls, model inference and media rendering must be validated in Kaggle.
+
 ## [0.9.7]
 
 ### Fixed

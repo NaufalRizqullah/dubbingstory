@@ -3,7 +3,9 @@ dubbingstory.tts.piper_tts_engine — Piper TTS engine implementation
 """
 
 import os
+import math
 import subprocess
+import sys
 import glob
 from dubbingstory.tts.base_engine import BaseTTSEngine
 
@@ -43,7 +45,7 @@ class PiperTTSEngine(BaseTTSEngine):
         try:
             subprocess.run(
                 [
-                    "python", "-m", "piper.download_voices",
+                    sys.executable, "-m", "piper.download_voices",
                     voice_id,
                     "--data-dir", self.models_dir
                 ],
@@ -73,13 +75,19 @@ class PiperTTSEngine(BaseTTSEngine):
         voice_id: str | None = None,
         speaking_rate: float = 1.0,
     ) -> str:
+        text = str(text or "").strip()
+        if not text:
+            raise ValueError("Piper TTS text is empty")
+        speaking_rate = float(speaking_rate)
+        if not math.isfinite(speaking_rate) or speaking_rate <= 0:
+            raise ValueError("TTS speaking_rate must be positive and finite")
         if not voice_id:
             voice_id = self.voices.get(language, self.voices["id"])
             
         model_path = self._ensure_model_downloaded(voice_id)
         
         cmd = [
-            "python", "-m", "piper",
+            sys.executable, "-m", "piper",
             "-m", model_path,
             "-f", output_path
         ]

@@ -103,6 +103,10 @@ class EdgeTTSEngine(BaseTTSEngine):
     def get_engine_name(self) -> str:
         return "edge"
 
+    def get_capabilities(self) -> dict:
+        return {**super().get_capabilities(), "native_word_timings": True,
+                "timing_backend": "provider", "requires_alignment_extra": False}
+
     def synthesize(
         self,
         text: str,

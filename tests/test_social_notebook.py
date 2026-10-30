@@ -33,10 +33,10 @@ def literal_setting(name):
 
 def helpers():
     # Define only pure helper functions; no top-level install, network or file IO.
-    allowed = {"render_options", "expected_output_names", "ingestion_arguments", "pipeline_steps"}
+    allowed = {"render_options", "expected_output_names", "ingestion_arguments", "pipeline_steps", "selected_voice_id"}
     definitions = [node for node in ast.parse(source("helpers")).body
                    if isinstance(node, ast.FunctionDef) and node.name in allowed]
-    namespace = {"VOICE_ID": "id-ID-GadisNeural"}
+    namespace = {"VOICE_ID": "", "TTS_ENGINE": "edge", "TTS_VOICES": literal_setting("TTS_VOICES")}
     exec(compile(ast.Module(body=definitions, type_ignores=[]), str(NOTEBOOK), "exec"), namespace)
     return namespace
 
@@ -135,8 +135,46 @@ def test_native_social_defaults_and_explicit_rights_gate():
     assert literal_setting("DOWNLOAD_QUALITY") == "max"
     assert literal_setting("NARRATION_SOURCE") == "visual"
     assert literal_setting("SUBTITLE_STYLE") == "karaoke"
-    assert literal_setting("WORD_ALIGNMENT") == "edge"
+    assert literal_setting("WORD_ALIGNMENT") == "auto"
+    assert literal_setting("DENSE_VISUAL_ANALYSIS") is True
+    assert literal_setting("FRAME_INTERVAL_SECONDS") == 0.5
+    assert literal_setting("ACTION_SYNC") is True
     assert literal_setting("NARRATION_FIT") == "rewrite"
+
+
+@pytest.mark.parametrize("engine", ["edge", "azure", "chirp", "piper", "elevenlabs"])
+def test_switching_tts_selects_that_engines_voice_and_cli(engine):
+    namespace = helpers()
+    namespace["TTS_ENGINE"] = engine
+    if engine == "elevenlabs":
+        namespace["TTS_VOICES"][engine] = "configured-voice-id"
+    stages = namespace["pipeline_steps"]("sample", "dub")
+    arguments = stages[0][1]
+    assert arguments[arguments.index("--engine") + 1] == engine
+    assert arguments[arguments.index("--voice-id") + 1] == namespace["TTS_VOICES"][engine]
+    namespace["VOICE_ID"] = "explicit-voice"
+    assert namespace["selected_voice_id"]() == "explicit-voice"
+
+
+@pytest.mark.parametrize("engine,alignment,expected", [
+    ("edge", "auto", []), ("azure", "auto", ["azure"]),
+    ("elevenlabs", "auto", []), ("chirp", "auto", ["chirp", "alignment"]),
+    ("piper", "auto", ["alignment"]), ("edge", "whisperx", ["alignment"]),
+])
+def test_provider_dependencies_include_alignment_when_captions_are_off(engine, alignment, expected):
+    definitions = [node for node in ast.parse(source("settings")).body
+                   if isinstance(node, ast.FunctionDef) and node.name == "tts_optional_extras"]
+    namespace = {}
+    exec(compile(ast.Module(body=definitions, type_ignores=[]), str(NOTEBOOK), "exec"), namespace)
+    assert namespace["tts_optional_extras"](engine, alignment, True) == expected
+
+
+def test_new_provider_credentials_are_redacted_in_child_logs():
+    definitions = [node for node in ast.parse(source("helpers")).body
+                   if isinstance(node, ast.FunctionDef) and node.name == "safe_log"]
+    namespace = {"re": re, "CHILD_ENV": {"AZURE_SPEECH_KEY": "fake-azure-secret", "ELEVENLABS_API_KEY": "fake-eleven-secret"}}
+    exec(compile(ast.Module(body=definitions, type_ignores=[]), str(NOTEBOOK), "exec"), namespace)
+    assert namespace["safe_log"]("fake-azure-secret fake-eleven-secret") == "[redacted] [redacted]"
 
 
 def test_setup_requires_canvas_fix_before_resuming_existing_scripts():
@@ -493,6 +531,27 @@ def test_output_bundle_and_downloads_survive_optional_preview_failure(tmp_path, 
         assert set(names) <= set(archive.namelist())
         assert "render_manifest.json" in archive.namelist()
         assert all(archive.read(name) == b"rendered video fixture" for name in names)
+
+
+def test_output_bundle_preserves_visual_evidence_and_action_misses(tmp_path, monkeypatch):
+    run, project, _, bundle, _, _ = outputs_harness(tmp_path, monkeypatch)
+    evidence = {
+        "visual_timeline.json": {"status": "complete", "per_second": [{"second": 0}]},
+        "storyboard.json": {"scenes": []},
+        "narration_plan.json": {"action_sync_enabled": True},
+        "story_plan.json": {"hook": "Visible work begins"},
+        "story_memory.json": {"process": "assembly"},
+        "audio/audio_id.actions.json": {"status": "partial", "validated": False,
+                                      "segments": [{"anchors": [{"matched": False}]}]},
+    }
+    for relative, payload in evidence.items():
+        path = project / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    run()
+    with zipfile.ZipFile(bundle) as archive:
+        for relative, payload in evidence.items():
+            assert json.loads(archive.read(relative)) == payload
 
 
 @pytest.mark.parametrize("failure", ["incomplete", "missing", "unreported"])

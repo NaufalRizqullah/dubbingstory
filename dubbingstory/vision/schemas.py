@@ -12,8 +12,57 @@ smaller rescue schema is used only after a detected runaway/second truncation.
 from __future__ import annotations
 
 from typing import Any
+import math
 
 VISION_SCHEMA_VERSION = "vision-jsonschema-v4-budgeted"
+TIMED_FRAMES_SCHEMA_VERSION = "timed-frames-v1"
+
+
+def build_timed_frames_schema(frame_ids: list[str]) -> dict[str, Any]:
+    """Require an observation for every supplied frame, with no invented IDs."""
+    observation = {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "maxLength": 160},
+            "state_change": {"type": "string", "maxLength": 120},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        },
+        "required": ["action", "state_change", "confidence"],
+        "additionalProperties": False,
+    }
+    return {
+        "type": "object",
+        "properties": {"frames": {
+            "type": "object", "properties": {fid: observation for fid in frame_ids},
+            "required": frame_ids, "additionalProperties": False,
+        }},
+        "required": ["frames"], "additionalProperties": False,
+    }
+
+
+def normalize_timed_frames(payload: dict, frame_ids: list[str]) -> list[dict]:
+    """Validate completeness even when a provider cannot constrain decoding."""
+    if not isinstance(payload, dict) or set(payload) != {"frames"}:
+        raise ValueError("Timed frame response must contain only a frames object")
+    frames = payload["frames"]
+    if not isinstance(frames, dict) or set(frames) != set(frame_ids):
+        raise ValueError("Timed frame response must cover every requested frame exactly once")
+    observations = []
+    for fid in frame_ids:
+        value = frames[fid]
+        if not isinstance(value, dict) or set(value) != {"action", "state_change", "confidence"}:
+            raise ValueError("Timed frame observation has missing or unexpected fields")
+        for field, limit in (("action", 160), ("state_change", 120)):
+            if not isinstance(value[field], str) or len(value[field]) > limit:
+                raise ValueError("Timed frame descriptions must be bounded strings")
+        confidence = value["confidence"]
+        if (isinstance(confidence, bool) or not isinstance(confidence, (int, float))
+                or not math.isfinite(confidence) or not 0 <= confidence <= 1):
+            raise ValueError("Timed frame confidence must be a finite number from 0 to 1")
+        observations.append({"frame_id": fid, "action": value["action"].strip(),
+                             "state_change": value["state_change"].strip(),
+                             "confidence": float(confidence)})
+    return observations
 
 
 def _score_schema() -> dict[str, Any]:

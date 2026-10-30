@@ -10,6 +10,23 @@ from abc import ABC, abstractmethod
 class BaseTTSEngine(ABC):
     """Abstract base class for TTS engines."""
 
+    def get_capabilities(self) -> dict:
+        """Describe timing support without synthesizing or downloading anything.
+
+        Native timestamps are still validated against the final audio/text.
+        Audio-only engines use the optional forced aligner when timing is needed.
+        """
+        return {
+            "native_word_timings": False,
+            "timing_backend": "whisperx",
+            "requires_alignment_extra": True,
+            "contextual_synthesis": False,
+        }
+
+    def set_context(self, previous_text: str = "", next_text: str = "") -> None:
+        """Optional neighboring narration context; never speak it as extra text."""
+        return None
+
     @abstractmethod
     def synthesize(
         self,

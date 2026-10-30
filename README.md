@@ -23,6 +23,8 @@ Terinspirasi dari video repair Pakistan di Facebook yang di-dubbing dan dinarasi
 - ✂️ **Highlight Recap Mode** — Fitur untuk merangkum video panjang menjadi video pendek berisi momen-momen terpenting (gunakan `--mode summary`).
 - 📱 **Native Storytelling** — `--mode full --ratio source` mempertahankan komposisi dan timeline video, dengan validasi durasi narasi.
 - 💬 **Animated Captions** — Word-by-word atau karaoke dari timing kata TTS/forced alignment; SRT tetap tersedia, ASS dapat di-burn ke MP4.
+- 🕒 **Analisis visual bertimestamp** — Opsi full mode menganalisis frame setiap 0,5/1/2 detik dalam batch, menyimpan observasi dan ringkasan per detik, lalu menyusun narasi yang berkesinambungan dari kejadian visual.
+- 🎯 **Sinkronisasi tindakan** — Frasa penting ditempatkan dekat kejadian terkait menggunakan timing kata audio nyata, termasuk ketika subtitle dimatikan. Laporan terpisah menunjukkan kecocokan yang masih belum tercapai.
 - 🖼️ **Layered Vertical Render** — Canvas 9:16 dengan foreground tajam di tengah dan background video blur/grayscale; zoom kedua layer dapat diatur. `reframe` dapat mengolah MP4 hasil export tanpa mengulang TTS.
 
 ---
@@ -101,6 +103,8 @@ Pilihan `source` dan caption animasi mengaktifkan fitting narasi yang ketat: nar
 
 Lihat [panduan native storytelling, konfigurasi subtitle, dan pengujian Kaggle](docs/native-storytelling.md) untuk instalasi opsional alignment, ingest platform, output files, serta batas kompatibilitas.
 
+Untuk analisis rapat dan narasi yang mengikuti aksi, tambahkan `--temporal-analysis --frame-interval 0.5 --action-sync` pada `run --mode full`. Interval tersebut mengatur pengamatan visual; ucapan tetap dikelompokkan menjadi gagasan utuh. Notebook sosial mengaktifkan opsi ini dengan gaya `jozzr_social`, dan menyediakan `TTS_ENGINE` untuk Edge, Azure, Piper, Chirp, atau ElevenLabs. Lihat [panduan analisis waktu dan pergantian TTS](docs/native-storytelling.md#analisis-visual-rapat-dan-sinkronisasi-tindakan). Perubahan ini perlu diuji di Kaggle; tidak ada klaim validasi audiovisual lokal.
+
 Notebook Kaggle khusus TikTok/RedNote tersedia di [mereska-dubbingstory-tiktok-rednote.ipynb](notebooks/mereska-dubbingstory-tiktok-rednote.ipynb). Default mempertahankan seluruh video dengan rasio `source`, voice-over Indonesia Edge, dan subtitle karaoke. `ENABLE_CANVAS = False` mematikan canvas tambahan; `True` menambah output layered 9:16 tanpa mengganti output source. Notebook menyediakan ingest terpisah, resume per tahap, render ulang, dan ZIP hasil. Atur hak penggunaan serta Kaggle Secret sebelum menjalankan; notebook belum dieksekusi pada saat ditambahkan.
 
 Jika download YouTube gagal di notebook, ikuti [diagnostik download Kaggle](docs/native-storytelling.md#download-youtube-di-kaggle). Notebook repository memasang `yt-dlp[default]` sebelum download dan mencetak versi yang digunakan; downloader mengikuti pilihan client bawaan yt-dlp.
@@ -145,14 +149,18 @@ Jalankan seluruh proses dari awal sampai akhir.
 | `--summary-max-scenes`| `auto` | Maksimal scene yang diambil untuk mode summary. |
 | `--style` | `viral_fb` | Gaya narasi (`viral_fb`, `documentary`, `technical`, `calm_educational`). |
 | `--lang` | `id en` | Bahasa target narasi. |
-| `--engine` | `edge` | Mesin TTS yang digunakan (`edge`). |
+| `--engine` | `edge` | `edge`, `azure`, `piper`, `chirp`, atau `elevenlabs`; provider berbayar memerlukan konfigurasi credential/voice sendiri. |
+| `--temporal-analysis` | `False` | Analisis frame rapat bertimestamp khusus full mode; legacy dan summary tetap tersedia. |
+| `--frame-interval` | `0.5` | Jarak frame dalam detik, mengaktifkan analisis rapat; tidak dibatasi `--max-keyframes` lama. |
+| `--action-sync` | `False` | Mengaitkan frasa penting dengan kejadian visual, lalu menjadwalkannya dari timing kata TTS. |
+| `--action-sync-policy` | `best_effort` | `best_effort` melaporkan frasa meleset; `error` menghentikan publikasi audio jika anchor belum cocok. |
 | `--ratio` | `16:9` | Pilih `source` untuk mempertahankan komposisi; rasio tetap `16:9`, `9:16`, `1:1`, `4:3` juga tersedia. |
 | `--vertical-layout` | `pad` | `layered` mengaktifkan foreground tajam dan background blur/grayscale khusus output 9:16. |
 | `--foreground-zoom`, `--background-zoom` | `25`, `100` | Zoom tiap layer: 0 = muat utuh, 100 = memenuhi canvas. |
 | `--background-blur`, `--background-grayscale` | `50`, `1.0` | Blur 1–100 dan grayscale 0–1 untuk background. |
 | `--narration-fit` | `legacy` | `rewrite` atau `error` untuk validasi overflow; native/animasi otomatis memakai `rewrite` jika tidak dioverride. |
 | `--subtitle-style` | `classic` | `classic`, `word`, atau `karaoke`; SRT tetap dihasilkan. |
-| `--word-alignment` | `auto` | Metadata kata Edge, atau optional `whisperx`; tidak membagi durasi kata secara rata. |
+| `--word-alignment` | `auto` | Metadata native provider atau optional `whisperx`; `provider` mewajibkan metadata native, `edge` tetap tersedia untuk kompatibilitas. |
 | `--burn-subtitles` | dari config | Burn caption; `--no-burn-subtitles` hanya mengekspor file subtitle. |
 | `--vision-provider` | `gemini` | Pilihan API Vision (`gemini` atau `openai` untuk vLLM/Qwen lokal). |
 | `--vision-model` | - | Override nama model jika menggunakan `--vision-provider openai`. |

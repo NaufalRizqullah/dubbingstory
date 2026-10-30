@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+from dubbingstory.story.action_anchors import compact_visual_events
+
 
 V2_NARRATION_PROMPT = """You are a professional video storyteller.
 
@@ -81,6 +83,7 @@ HARD RULES:
 19. PROCESS COMPRESSION: When 3+ consecutive beats show the same type of process
     (e.g., machining steps), compress them into one flowing thought that highlights
     what's different about each step rather than repeating "then they did X".
+{action_sync_rules}
 
 Return ONLY a valid JSON array:
 [
@@ -138,6 +141,8 @@ provided evidence supports it. Do not invent missing facts.
 
 For every item, also return `claims`: atomic factual claims stated in the revised text,
 limited to what the fixed narration plan/evidence supports.
+
+{action_sync_rules}
 
 Return ONLY the corrected JSON array with scene_id, text, claims, importance.
 """
@@ -218,7 +223,33 @@ def _beat_payload(scene_map: dict[str, dict], plan_entry: dict) -> dict:
         "target_words": plan_entry.get("target_words", 8),
         "max_words": plan_entry.get("max_words", 12),
         "evidence_by_visual_scene": evidence,
+        **({**compact_visual_events(plan_entry.get("visual_events", []),
+                                   required_ids=plan_entry.get("anchor_event_ids", [])),
+            "anchor_event_ids": plan_entry.get("anchor_event_ids", [])}
+           if plan_entry.get("action_sync_enabled") else {}),
     }
+
+
+ACTION_SYNC_RULES = """ACTION TIMING CONTRACT (full-video narration only):
+- visual_events are timestamped observations in source-video seconds. Read them
+  in order to understand what changes during a beat. They are evidence, not an
+  instruction to narrate every frame or to restart a sentence every second.
+  Prompt evidence may be compacted: visual_events_omitted states how many other
+  observations remain in the saved timeline. Do not invent events in those gaps.
+- Write the whole narration as a connected process with a relevant opening and
+  a supported result. Keep explanation and transitions natural. Do not infer
+  technical causes, materials, temperatures, identities or purposes without evidence.
+- Every beat has anchor_event_ids, containing at most two important visible actions.
+  Mention each selected action in that beat and quote its exact spoken phrase in
+  action_anchors. Choose 1-6 consecutive words containing the action, unique within
+  that beat. Place phrases in the same chronological order as the visual events.
+- Return action_anchors: [{"event_id": "ID from anchor_event_ids", "phrase":
+  "exact words copied from text"}] on every item; use [] when no IDs are selected.
+  Do not provide or change timestamps. Do not invent an event ID. A phrase must
+  express the action of the referenced event, not a generic transition word.
+- During QA rewriting preserve all existing action_anchors and their exact phrases
+  in the revised text. Remove other detail first; do not drop the required action.
+"""
 
 
 def build_v2_narration_prompt(
@@ -238,6 +269,9 @@ def build_v2_narration_prompt(
         _beat_payload(scene_map, plan_entry)
         for plan_entry in narration_plan.get("segments", []) or []
     ]
+    anchored = bool(narration_plan.get("action_sync_enabled"))
+    plan_json = json.dumps(story_plan, ensure_ascii=False, indent=None if anchored else 2)
+    memory_json = json.dumps(story_memory, ensure_ascii=False, indent=None if anchored else 2)
 
     return V2_NARRATION_PROMPT.format(
         mode=mode,
@@ -247,11 +281,12 @@ def build_v2_narration_prompt(
         tone=style_config.get("tone", "natural storytelling"),
         language_style=_language_style(style_config, language),
         examples=_examples(style_config, language),
-        story_plan_json=json.dumps(story_plan, ensure_ascii=False, indent=2)[:26000],
-        story_memory_json=json.dumps(story_memory, ensure_ascii=False, indent=2)[:14000],
+        story_plan_json=plan_json if anchored else plan_json[:26000],
+        story_memory_json=memory_json if anchored else memory_json[:14000],
         rules=_rules(style_config),
-        scenes_json=json.dumps(payload, ensure_ascii=False, indent=2),
+        scenes_json=json.dumps(payload, ensure_ascii=False, indent=None if anchored else 2),
         hedging_threshold=hedging_threshold,
+        action_sync_rules=ACTION_SYNC_RULES if narration_plan.get("action_sync_enabled") else "",
     )
 
 
@@ -266,6 +301,16 @@ def build_rewrite_prompt(
     style_config: dict | None = None,
 ) -> str:
     style_config = style_config or {}
+    anchored = bool(narration_plan.get("action_sync_enabled"))
+    prompt_plan = narration_plan
+    if anchored:
+        prompt_plan = {**narration_plan, "segments": [
+            {**entry, **compact_visual_events(entry.get("visual_events", []),
+                                             required_ids=entry.get("anchor_event_ids", []))}
+            for entry in narration_plan.get("segments", [])
+        ]}
+    plan_json = json.dumps(prompt_plan, ensure_ascii=False, indent=None if anchored else 2)
+    story_json = json.dumps(story_plan, ensure_ascii=False, indent=None if anchored else 2)
     return REWRITE_PROMPT.format(
         language_code=language,
         language_label=_language_label(language),
@@ -275,9 +320,10 @@ def build_rewrite_prompt(
         rules=_rules(style_config),
         examples=_examples(style_config, language),
         issues_json=json.dumps(qa.get("issues", []), ensure_ascii=False, indent=2),
-        story_plan_json=json.dumps(story_plan, ensure_ascii=False, indent=2)[:22000],
-        narration_plan_json=json.dumps(narration_plan, ensure_ascii=False, indent=2)[:26000],
+        story_plan_json=story_json if anchored else story_json[:22000],
+        narration_plan_json=plan_json if anchored else plan_json[:26000],
         current_json=json.dumps(current_segments, ensure_ascii=False, indent=2),
+        action_sync_rules=ACTION_SYNC_RULES if narration_plan.get("action_sync_enabled") else "",
     )
 
 
