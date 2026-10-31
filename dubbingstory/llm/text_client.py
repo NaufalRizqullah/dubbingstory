@@ -14,8 +14,11 @@ from pathlib import Path
 import tempfile
 import time
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 import requests
+
+from dubbingstory.llm.diagnostics import LLMDiagnostics, response_usage
 
 
 class TextGenerationError(RuntimeError):
@@ -59,9 +62,11 @@ def _positive_int(cfg, key: str, default: int) -> int:
 
 
 class _LocalFailure(Exception):
-    def __init__(self, category: str, *, retryable: bool = True):
+    def __init__(self, category: str, *, retryable: bool = True, detail="", status_code=None):
         self.category = category
         self.retryable = retryable
+        self.detail = detail
+        self.status_code = status_code
 
 
 class TextLLMClient:
@@ -72,6 +77,7 @@ class TextLLMClient:
         if self.provider not in {"gemini", "local"}:
             raise TextGenerationError("llm.provider must be gemini or local")
         self.fallback = bool(getattr(cfg, "llm_fallback_enabled", False))
+        self.diagnostics = LLMDiagnostics.from_config(cfg)
 
     def _read_state(self) -> dict:
         run_id = str(getattr(self.cfg, "llm_fallback_run_id", "") or "")
@@ -125,6 +131,7 @@ class TextLLMClient:
     def _generate_gemini(self, prompt, **kwargs):
         from dubbingstory.vision.gemini_analyzer import GeminiVideoAnalyzer
 
+        call_id = kwargs.pop("_call_id", None) or uuid4().hex
         key = getattr(self.cfg, "api_key_gemini", "")
         if not key:
             raise TextGenerationError("Gemini key unavailable; configure llm.provider: local to use Qwen only")
@@ -134,6 +141,8 @@ class TextLLMClient:
         analyzer = GeminiVideoAnalyzer(api_key=key, model=self.model,
                                        fallback_model=fallback_model,
                                        **gemini_retry_options(self.cfg))
+        analyzer.diagnostics = self.diagnostics
+        analyzer.diagnostics_call_id = call_id
         try:
             return analyzer.generate_json_with_retry(prompt, **kwargs)
         finally:
@@ -146,7 +155,7 @@ class TextLLMClient:
     def generate_json_with_retry(self, prompt, *, temperature=0.2,
                                  response_validator=None, task_name="text", model=None):
         kwargs = dict(temperature=temperature, response_validator=response_validator,
-                      task_name=task_name, model=model or self.model)
+                      task_name=task_name, model=model or self.model, _call_id=uuid4().hex)
         if self.provider == "local" or (self.fallback and self._read_state()):
             return self._generate_local(prompt, **kwargs)
 
@@ -169,7 +178,8 @@ class TextLLMClient:
                 print(f"   LLM {task_name}: Gemini output rejected; trying local for this task")
             return self._generate_local(prompt, **kwargs)
 
-    def _generate_local(self, prompt, *, temperature, response_validator, task_name, model):
+    def _generate_local(self, prompt, *, temperature, response_validator, task_name, model,
+                        _call_id=None):
         del model  # Cloud model names must never leak into the local request.
         base_url = str(getattr(self.cfg, "llm_local_base_url", "http://127.0.0.1:8000/v1")).rstrip("/")
         url = urlsplit(base_url)
@@ -186,10 +196,24 @@ class TextLLMClient:
         started = time.monotonic()
         category = "budget_exhausted"
         used = 0
+        correction = ""
+        last_validation_error = ""
+        diagnostics = self.diagnostics
+        call_id = _call_id or uuid4().hex
+        payload_schema = getattr(response_validator, "response_schema", None)
+        response_format = {"type": "json_object"}
+        if isinstance(payload_schema, dict):
+            response_format = {"type": "json_schema", "json_schema": {
+                "name": "dubbingstory_result", "strict": True,
+                "schema": {"type": "object", "properties": {"result": payload_schema},
+                           "required": ["result"], "additionalProperties": False},
+            }}
         system = (
             'Follow the supplied video evidence, language and JSON contract. '
             'Return a JSON object with exactly one key "result" whose value is '
-            'the requested JSON object or array. Do not add facts, markdown or commentary.'
+            'the requested JSON object or array. The user output contract describes '
+            'the VALUE of result; always wrap that value in {"result": ...}. '
+            'Do not add facts, markdown or commentary.'
         )
         # No environment proxy/auth forwarding and no redirects from local to
         # external services. requests itself performs no automatic retries.
@@ -199,10 +223,12 @@ class TextLLMClient:
                 if time.monotonic() >= deadline:
                     break
                 used = attempt
-                correction = ("" if attempt == 1 else
-                              "\nPrevious output was invalid. Return complete valid JSON, obey the original language/schema and word limits.")
                 messages = [{"role": "system", "content": system + correction},
                             {"role": "user", "content": prompt}]
+                attempt_started = time.monotonic()
+                content, payload, raw = None, None, {}
+                finish_reason, validation_error, status_code = None, "", None
+                error_type = ""
                 try:
                     tokenized = self._post(session, base_url[:-3] + "/tokenize",
                                            {"model": local_model, "messages": messages,
@@ -217,41 +243,81 @@ class TextLLMClient:
                     raw = self._post(session, base_url + "/chat/completions",
                                      {"model": local_model, "messages": messages,
                                       "temperature": temperature, "max_tokens": max_tokens,
-                                      "response_format": {"type": "json_object"}, "stream": False},
+                                      "response_format": response_format, "stream": False},
                                      timeout, deadline)
+                    status_code = 200
                     choices = raw.get("choices", [])
-                    if not choices or choices[0].get("finish_reason") != "stop":
+                    choice = choices[0] if choices else {}
+                    finish_reason = choice.get("finish_reason")
+                    content = choice.get("message", {}).get("content")
+                    if finish_reason != "stop":
                         raise _LocalFailure("incomplete_output")
-                    content = choices[0].get("message", {}).get("content")
                     if not isinstance(content, str) or not content.strip():
                         raise _LocalFailure("empty_output")
-                    envelope = json.loads(content)
+                    try:
+                        envelope = json.loads(content)
+                    except RecursionError:
+                        raise _LocalFailure("invalid_json_response", detail="JSON nesting limit exceeded") from None
                     if not isinstance(envelope, dict) or set(envelope) != {"result"}:
                         raise _LocalFailure("invalid_result_envelope")
                     payload = envelope["result"]
                     if not isinstance(payload, (dict, list)):
                         raise _LocalFailure("invalid_json_shape")
-                    if response_validator and response_validator(payload):
-                        raise _LocalFailure("schema_or_language_rejected")
+                    validation_error = response_validator(payload) if response_validator else None
+                    if validation_error:
+                        raise _LocalFailure("schema_or_language_rejected", detail=str(validation_error))
                     if time.monotonic() >= deadline:
                         raise _LocalFailure("budget_exhausted", retryable=False)
+                    diagnostics.record(
+                        call_id=call_id, task=task_name, provider="local", model=local_model,
+                        attempt=attempt, outcome="accepted", raw_response=content, payload=payload,
+                        finish_reason=finish_reason, usage=response_usage(raw.get("usage")),
+                        provider_request_id=raw.get("id"), http_status=200,
+                        latency_seconds=time.monotonic() - attempt_started,
+                    )
                     print(f"   LLM {task_name}: local attempt {attempt}/{attempts} succeeded ({time.monotonic() - started:.1f}s)")
                     return payload
                 except _LocalFailure as exc:
+                    error_type = type(exc).__name__
                     category = exc.category
                     retryable = exc.retryable
-                except (ValueError, TypeError, KeyError, IndexError, AttributeError):
+                    validation_error = exc.detail
+                    status_code = exc.status_code if exc.status_code is not None else status_code
+                except json.JSONDecodeError as exc:
+                    error_type = type(exc).__name__
                     category, retryable = "invalid_json_response", True
-                except requests.RequestException:
+                    validation_error = f"JSON parse error at line {exc.lineno}, column {exc.colno}: {exc.msg}"
+                except (ValueError, TypeError, KeyError, IndexError, AttributeError) as exc:
+                    error_type = type(exc).__name__
+                    category, retryable = "invalid_json_response", True
+                except requests.RequestException as exc:
+                    error_type = type(exc).__name__
                     category, retryable = "local_transport_error", True
+                safe_error = diagnostics.safe_text(validation_error, 1200)
+                last_validation_error = safe_error
+                diagnostics.record(
+                    call_id=call_id, task=task_name, provider="local", model=local_model,
+                    attempt=attempt, outcome="rejected", category=category,
+                    error_type=error_type,
+                    validation_error=safe_error, raw_response=content, payload=payload,
+                    finish_reason=finish_reason, usage=response_usage(raw.get("usage")),
+                    provider_request_id=raw.get("id"), http_status=status_code,
+                    latency_seconds=time.monotonic() - attempt_started,
+                )
                 print(f"   LLM {task_name}: local attempt {attempt}/{attempts} failed ({category})")
+                if safe_error:
+                    print(f"      Validation: {safe_error[:500]}")
+                if category in {"schema_or_language_rejected", "invalid_result_envelope", "invalid_json_shape",
+                                "invalid_json_response", "incomplete_output", "empty_output"}:
+                    correction = "\n" + diagnostics.correction(safe_error or category, content)
                 if not retryable or attempt == attempts:
                     break
                 remaining = deadline - time.monotonic()
                 if remaining <= 1:
                     break
                 time.sleep(1)
-        raise TextGenerationError(f"Local LLM failed after {used} attempt(s): {category}. Saved artifacts can be resumed.") from None
+        detail = f" ({last_validation_error[:500]})" if last_validation_error else ""
+        raise TextGenerationError(f"Local LLM failed after {used} attempt(s): {category}{detail}. Saved artifacts can be resumed.") from None
 
     @staticmethod
     def _post(session, url: str, body: dict, timeout: float, deadline: float) -> dict:
@@ -261,7 +327,8 @@ class TextLLMClient:
         with session.post(url, json=body, timeout=min(timeout, remaining), allow_redirects=False) as response:
             if not 200 <= response.status_code < 300:
                 retryable = response.status_code in {408, 429, 500, 502, 503, 504}
-                raise _LocalFailure(f"local_http_{response.status_code}", retryable=retryable)
+                raise _LocalFailure(f"local_http_{response.status_code}", retryable=retryable,
+                                    status_code=response.status_code)
             result = response.json()
         if not isinstance(result, dict):
             raise _LocalFailure("invalid_response_object")

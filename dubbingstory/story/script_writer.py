@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
-from dubbingstory.story.action_anchors import canonical_action_anchors, preserve_action_phrases
+from dubbingstory.story.action_anchors import (
+    canonical_action_anchors, normalized_tokens, preserve_action_phrases,
+)
 
 from dubbingstory.story.gemini_json import (
     build_story_client, raise_if_strict_text_error, strict_text_routing,
@@ -64,6 +66,12 @@ def _call_json(
                 return error
         return payload_language_mismatch_reason(payload, language) if language else None
 
+    # Keep the public analyzer call signature unchanged. Routed clients can use
+    # the provider schema while custom analyzers still receive only a callable.
+    response_schema = getattr(payload_validator, "response_schema", None)
+    if response_schema is not None:
+        response_validator.response_schema = response_schema
+
     if hasattr(analyzer, "generate_json_with_retry"):
         payload = analyzer.generate_json_with_retry(
             prompt,
@@ -117,6 +125,50 @@ def _plan_map(narration_plan: dict) -> dict[str, dict]:
     }
 
 
+def _narration_response_schema(narration_plan: dict) -> dict:
+    """Constrain generated JSON; semantic evidence checks remain authoritative.
+
+    Providers generate the existing canonical array. Historical object envelopes
+    are still accepted by the validator for custom clients and saved integrations.
+    """
+    plan_map = _plan_map(narration_plan)
+    scene_id_schema = {"type": "string"}
+    if plan_map:
+        scene_id_schema["enum"] = list(plan_map)
+    properties = {
+        "scene_id": scene_id_schema,
+        "text": {"type": "string", "minLength": 1},
+        "claims": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "importance": {"type": "number", "minimum": 0, "maximum": 1},
+    }
+    required = list(properties)
+    if any(entry.get("action_sync_enabled") for entry in plan_map.values()):
+        selected = list(dict.fromkeys(
+            event_id for entry in plan_map.values()
+            for event_id in entry.get("anchor_event_ids", [])
+        ))
+        event_schema = {"type": "string"}
+        if selected:
+            event_schema["enum"] = selected
+        properties["action_anchors"] = {
+            "type": "array", "maxItems": 2 if selected else 0,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "event_id": event_schema,
+                    "phrase": {"type": "string", "minLength": 1},
+                },
+                "required": ["event_id", "phrase"], "additionalProperties": False,
+            },
+        }
+        required.append("action_anchors")
+    return {
+        "type": "array", "minItems": len(plan_map), "maxItems": len(plan_map),
+        "items": {"type": "object", "properties": properties,
+                  "required": required, "additionalProperties": False},
+    }
+
+
 def _narration_response_validator(narration_plan: dict):
     plan_map = _plan_map(narration_plan)
     expected_ids = set(plan_map)
@@ -128,23 +180,27 @@ def _narration_response_validator(narration_plan: dict):
                             if isinstance(payload.get(key), list)), None)
         error = validate_scene_items(payload, expected_ids)
         if error:
-            return error
+            expected = ", ".join(list(plan_map)[:20])
+            return f"{error}; use each narration beat scene_id exactly once: {expected}"
         for item in payload:
+            scene_id = str(item["scene_id"])
             if not isinstance(item.get("text"), str) or not item["text"].strip():
-                return "every narration beat requires nonempty text"
+                return f"{scene_id}.text must be a nonempty narration string"
             if not validate_string_list(item.get("claims")):
-                return "claims must be an array of nonempty strings (or an empty array)"
+                return f"{scene_id}.claims must be an array of nonempty strings (or an empty array)"
             importance = item.get("importance", 0.5)
             if type(importance) not in (int, float) or not 0 <= importance <= 1:
-                return "importance must be a number from zero to one"
-            planned = plan_map[str(item["scene_id"])]
+                return f"{scene_id}.importance must be a number from zero to one"
+            planned = plan_map[scene_id]
             if planned.get("action_sync_enabled"):
                 try:
                     canonical_action_anchors(item.get("action_anchors"), item["text"], planned)
                 except (KeyError, TypeError, ValueError) as exc:
-                    return f"{item['scene_id']}: {exc}"
+                    required = json.dumps(planned.get("anchor_event_ids", []), ensure_ascii=False)
+                    return f"{scene_id}.action_anchors: {exc}; required event IDs: {required}"
         return None
 
+    validator.response_schema = _narration_response_schema(narration_plan)
     return validator
 
 
@@ -450,18 +506,37 @@ def shorten_for_measured_duration(
     original = str(segment.get("text", "")).strip()
     if not original or available_duration <= 0 or measured_duration <= 0:
         raise ValueError("A nonempty beat and positive measured/window durations are required")
-    target_words = max(1, int(len(original.split()) * available_duration / measured_duration * 0.88))
+    original_word_count = len(original.split())
+    target_words = max(1, int(original_word_count * available_duration / measured_duration * 0.88))
     style = str(getattr(cfg, "narration_style", "natural") or "natural")
-    analyzer, model = _client(cfg)
     original_claims = [str(value) for value in segment.get("claims", []) or []]
     evidence_json = json.dumps(evidence or [], ensure_ascii=False)
     anchors = segment.get("action_anchors", []) or []
     if segment.get("action_sync_enabled"):
         anchors = canonical_action_anchors(anchors, original, segment)
+    required_phrase_words = sum(len(anchor["phrase"].split()) for anchor in anchors)
+    original_spoken_count = len(normalized_tokens(original))
+    required_spoken_count = sum(len(normalized_tokens(anchor["phrase"])) for anchor in anchors)
+    if anchors and required_spoken_count >= original_spoken_count:
+        raise ValueError(
+            f"{segment.get('scene_id', 'beat')}: duration rewrite has no removable words; "
+            f"all {original_spoken_count} spoken words are required action phrases "
+            f"({measured_duration:.3f}s measured, {available_duration:.3f}s available). "
+            "Revise the anchored narration "
+            "plan or voice delivery; no model request was made."
+        )
+    # The ratio is a text-length heuristic, not an audio-duration proof. Do not
+    # ask a model to fit mandatory phrases into an impossible word budget. The
+    # caller still synthesizes and measures the result against the actual window.
+    if anchors:
+        target_words = max(target_words, required_phrase_words)
+    analyzer, model = _client(cfg)
+    spoken_anchors = [{"event_id": anchor["event_id"], "phrase": anchor["phrase"]}
+                      for anchor in anchors]
     anchor_context = (
         "Preserve these exact spoken action phrases, each once and in the same order. "
         "They must still describe their original visual events. Remove secondary prose first.\n"
-        f"Required action anchors: {json.dumps(anchors, ensure_ascii=False)}\n"
+        f"Required action anchors: {json.dumps(spoken_anchors, ensure_ascii=False)}\n"
     ) if anchors else ""
     prompt = (
         "Shorten this already approved narration beat to fit its measured TTS window. "
@@ -485,17 +560,38 @@ def shorten_for_measured_duration(
         if not isinstance(payload, dict):
             return "Duration rewrite must return an object"
         text = payload.get("text")
-        if not isinstance(text, str) or not text.strip() or len(text.split()) > target_words or text.strip() == original:
-            return f"Duration rewrite must produce a shorter beat within {target_words} words"
+        if not isinstance(text, str) or not text.strip():
+            return "Duration rewrite text must be a nonempty narration string"
+        if text.strip() == original:
+            return f"Duration rewrite repeated the original; shorten it to at most {target_words} words"
+        if len(text.split()) > target_words:
+            return f"Duration rewrite text has {len(text.split())} words; maximum is {target_words}"
         indices = payload.get("retained_claim_indices")
         if not isinstance(indices, list) or any(type(i) is not int or not 0 <= i < len(original_claims) for i in indices):
-            return "Duration rewrite returned invalid claim references"
+            return (
+                f"retained_claim_indices must contain integers from 0 to {len(original_claims) - 1}"
+                if original_claims else "retained_claim_indices must be [] because original_claims is empty"
+            )
         try:
             preserve_action_phrases(text, anchors)
         except ValueError as exc:
             return str(exc)
+        if anchors and len(normalized_tokens(text)) >= original_spoken_count:
+            return "Duration rewrite must remove spoken words outside the required action phrases"
         return None
 
+    duration_validator.response_schema = {
+        "type": "object",
+        "properties": {
+            "text": {"type": "string", "minLength": 1},
+            "retained_claim_indices": {
+                "type": "array", "maxItems": len(original_claims),
+                "items": {"type": "integer", "minimum": 0,
+                          "maximum": max(0, len(original_claims) - 1)},
+            },
+        },
+        "required": ["text", "retained_claim_indices"], "additionalProperties": False,
+    }
     payload = _call_json(analyzer, model, prompt, temperature=0.15,
                          language=language, task_name="measured-duration-rewrite",
                          payload_validator=duration_validator)

@@ -111,6 +111,8 @@ Jika log lama menunjukkan `Scenes: 0` / `Keyframes: 0`, perbarui kode dan notebo
 
 Jika storyboard berhasil tetapi persiapan temporal gagal, lihat [pemulihan ekstraksi frame temporal](docs/native-storytelling.md#analisis-temporal-gagal-setelah-storyboard). Revisi notebook mempertahankan konfigurasi pengguna, termasuk `FRAME_INTERVAL_SECONDS=1`, `ORIGINAL_VOLUME=0.20`, dan pilihan `AUDIO_STRATEGY`; proyek dengan segmentasi valid dapat dilanjutkan dari `analyze` setelah kode diperbarui.
 
+Jika narasi/revisi TTS ditolak dengan `response_validation` atau `schema_or_language_rejected`, lihat [diagnosis narasi dan structured output](docs/native-storytelling.md#diagnosis-narasi-dan-structured-output). Kontrak prompt dan skema kini diselaraskan, dan notebook menyimpan `llm_attempts.jsonl` berisi keluaran yang disanitasi serta alasan validasi. [Dua model lokal](docs/native-storytelling.md#qwen-vision-dan-penulis-lokal-terpisah) dapat dipilih untuk Qwen vision dan penulis lain pada GPU terpisah; default server bersama tetap tersedia.
+
 Jika download YouTube gagal di notebook, ikuti [diagnostik download Kaggle](docs/native-storytelling.md#download-youtube-di-kaggle). Notebook repository memasang `yt-dlp[default]` sebelum download dan mencetak versi yang digunakan; downloader mengikuti pilihan client bawaan yt-dlp.
 
 Untuk mengubah video 16:9 menjadi canvas 9:16 dengan dua layer seperti editor video:

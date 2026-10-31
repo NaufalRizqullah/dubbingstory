@@ -85,15 +85,7 @@ HARD RULES:
     what's different about each step rather than repeating "then they did X".
 {action_sync_rules}
 
-Return ONLY a valid JSON array:
-[
-  {{
-    "scene_id": "scene_001",
-    "text": "natural narration",
-    "claims": ["atomic evidence-supported claim"],
-    "importance": 0.8
-  }}
-]
+{output_contract}
 """
 
 
@@ -144,7 +136,7 @@ limited to what the fixed narration plan/evidence supports.
 
 {action_sync_rules}
 
-Return ONLY the corrected JSON array with scene_id, text, claims, importance.
+{output_contract}
 """
 
 
@@ -176,6 +168,36 @@ def _examples(style_config: dict, language: str) -> str:
         values = [values]
     rendered = [str(value).strip() for value in values if str(value).strip()]
     return "\n".join(f"- {value}" for value in rendered[:4]) or "- No fixed example; follow the style rules."
+
+
+def _output_contract(narration_plan: dict) -> str:
+    """Use the same complete field contract for initial and QA generation."""
+    entries = narration_plan.get("segments", []) or []
+    anchored = bool(narration_plan.get("action_sync_enabled")) or any(
+        entry.get("action_sync_enabled") for entry in entries
+    )
+    fields = (
+        "Return ONLY a valid JSON array, with exactly one object per narration beat.\n"
+        "Every object must contain these fields:\n"
+        '- "scene_id": string, copied EXACTLY from the narration beat (not a visual event ID).\n'
+        '- "text": nonempty spoken narration in the requested output language.\n'
+        '- "claims": array of strings stating only evidence-supported facts actually spoken; [] is valid.\n'
+        '- "importance": number between 0 and 1.\n'
+    )
+    if anchored:
+        fields += (
+            '- "action_anchors": array of objects with only "event_id" and "phrase".\n'
+            '  Example shape: [{"event_id": "COPY_A_SELECTED_ID", "phrase": "COPY_EXACT_SPOKEN_WORDS"}].\n'
+            "  These are shape placeholders, not narration or event IDs to copy.\n"
+            "  Return one entry for EACH of this beat's anchor_event_ids, in chronological order;\n"
+            "  return [] only when this beat has no selected IDs. Copy each phrase from your text.\n"
+        )
+    fields += (
+        "Do not return timestamps, evidence, plan fields, markdown or explanatory prose.\n"
+        "Required narration beat IDs, in playback order: "
+        + json.dumps([str(entry.get("scene_id", "")) for entry in entries], ensure_ascii=False)
+    )
+    return fields
 
 
 def _beat_payload(scene_map: dict[str, dict], plan_entry: dict) -> dict:
@@ -287,6 +309,7 @@ def build_v2_narration_prompt(
         scenes_json=json.dumps(payload, ensure_ascii=False, indent=None if anchored else 2),
         hedging_threshold=hedging_threshold,
         action_sync_rules=ACTION_SYNC_RULES if narration_plan.get("action_sync_enabled") else "",
+        output_contract=_output_contract(narration_plan),
     )
 
 
@@ -324,6 +347,7 @@ def build_rewrite_prompt(
         narration_plan_json=plan_json if anchored else plan_json[:26000],
         current_json=json.dumps(current_segments, ensure_ascii=False, indent=2),
         action_sync_rules=ACTION_SYNC_RULES if narration_plan.get("action_sync_enabled") else "",
+        output_contract=_output_contract(narration_plan),
     )
 
 

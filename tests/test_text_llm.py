@@ -255,3 +255,76 @@ def test_text_task_closes_owned_gemini_client(monkeypatch, fails):
     else:
         assert client.generate_json_with_retry("prompt") == {"ok": True}
     assert closed == [True]
+
+
+def test_local_schema_wraps_array_contract_and_preserves_exact_validation_feedback(monkeypatch, tmp_path):
+    from dubbingstory.llm.diagnostics import LLMDiagnostics
+
+    bad = [{"scene_id": "scene_wrong", "text": "Salah."}]
+    accepted = [{"scene_id": "scene_001", "text": "Komponen diperbaiki."}]
+    client, session = setup_local(monkeypatch, [completion(bad), completion(accepted)])
+    trace_path = tmp_path / "attempts.jsonl"
+    client.diagnostics = LLMDiagnostics(enabled=True, path=trace_path)
+
+    def validate(payload):
+        return None if payload == accepted else "unknown scene_id: scene_wrong"
+
+    validate.response_schema = {"type": "array", "items": {"type": "object"}}
+    assert client.generate_json_with_retry("private prompt", response_validator=validate) == accepted
+    first_body = session.calls[1][1]["json"]
+    contract = first_body["response_format"]
+    assert contract["type"] == "json_schema"
+    assert contract["json_schema"]["strict"] is True
+    assert contract["json_schema"]["schema"]["properties"]["result"] == validate.response_schema
+    assert contract["json_schema"]["schema"]["required"] == ["result"]
+    assert "unknown scene_id: scene_wrong" in session.calls[3][1]["json"]["messages"][0]["content"]
+    rows = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert [row["outcome"] for row in rows] == ["rejected", "accepted"]
+    assert rows[0]["validation_error"] == "unknown scene_id: scene_wrong"
+    assert rows[0]["payload"] == bad and rows[1]["payload"] == accepted
+    assert rows[0]["call_id"] == rows[1]["call_id"]
+    assert rows[0]["request_id"] != rows[1]["request_id"]
+    assert rows[0]["http_status"] == 200
+    assert "private prompt" not in trace_path.read_text()
+
+
+def test_local_diagnostics_retain_truncated_model_output_without_accepting_it(monkeypatch, tmp_path):
+    from dubbingstory.llm.diagnostics import LLMDiagnostics
+
+    response = completion({"text": "Unfinished narration"}, finish="length")
+    response.update(id="fixture-request", usage={"prompt_tokens": 100, "completion_tokens": 2048})
+    client, _ = setup_local(monkeypatch, [response] * 2)
+    path = tmp_path / "attempts.jsonl"
+    client.diagnostics = LLMDiagnostics(enabled=True, path=path)
+    with pytest.raises(routing.TextGenerationError, match="incomplete_output"):
+        client.generate_json_with_retry("private evidence")
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert len(rows) == 2
+    assert rows[0]["finish_reason"] == "length"
+    assert rows[0]["category"] == "incomplete_output"
+    assert "Unfinished narration" in rows[0]["raw_response"]
+    assert rows[0]["usage"]["completion_tokens"] == 2048
+    assert rows[0]["provider_request_id"] == "fixture-request"
+
+
+def test_local_envelope_is_not_silently_repaired_with_schema(monkeypatch):
+    bad = {"choices": [{"finish_reason": "stop", "message": {"content": '{"text":"missing wrapper"}'}}]}
+    client, _ = setup_local(monkeypatch, [bad] * 2)
+    validator = lambda payload: None
+    validator.response_schema = {"type": "object", "properties": {"text": {"type": "string"}}}
+    with pytest.raises(routing.TextGenerationError, match="invalid_result_envelope"):
+        client.generate_json_with_retry("prompt", response_validator=validator)
+
+
+def test_local_error_preserves_precise_validator_reason(monkeypatch):
+    client, _ = setup_local(monkeypatch, [completion({"text": "wrong"})] * 2)
+    with pytest.raises(routing.TextGenerationError, match="scene_002 exceeds 8 words"):
+        client.generate_json_with_retry("prompt", response_validator=lambda payload: "scene_002 exceeds 8 words")
+
+
+def test_local_excessive_json_nesting_uses_bounded_validation_retry(monkeypatch):
+    nested = "[" * 10000 + "0" + "]" * 10000
+    bad = {"choices": [{"finish_reason": "stop", "message": {"content": nested}}]}
+    client, _ = setup_local(monkeypatch, [bad] * 2)
+    with pytest.raises(routing.TextGenerationError, match="2 attempt.*JSON nesting limit"):
+        client.generate_json_with_retry("prompt")

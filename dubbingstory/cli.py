@@ -32,6 +32,10 @@ def _setup_project_dir(cfg, project_name: str | None = None) -> str:
     for subdir in ["scenes", "keyframes", "audio", "scripts"]:
         os.makedirs(os.path.join(project_dir, subdir), exist_ok=True)
 
+    # Keep default model diagnostics beside this project's artifacts. An explicit
+    # llm.diagnostics.path remains authoritative; no trace is enabled implicitly.
+    cfg.llm_diagnostics_project_dir = project_dir
+
     return project_dir
 
 

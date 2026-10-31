@@ -12,9 +12,12 @@ import os
 import re
 import time
 import base64
+from uuid import uuid4
 
 from google import genai
 from google.genai import types
+
+from dubbingstory.llm.diagnostics import LLMDiagnostics, response_usage
 
 
 # Total attempts include the original HTTP request. The SDK's own retries are
@@ -49,6 +52,10 @@ class GeminiGenerationError(RuntimeError):
 
 class _ResponseValidationError(ValueError):
     """A semantic response error that should trigger a fresh generation attempt."""
+
+    def __init__(self, message, *, category="semantic_validation"):
+        super().__init__(message)
+        self.category = category
 
 
 def _extract_status_code(exc: Exception):
@@ -162,6 +169,7 @@ class GeminiVideoAnalyzer:
         self.client = genai.Client(api_key=api_key, http_options=_http_options(self.timeout_seconds))
         self.model = model
         self.fallback_model = fallback_model
+        self.diagnostics = LLMDiagnostics(secrets=(api_key,))
 
     def _load_image_as_part(self, image_path: str) -> types.Part:
         """Load an image file as a Gemini API Part."""
@@ -214,6 +222,10 @@ class GeminiVideoAnalyzer:
         base_contents = list(contents)
         attempt_contents = list(base_contents)
         primary_model = model_override or self.model
+        diagnostics = getattr(self, "diagnostics", None) or LLMDiagnostics()
+        call_id = getattr(self, "diagnostics_call_id", None) or uuid4().hex
+        text_only = all(isinstance(item, str) for item in base_contents)
+        payload_schema = getattr(response_validator, "response_schema", None) if text_only else None
 
         for attempt in range(1, max_attempts + 1):
             remaining = deadline - time.monotonic()
@@ -223,14 +235,17 @@ class GeminiVideoAnalyzer:
             # A single-attempt policy must still call the requested primary.
             model = (self.fallback_model if attempt == max_attempts and attempt > 1
                      and self.fallback_model else primary_model)
-            config = types.GenerateContentConfig(
-                response_mime_type="application/json", temperature=temperature,
-                http_options=_http_options(min(timeout_seconds, remaining)),
-                **({"max_output_tokens": int(max_output_tokens)} if max_output_tokens is not None else {}),
-            )
-
+            attempt_started = time.monotonic()
+            response, text, payload, finish_reason = None, None, None, None
+            validation_error = ""
             try:
                 attempts += 1
+                config = types.GenerateContentConfig(
+                    response_mime_type="application/json", temperature=temperature,
+                    http_options=_http_options(min(timeout_seconds, remaining)),
+                    **({"max_output_tokens": int(max_output_tokens)} if max_output_tokens is not None else {}),
+                    **({"response_json_schema": payload_schema} if isinstance(payload_schema, dict) else {}),
+                )
                 print(
                     f"      [Gemini:{task_name}] Attempt {attempt}/{max_attempts} "
                     f"({model})..."
@@ -243,32 +258,74 @@ class GeminiVideoAnalyzer:
                 )
 
                 text = getattr(response, "text", None)
+                candidates = getattr(response, "candidates", None) or []
+                finish = getattr(candidates[0], "finish_reason", None) if candidates else None
+                finish_reason = getattr(finish, "value", finish)
+                if text_only and finish_reason and finish_reason != "STOP":
+                    raise _ResponseValidationError(
+                        "Gemini did not finish a complete response: " + diagnostics.safe_text(finish_reason, 128),
+                        category="incomplete_output",
+                    )
                 if not text or not text.strip():
-                    raise _ResponseValidationError("Gemini returned empty response.")
+                    raise _ResponseValidationError("Gemini returned empty response.", category="empty_output")
 
-                payload = json.loads(text)
+                try:
+                    payload = json.loads(text)
+                except RecursionError:
+                    raise _ResponseValidationError("JSON nesting limit exceeded", category="json_parse_error") from None
                 if not isinstance(payload, (dict, list)):
-                    raise _ResponseValidationError("Response must be a JSON object or array.")
+                    raise _ResponseValidationError("Response must be a JSON object or array.", category="invalid_json_shape")
                 if response_validator is not None:
                     validation_error = response_validator(payload)
                     if validation_error:
                         raise _ResponseValidationError(str(validation_error))
                 if time.monotonic() >= deadline:
                     raise TimeoutError("Generation exceeded its call budget")
+                if text_only:
+                    diagnostics.record(
+                        call_id=call_id, task=task_name, provider="gemini", model=model,
+                        attempt=attempt, outcome="accepted", raw_response=text, payload=payload,
+                        finish_reason=finish_reason,
+                        usage=response_usage(getattr(response, "usage_metadata", None), gemini=True),
+                        provider_request_id=getattr(response, "response_id", None), http_status=200,
+                        latency_seconds=time.monotonic() - attempt_started,
+                    )
                 return payload
 
             except Exception as exc:
-                status_code = _extract_status_code(exc)
+                output_failure = isinstance(exc, (json.JSONDecodeError, _ResponseValidationError))
+                status_code = None if output_failure else _extract_status_code(exc)
                 retryable = _is_retryable(exc)
                 service_failure = retryable and not isinstance(exc, (json.JSONDecodeError, _ResponseValidationError))
                 service_failures = service_failures + 1 if service_failure else 0
                 service_streak_reset = service_streak_reset or not service_failure
                 reason = _safe_failure_reason(exc)
+                category = reason
+                if isinstance(exc, json.JSONDecodeError):
+                    category = "json_parse_error"
+                    validation_error = f"JSON parse error at line {exc.lineno}, column {exc.colno}: {exc.msg}"
+                elif isinstance(exc, _ResponseValidationError):
+                    category, validation_error = exc.category, str(exc)
+                safe_error = diagnostics.safe_text(validation_error, 1200)
+                if text_only:
+                    diagnostics.record(
+                        call_id=call_id, task=task_name, provider="gemini", model=model,
+                        attempt=attempt, outcome="rejected", category=category,
+                        error_type=type(exc).__name__,
+                        validation_error=safe_error, raw_response=text, payload=payload,
+                        finish_reason=finish_reason,
+                        usage=response_usage(getattr(response, "usage_metadata", None), gemini=True),
+                        provider_request_id=getattr(response, "response_id", None),
+                        http_status=200 if response is not None else status_code,
+                        latency_seconds=time.monotonic() - attempt_started,
+                    )
 
                 print(
                     f"      [Gemini:{task_name}] Attempt {attempt} failed | "
                     f"status={status_code} | reason={reason}"
                 )
+                if text_only and safe_error:
+                    print(f"      Validation: {safe_error[:500]}")
 
                 if (not retryable) or attempt == max_attempts:
                     break
@@ -276,13 +333,9 @@ class GeminiVideoAnalyzer:
                 # For semantic validation failures, keep the ORIGINAL request and
                 # add only a correction note. The original prompt contains the
                 # selected language code/name, so retry can never silently lose it.
-                if isinstance(exc, _ResponseValidationError):
-                    retry_note = (
-                        "RETRY VALIDATION FAILURE: The previous JSON response was rejected. "
-                        f"Reason: {exc}. Re-read and obey every original requirement, "
-                        "especially the required output language. Return a fresh complete JSON response."
-                    )
-                    if all(isinstance(item, str) for item in base_contents):
+                if output_failure:
+                    retry_note = diagnostics.correction(safe_error or category, text)
+                    if text_only:
                         attempt_contents = list(base_contents) + [retry_note]
                     else:
                         attempt_contents = list(base_contents)

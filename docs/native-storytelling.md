@@ -225,13 +225,55 @@ Semua tahap CLI dalam satu pipeline harus memakai `state_path` dan `run_id` yang
 
 `budget_seconds` adalah budget penjadwalan retry per tugas, bukan batas waktu seluruh stage/video. Timeout transport membatasi operasi request; koneksi/read SDK dan requests bukan hard wall-clock deadline. Respons yang tiba setelah budget ditolak, dan tidak ada retry tambahan setelah budget habis. Upload/pemrosesan video pada Gemini Files API, startup/download model, TTS dan render berada di luar budget ini. `FIT_RETRIES` membatasi jumlah revisi naskah berdasarkan pengukuran audio; tiap revisi memiliki budget LLM sendiri. Retry SDK dinonaktifkan agar tidak melipatgandakan tiga percobaan aplikasi.
 
-Local fallback hanya untuk **teks**. Vision tetap memakai provider yang dikonfigurasi. Notebook memakai server Qwen yang sama untuk vision dan penulisan, tetap hidup sampai `dub` selesai, termasuk resume langsung dari `narrate`/`dub`, lalu dihentikan sebelum render dan melalui cleanup jika pipeline gagal. Dengan `TEXT_LLM_PROVIDER="local"` serta vision Qwen, Secret Gemini tidak diperlukan. `START_FROM="render"` tidak memuat model atau mengambil key.
+Local fallback hanya untuk **teks**. Vision tetap memakai provider yang dikonfigurasi. Default notebook memakai server Qwen yang sama untuk vision dan penulisan, tetap hidup sampai `dub` selesai, termasuk resume langsung dari `narrate`/`dub`, lalu dihentikan sebelum render dan melalui cleanup jika pipeline gagal. Model teks berbeda kini dapat dipilih secara eksplisit; lihat konfigurasi dua model di bawah. Dengan `TEXT_LLM_PROVIDER="local"` serta vision Qwen, Secret Gemini tidak diperlukan. `START_FROM="render"` tidak memuat model atau mengambil key.
 
 Endpoint lokal harus loopback dan menyediakan `/tokenize` serta `/v1/chat/completions`. Router memeriksa jumlah token prompt yang telah dibangun, batas server, ruang output dan margin sebelum generation. Prompt tidak dipotong lagi oleh router; beberapa pembuat prompt existing masih merangkum/membatasi evidence. Jika konteks tidak cukup, perbesar `MAX_MODEL_LEN` sesuai kemampuan GPU atau kurangi cakupan analisis secara sadar. Output terpotong, bahasa salah, scene/claim tidak valid, dan rewrite yang melebihi target kata ditolak. Setelah kedua provider gagal pada routing baru, pipeline berhenti; tidak membuat narasi template pengganti. Validasi struktur ini tidak menjamin kualitas cerita atau kesetiaan seluruh klaim visual; review hasil tetap diperlukan.
 
 Untuk melanjutkan hasil log pengguna, set nama project existing dan `START_FROM="dub"` jika source, storyboard, naskah dan metadata masih tersedia. Gunakan `OUTPUT_ROOT` yang menunjuk folder artefak tersebut. Jalankan ulang konfigurasi/ingest agar cache diverifikasi; jangan menjalankan analisis dari awal hanya untuk mencoba fitting ulang. Notebook dan **kode repository** harus sama-sama memuat perubahan ini. Mengunggah notebook saja tidak memperbarui remote Git atau checkout Kaggle; preflight akan menolak checkout lama. Pada checkout existing notebook sengaja tidak melakukan pull/reset otomatis.
 
 Landasan API: [Google GenAI 1.28.0](https://github.com/googleapis/python-genai/blob/main/CHANGELOG.md#1280-2025-07-30) menambahkan retry pada level request; [protokol tokenize vLLM 0.27.1](https://github.com/vllm-project/vllm/blob/v0.27.1/vllm/entrypoints/serve/tokenize/protocol.py) menyediakan hitungan token dan batas model; [model card Qwen3-VL-4B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct) mendukung tugas teks di samping vision. Kualitas narasi Indonesia dan performa fallback pada Kaggle tetap harus diukur.
+
+### Diagnosis narasi dan structured output
+
+Log yang diberikan pada 31 Oktober 2026 menunjukkan dua jenis kegagalan. Gemini 2.5 Flash dan 3.1 Flash Lite mengembalikan respons yang ditolak validator, kemudian Qwen mengalami penolakan struktur/bahasa atau envelope `result`. Pada run Gemini 3 Flash Preview, narrate selesai tetapi revisi naskah berdasarkan durasi TTS menerima HTTP 504. Log lama tidak memuat respons mentah atau alasan validasi terperinci, sehingga field penyebab setiap kegagalan belum dapat dipastikan. Ini bukan bukti bahwa semua model free tier tidak mampu menulis narasi.
+
+Pemeriksaan kode menemukan contoh keluaran prompt V2/QA tidak mencantumkan `action_anchors`, sedangkan validator action-sync mewajibkan referensi event dan frasa yang benar-benar diucapkan. Prompt, contoh, dan skema generasi sekarang memakai kontrak yang sama. Narasi dan revisi durasi mengirim JSON Schema ke Gemini serta endpoint lokal; lokal tetap membungkus hasil di `{"result": ...}`. Scene ID, klaim, bahasa, frasa, urutan event, dan durasi tetap diperiksa sesudah decoding. Skema menjamin bentuk yang diminta oleh backend, bukan kebenaran cerita atau keberhasilan layanan.
+
+Retry menerima alasan penolakan spesifik dan cuplikan keluaran sebelumnya yang disanitasi. Jumlah percobaan dan budget tetap terbatas. Revisi durasi mempertahankan frasa aksi wajib, menghapus prosa sekunder lebih dahulu, lalu mengukur ulang TTS; target kata perkiraan tidak boleh menuntut teks lebih pendek daripada frasa wajib. Bila tidak ada kata yang bisa dibuang, proses berhenti dengan penjelasan tanpa memanggil model untuk permintaan yang mustahil. Video dan ucapan tidak dipotong untuk menutupi kegagalan fitting.
+
+Notebook mengaktifkan `LLM_DIAGNOSTICS=True`. Untuk CLI:
+
+```yaml
+llm:
+  diagnostics:
+    enabled: true
+    path: ""                  # default: direktori project / llm_attempts.jsonl
+    max_output_chars: 12000
+```
+
+Setiap percobaan teks menyimpan provider/model, task, nomor percobaan, ID run/call, durasi request, status HTTP, finish reason, pemakaian token bila tersedia, keluaran model yang dibatasi panjangnya, parsed payload, serta alasan validasi. File ditambahkan secara append sehingga percobaan resume dapat dibandingkan lewat ID run. Request gagal sebelum ada jawaban memiliki keluaran kosong. Trace tidak merekam prompt, header autentikasi, atau nilai environment; pola credential dan nilai credential yang telah dimasukkan ke konfigurasi disamarkan. Trace tetap dapat berisi narasi/konten video: periksa sebelum membagikan ZIP. Gagal menulis trace tidak mengganti hasil atau error model. CLI biasa tetap menonaktifkan diagnostics secara default.
+
+Saat pipeline berhenti sebelum render, ambil `llm_attempts.jsonl` dan log tahap melalui panel Files Kaggle. ZIP hasil menyertakan trace setelah render selesai. Gunakan `START_FROM="narrate"` untuk kegagalan pembuatan naskah, atau `"dub"` bila naskah sudah valid dan hanya fitting suara yang gagal. Pertahankan project dan hasil analisis; tidak perlu ingest ulang dari jaringan atau mengulang vision. Perbarui **source repository dan notebook** bersama-sama: notebook tidak melakukan push/pull/reset otomatis.
+
+API yang dipakai mengikuti [structured output vLLM 0.27.1](https://github.com/vllm-project/vllm/blob/v0.27.1/docs/features/structured_outputs.md) dan [Google GenAI SDK](https://googleapis.github.io/python-genai/). Tests menggunakan respons palsu, termasuk penolakan skema, envelope, layanan, redaksi credential, dan batas retry; tests tidak dijalankan di komputer development.
+
+### Qwen vision dan penulis lokal terpisah
+
+Default `LOCAL_TEXT_MODEL_NAME = MODEL_NAME` mempertahankan server Qwen bersama. Untuk eksperimen tanpa Gemini dengan model penulis lain:
+
+```python
+VISION_BACKEND = "qwen"
+TEXT_LLM_PROVIDER = "local"
+LOCAL_TEXT_MODEL_NAME = "google/gemma-3-4b-it"
+HF_TOKEN_REQUIRED = True
+LOCAL_TEXT_MAX_MODEL_LEN = 8192
+```
+
+[Gemma 3 4B Instruct](https://huggingface.co/google/gemma-3-4b-it) merupakan kandidat multilingual dengan dukungan vLLM dan akses model yang memerlukan persetujuan lisensi Hugging Face. Setujui akses menggunakan akun Anda, kemudian sediakan Kaggle Secret `HF_TOKEN`. Notebook hanya meneruskan token lewat environment server. Tidak ada klaim bahwa Gemma pasti lebih baik daripada Qwen untuk narasi Indonesia; bandingkan hasil pada video dan evidence yang sama setelah kontrak dan trace diperbaiki.
+
+Model berbeda memakai dua GPU: Qwen vision pada GPU 0/port `PORT`, penulis pada GPU 1/port `LOCAL_TEXT_PORT` (default 8001), masing-masing TP/DP 1. `analyze` dapat memerlukan keduanya karena juga membangun global story; `narrate`/`dub` hanya memerlukan penulis, dan `render` menutup server. GPU diperiksa sebelum startup. Ini pembagian beban, bukan penggabungan VRAM dua T4 menjadi satu ruang memori. Setiap model beserta konteks dan cache harus muat di GPU masing-masing; keberhasilan startup dan kualitas belum diuji pada Kaggle untuk konfigurasi dua model ini.
+
+Server teks memakai `--dtype half` dan `--language-model-only` dari preset vLLM 0.27.1. Wheel CUDA existing tidak diganti. `LOCAL_TEXT_GPU_MEMORY_UTILIZATION` dan batas konteks teks dapat diatur terpisah; jangan langsung memakai konteks maksimum model. Endpoint model pengganti harus menyediakan `/tokenize`, `/v1/chat/completions`, dan decoding `json_schema`. Mengganti nama model saja tidak memastikan chat template, hardware, akses model, atau kualitasnya cocok.
 
 ## Konflik CUDA saat startup vLLM
 

@@ -43,7 +43,7 @@ class FakeModels:
         outcome = next(self.outcomes)
         if isinstance(outcome, Exception):
             raise outcome
-        return SimpleNamespace(text=outcome)
+        return outcome if isinstance(outcome, SimpleNamespace) else SimpleNamespace(text=outcome)
 
 
 def analyzer_with_fake_sdk(monkeypatch, outcomes, *, durations=(), **options):
@@ -203,3 +203,89 @@ def test_monkeypatched_module_defaults_work_with_existing_client(monkeypatch):
         analyzer.generate_json_with_retry("Return JSON")
     assert error.value.attempts == len(models.calls) == 2
     assert clock.sleeps == [0]
+
+
+def test_gemini_sends_payload_schema_and_traces_specific_rejection(monkeypatch, tmp_path):
+    from dubbingstory.llm.diagnostics import LLMDiagnostics
+
+    bad = [{"scene_id": "wrong", "text": "Komponen diperbaiki."}]
+    good = [{"scene_id": "scene_001", "text": "Komponen diperbaiki."}]
+    analyzer, models, _ = analyzer_with_fake_sdk(monkeypatch, [json.dumps(bad), json.dumps(good)])
+    path = tmp_path / "trace.jsonl"
+    analyzer.diagnostics = LLMDiagnostics(enabled=True, path=path)
+
+    def validate(payload):
+        return None if payload == good else "unknown scene_id: wrong"
+
+    validate.response_schema = {"type": "array", "items": {"type": "object"}}
+    assert analyzer.generate_json_with_retry("private visual evidence", response_validator=validate) == good
+    assert models.calls[0]["config"].response_json_schema == validate.response_schema
+    assert "unknown scene_id: wrong" in models.calls[1]["contents"][1]
+    assert '"scene_id": "wrong"' in models.calls[1]["contents"][1]
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert rows[0]["category"] == "semantic_validation"
+    assert rows[0]["validation_error"] == "unknown scene_id: wrong"
+    assert rows[0]["payload"] == bad
+    assert rows[1]["outcome"] == "accepted" and rows[1]["payload"] == good
+    assert rows[0]["call_id"] == rows[1]["call_id"]
+    assert "private visual evidence" not in path.read_text()
+
+
+def test_gemini_trace_distinguishes_parse_truncation_and_service(monkeypatch, tmp_path):
+    from dubbingstory.llm.diagnostics import LLMDiagnostics
+
+    truncated = SimpleNamespace(text='{"text":"partial', response_id="fixture-response",
+                                candidates=[SimpleNamespace(finish_reason="MAX_TOKENS")],
+                                usage_metadata=SimpleNamespace(prompt_token_count=10, candidates_token_count=100))
+    analyzer, _, _ = analyzer_with_fake_sdk(monkeypatch, ["not JSON", truncated, ServiceError(504, "private upstream body")])
+    path = tmp_path / "trace.jsonl"
+    analyzer.diagnostics = LLMDiagnostics(enabled=True, path=path)
+    with pytest.raises(gemini.GeminiGenerationError) as error:
+        analyzer.generate_json_with_retry("Return JSON")
+    assert error.value.service_failures == 1
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert [row["category"] for row in rows] == ["json_parse_error", "incomplete_output", "service_unavailable"]
+    assert rows[1]["finish_reason"] == "MAX_TOKENS"
+    assert rows[1]["raw_response"] == truncated.text
+    assert rows[1]["usage"]["completion_tokens"] == 100
+    assert rows[1]["provider_request_id"] == "fixture-response"
+    assert rows[2]["http_status"] == 504 and rows[2]["raw_response"] is None
+    assert rows[2]["error_type"] == "ServiceError"
+    assert "private upstream body" not in path.read_text()
+
+
+def test_gemini_visual_calls_do_not_record_images_or_receive_text_schema(monkeypatch, tmp_path):
+    from dubbingstory.llm.diagnostics import LLMDiagnostics
+
+    analyzer, models, _ = analyzer_with_fake_sdk(monkeypatch, [SimpleNamespace(
+        text='{"ok":true}', candidates=[SimpleNamespace(finish_reason="MAX_TOKENS")])])
+    path = tmp_path / "trace.jsonl"
+    analyzer.diagnostics = LLMDiagnostics(enabled=True, path=path)
+    validator = lambda payload: None
+    validator.response_schema = {"type": "object"}
+    analyzer._generate_with_retry([SimpleNamespace(parts="private image")], response_validator=validator)
+    assert models.calls[0]["config"].response_json_schema is None
+    assert not path.exists()
+
+
+def test_validator_word_count_cannot_be_mistaken_for_http_status(monkeypatch, tmp_path):
+    from dubbingstory.llm.diagnostics import LLMDiagnostics
+
+    analyzer, _, _ = analyzer_with_fake_sdk(monkeypatch, ['{"text":"caption"}'] * 3)
+    path = tmp_path / "trace.jsonl"
+    analyzer.diagnostics = LLMDiagnostics(enabled=True, path=path)
+    with pytest.raises(gemini.GeminiGenerationError) as error:
+        analyzer.generate_json_with_retry("Return JSON", response_validator=lambda payload: "504 words exceeds target")
+    assert error.value.status_code is None and error.value.service_failure is False
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert all(row["http_status"] == 200 and row["category"] == "semantic_validation" for row in rows)
+
+
+def test_gemini_excessive_json_nesting_is_validation_not_service_failure(monkeypatch):
+    nested = "[" * 10000 + "0" + "]" * 10000
+    analyzer, models, _ = analyzer_with_fake_sdk(monkeypatch, [nested] * 3)
+    with pytest.raises(gemini.GeminiGenerationError) as error:
+        analyzer.generate_json_with_retry("Return JSON")
+    assert error.value.attempts == len(models.calls) == 3
+    assert error.value.reason == "response_validation"
+    assert error.value.service_failure is False

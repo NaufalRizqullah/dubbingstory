@@ -11,6 +11,20 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.10.3]
+
+### Fixed
+- Align full-narration and QA output examples with required action anchors and beat IDs. Supply narration/duration JSON schemas to Gemini and local structured decoding, retaining semantic, language and evidence validation and the local `result` envelope.
+- Include specific validation feedback and bounded previous output on repair attempts. Preserve mandatory spoken phrases when deriving duration-rewrite word budgets; remeasure TTS rather than clipping or speeding video/audio.
+
+### Added
+- Opt-in per-attempt `llm_attempts.jsonl` traces for text generation: bounded redacted response/payload, validation reasons, finish reasons, usage, latency and correlation IDs. Defaults remain off for CLI and on in the social notebook; prompts and authentication headers are not recorded.
+- Optional independent local text model in the social notebook, with two-GPU isolation, per-stage server lifecycle, separate context/port settings, and gated-model access through Kaggle Secrets. Shared Qwen remains the default; document Gemma 3 4B as an unbenchmarked alternative.
+
+### Validation
+- User logs distinguish HTTP 504 during measured-duration rewrite from repeated model-output validation failures. Old logs cannot establish the exact rejected fields. Code inspection identifies an action-anchor prompt/validator mismatch.
+- Add mocked contract, diagnostic, retry, schema and notebook lifecycle regressions. Preserve user audio settings and the working CUDA/vLLM preset. Static source/notebook checks only on the development computer; tests, provider calls and dual-model GPU validation remain for Kaggle.
+
 ## [0.10.2]
 
 ### Fixed

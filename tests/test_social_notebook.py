@@ -28,6 +28,8 @@ def source(cell_id):
 def literal_setting(name):
     for node in ast.parse(source("settings")).body:
         if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == name for target in node.targets):
+            if isinstance(node.value, ast.Name):
+                return literal_setting(node.value.id)
             return ast.literal_eval(node.value)
     raise AssertionError(f"Missing notebook setting: {name}")
 
@@ -43,7 +45,7 @@ def helpers():
 
 
 def runtime_policy():
-    allowed = {"needs_local_server", "needs_gemini_secret"}
+    allowed = {"needs_local_server", "needs_gemini_secret", "local_server_roles"}
     definitions = [node for node in ast.parse(source("settings")).body
                    if isinstance(node, ast.FunctionDef) and node.name in allowed]
     namespace = {}
@@ -61,7 +63,8 @@ def setup_helpers(names, **namespace):
 
 
 def pipeline_harness(tmp_path, *, start_from="segment", vision="qwen", provider="gemini",
-                     fallback=True, fail_stage=None):
+                     fallback=True, fail_stage=None, separate=False, fail_start=None,
+                     fail_stop=None):
     """Execute only orchestration with fake CLI/server functions, never media or models."""
     for relative in ("source.mp4", "segment_manifest.json", "storyboard.json",
                      "scripts/script_id.json", "audio/audio_id.manifest.json"):
@@ -82,6 +85,7 @@ def pipeline_harness(tmp_path, *, start_from="segment", vision="qwen", provider=
     config = {"llm": {"fallback": {"run_id": "old", "state_path": str(state_path)}}}
     runs = iter(["run-one", "run-two"])
     server = object()
+    split_servers = {role: object() for role in ("vision", "text")}
 
     def start_server():
         events.append("start-server")
@@ -89,8 +93,23 @@ def pipeline_harness(tmp_path, *, start_from="segment", vision="qwen", provider=
 
     def stop_server(process):
         if process is not None:
-            assert process is server
-            events.append("stop-server")
+            if process is server:
+                events.append("stop-server")
+            else:
+                role = next(role for role, item in split_servers.items() if item is process)
+                events.append(f"stop-{role}")
+                if role == fail_stop:
+                    raise OSError("simulated cleanup failure")
+
+    def start_local_server(role):
+        events.append(f"start-{role}")
+        if role == fail_start:
+            raise RuntimeError("simulated startup failure")
+        return split_servers[role], SimpleNamespace(close=lambda: events.append(f"close-{role}-log"))
+
+    def prepare_dual_gpu():
+        events.append("gpu-preflight")
+        return ["gpu-0", "gpu-1"], {"vision": "0", "text": "1"}
 
     def run_cli(arguments, stage):
         events.append((stage, config["llm"]["fallback"]["run_id"]))
@@ -101,9 +120,11 @@ def pipeline_harness(tmp_path, *, start_from="segment", vision="qwen", provider=
         **helpers(), **runtime_policy(), "ACTIVE_PROJECT": "sample", "START_FROM": start_from,
         "PROJECT_DIR": tmp_path, "VISION_BACKEND": vision, "TEXT_LLM_PROVIDER": provider,
         "LOCAL_FALLBACK_ENABLED": fallback, "CONFIG": config,
+        "SEPARATE_LOCAL_TEXT": separate, "prepare_dual_gpu": prepare_dual_gpu,
         "uuid": SimpleNamespace(uuid4=lambda: next(runs)), "run_cli": run_cli,
         "save_config": lambda: saved_runs.append(config["llm"]["fallback"]["run_id"]),
         "start_qwen_server": start_server, "stop_server": stop_server,
+        "start_local_server": start_local_server,
         "REPO_DIR": ROOT, "sys": sys, "json": json,
     }
     statements = ast.parse(source("pipeline")).body
@@ -206,9 +227,11 @@ def test_provider_dependencies_include_alignment_when_captions_are_off(engine, a
 def test_new_provider_credentials_are_redacted_in_child_logs():
     definitions = [node for node in ast.parse(source("helpers")).body
                    if isinstance(node, ast.FunctionDef) and node.name == "safe_log"]
-    namespace = {"re": re, "CHILD_ENV": {"AZURE_SPEECH_KEY": "fake-azure-secret", "ELEVENLABS_API_KEY": "fake-eleven-secret"}}
+    namespace = {"re": re, "CHILD_ENV": {"AZURE_SPEECH_KEY": "fake-azure-secret", "ELEVENLABS_API_KEY": "fake-eleven-secret"},
+                 "MODEL_ACCESS_ENV": {"HF_TOKEN": "fake-hf-secret"}}
     exec(compile(ast.Module(body=definitions, type_ignores=[]), str(NOTEBOOK), "exec"), namespace)
     assert namespace["safe_log"]("fake-azure-secret fake-eleven-secret") == "[redacted] [redacted]"
+    assert namespace["safe_log"]("fake-hf-secret") == "[redacted]"
 
 
 def test_setup_requires_canvas_fix_before_resuming_existing_scripts():
@@ -398,23 +421,86 @@ def test_local_only_and_render_do_not_require_gemini_secret(start, vision, provi
     assert "if not needs_gemini_secret(" in source("secret")
 
 
-def test_text_configuration_matches_router_contract(tmp_path):
+@pytest.mark.parametrize("separate", [False, True])
+def test_text_configuration_matches_router_contract(tmp_path, separate):
     config_assignment = next(node for node in ast.parse(source("helpers")).body
                              if isinstance(node, ast.Assign) and any(
                                  isinstance(target, ast.Name) and target.id == "CONFIG" for target in node.targets))
     llm_node = next(value for key, value in zip(config_assignment.value.keys, config_assignment.value.values)
                     if isinstance(key, ast.Constant) and key.value == "llm")
-    names = {node.id for node in ast.walk(llm_node) if isinstance(node, ast.Name)} - {"str", "PROJECT_DIR", "BASE_URL"}
+    computed_names = {"str", "PROJECT_DIR", "LOCAL_TEXT_BASE_URL", "LOCAL_TEXT_CONTEXT_WINDOW"}
+    names = {node.id for node in ast.walk(llm_node) if isinstance(node, ast.Name)} - computed_names
     values = {name: literal_setting(name) for name in names}
-    values.update(PROJECT_DIR=tmp_path, BASE_URL="http://127.0.0.1:8000/v1")
+    model = "google/gemma-3-4b-it" if separate else literal_setting("MODEL_NAME")
+    url = "http://127.0.0.1:8001/v1" if separate else "http://127.0.0.1:8000/v1"
+    context_window = 8192 if separate else 10240
+    values.update(PROJECT_DIR=tmp_path, LOCAL_TEXT_BASE_URL=url, LOCAL_TEXT_MODEL_NAME=model,
+                  LOCAL_TEXT_CONTEXT_WINDOW=context_window)
     config = eval(compile(ast.Expression(llm_node), str(NOTEBOOK), "eval"), values)
     assert config["provider"] == "gemini"
     assert config["gemini"] == {"max_attempts": 3, "timeout_seconds": 30, "budget_seconds": 90,
                                 "initial_wait_seconds": 5, "wait_increment_seconds": 5}
     assert config["fallback"] == {"enabled": True, "state_path": str(tmp_path / "llm_runtime_state.json"), "run_id": ""}
-    assert config["local"] == {"base_url": "http://127.0.0.1:8000/v1", "model": "Qwen/Qwen3-VL-4B-Instruct",
+    assert config["local"] == {"base_url": url, "model": model,
                                "max_attempts": 2, "timeout_seconds": 60, "budget_seconds": 120,
-                               "max_tokens": 2048, "context_window": 10240}
+                               "max_tokens": 2048, "context_window": context_window}
+    assert config["diagnostics"] == {"enabled": True, "path": str(tmp_path / "llm_attempts.jsonl"),
+                                      "max_output_chars": 12000}
+
+
+def test_separate_text_model_is_opt_in_with_existing_runtime_defaults():
+    assert literal_setting("LOCAL_TEXT_MODEL_NAME") == literal_setting("MODEL_NAME")
+    assert literal_setting("HF_TOKEN_REQUIRED") is False
+    assert literal_setting("LOCAL_TEXT_PORT") != literal_setting("PORT")
+    assert literal_setting("LOCAL_TEXT_GPU_MEMORY_UTILIZATION") == .85
+    assert literal_setting("VLLM_VERSION") == "0.27.1"
+
+
+@pytest.mark.parametrize("stage,vision,provider,fallback,expected", [
+    ("analyze", "qwen", "local", False, {"vision", "text"}),
+    ("analyze", "qwen", "gemini", True, {"vision", "text"}),
+    ("analyze", "qwen", "gemini", False, {"vision"}),
+    ("analyze", "gemini", "local", False, {"text"}),
+    ("narrate", "qwen", "local", False, {"text"}),
+    ("dub", "qwen", "gemini", True, {"text"}),
+    ("render", "qwen", "local", True, set()),
+    ("segment", "qwen", "local", True, set()),
+])
+def test_separate_models_include_text_for_analyze_story(stage, vision, provider, fallback, expected):
+    assert runtime_policy()["local_server_roles"](stage, vision, provider, fallback, True) == expected
+
+
+def test_dual_model_lifecycle_releases_vision_after_analyze(tmp_path):
+    run, events, _, _ = pipeline_harness(tmp_path, separate=True)
+    run()
+    assert events == [("segment", "run-one"), "gpu-preflight", "start-vision", "start-text",
+                      ("analyze", "run-one"), "stop-vision", "close-vision-log",
+                      ("narrate", "run-one"), ("dub", "run-one"), "stop-text", "close-text-log",
+                      ("render", "run-one")]
+
+
+@pytest.mark.parametrize("start", ["narrate", "dub"])
+def test_dual_model_resume_loads_only_text(tmp_path, start):
+    run, events, _, _ = pipeline_harness(tmp_path, separate=True, start_from=start)
+    run()
+    assert events[:3] == ["gpu-preflight", "start-text", (start, "run-one")]
+    assert "start-vision" not in events
+    assert events[-3:] == ["stop-text", "close-text-log", ("render", "run-one")]
+
+
+def test_dual_model_startup_failure_cleans_up_already_running_vision(tmp_path):
+    run, events, _, _ = pipeline_harness(tmp_path, separate=True, fail_start="text")
+    with pytest.raises(RuntimeError, match="simulated startup failure"):
+        run()
+    assert events[-3:] == ["start-text", "stop-vision", "close-vision-log"]
+    assert ("analyze", "run-one") not in events
+
+
+def test_dual_model_cli_failure_stops_both_servers_even_if_one_cleanup_fails(tmp_path):
+    run, events, _, _ = pipeline_harness(tmp_path, separate=True, fail_stage="analyze", fail_stop="vision")
+    with pytest.raises(RuntimeError, match="simulated CLI failure"):
+        run()
+    assert events[-4:] == ["stop-vision", "close-vision-log", "stop-text", "close-text-log"]
 
 
 def test_pipeline_keeps_model_until_dub_and_shares_one_new_run_id(tmp_path):
@@ -503,7 +589,8 @@ def test_invalid_segmentation_stops_before_model_startup(tmp_path, start_from, f
     assert events == ([("segment", "run-one")] if start_from == "segment" else [])
 
 
-def qwen_startup_harness(tmp_path, *, ready_after=65, timeout=900, exited=False):
+def qwen_startup_harness(tmp_path, *, ready_after=65, timeout=900, exited=False,
+                         role="shared", hf_required=False, stop_failure=False):
     """Only fake time/process/HTTP; no server, network, GPU or model is started."""
     clock = SimpleNamespace(now=0.0)
 
@@ -532,22 +619,35 @@ def qwen_startup_harness(tmp_path, *, ready_after=65, timeout=900, exited=False)
         launches.append((command, kwargs))
         return process
 
+    def stop_server(item):
+        stopped.append(item)
+        if stop_failure:
+            raise OSError("simulated cleanup failure with sensitive detail")
+
     namespace = {
         "socket": SimpleNamespace(socket=Probe), "PORT": 8000,
-        "qwen_command": lambda: ["mock-server"],
+        "qwen_command": lambda role="shared": ["mock-server"],
         "CHILD_ENV": {"GOOGLE_API_KEY": "fake-google-secret", "ELEVENLABS_API_KEY": "fake-eleven-secret"},
+        "MODEL_ACCESS_ENV": {"HF_TOKEN": "fake-hf-token"}, "HF_TOKEN_REQUIRED": hf_required,
+        "LOCAL_GPU_DEVICES": {"vision": "0", "text": "1"},
+        "local_server_profile": lambda selected: {
+            "port": 8001 if selected == "text" else 8000,
+            "url": "http://127.0.0.1:8001/v1" if selected == "text" else "http://127.0.0.1:8000/v1",
+            "model": "fixture-model", "title": "Text LLM" if selected == "text" else "Qwen",
+            "log": "vllm_text_server.log" if selected == "text" else "vllm_server.log"},
         "PROJECT_DIR": tmp_path, "REPO_DIR": ROOT, "json": json,
         "subprocess": SimpleNamespace(Popen=popen, STDOUT=-2),
         "time": SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep),
         "SERVER_TIMEOUT_SECONDS": timeout, "MODEL_NAME": "fixture-model",
         "BASE_URL": "http://127.0.0.1:8000/v1",
         "urllib": SimpleNamespace(request=SimpleNamespace(urlopen=urlopen)),
-        "stop_server": lambda item: stopped.append(item),
+        "stop_server": stop_server,
     }
     definitions = [node for node in ast.parse(source("pipeline")).body if isinstance(node, ast.FunctionDef)
-                   and node.name == "start_qwen_server"]
+                   and node.name in {"start_qwen_server", "start_local_server"}]
     exec(compile(ast.Module(body=definitions, type_ignores=[]), str(NOTEBOOK), "exec"), namespace)
-    return namespace["start_qwen_server"], launches, stopped, process
+    start = namespace["start_qwen_server"] if role == "shared" else lambda: namespace["start_local_server"](role)
+    return start, launches, stopped, process
 
 
 def test_qwen_startup_reports_wait_and_readiness_without_exposing_credentials(tmp_path, capsys):
@@ -576,6 +676,99 @@ def test_qwen_failed_startup_still_stops_process_and_closes_log(tmp_path, capsys
     assert stopped == [process]
     assert launches[0][1]["stdout"].closed
     assert "Qwen siap setelah" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("exited", [False, True])
+def test_startup_error_survives_stop_failure_and_log_still_closes(tmp_path, capsys, exited):
+    start, launches, stopped, process = qwen_startup_harness(
+        tmp_path, ready_after=100, timeout=35, exited=exited, stop_failure=True)
+    with pytest.raises(RuntimeError, match="berhenti sebelum siap" if exited else "timeout"):
+        start()
+    assert stopped == [process]
+    assert launches[0][1]["stdout"].closed
+    output = capsys.readouterr().out
+    assert "Cleanup startup server shared perlu diperiksa (OSError)." in output
+    assert "sensitive detail" not in output
+
+
+@pytest.mark.parametrize("role,gpu", [("vision", "0"), ("text", "1")])
+def test_separate_servers_receive_disjoint_gpu_and_only_optional_model_token(tmp_path, capsys, role, gpu):
+    start, launches, _, _ = qwen_startup_harness(tmp_path, ready_after=0, role=role, hf_required=True)
+    _, log = start()
+    try:
+        assert launches[0][1]["env"] == {"CUDA_VISIBLE_DEVICES": gpu, "HF_TOKEN": "fake-hf-token"}
+        assert "fake-hf-token" not in repr(launches[0][0])
+        assert "fake-hf-token" not in capsys.readouterr().out
+        assert log.name.endswith("vllm_text_server.log" if role == "text" else "vllm_server.log")
+    finally:
+        log.close()
+
+
+def dual_command_harness(*, gpu_count=2, visible=""):
+    gpus = [{"name": "mock T4", "gb": 14.6, "cc": [7, 5]} for _ in range(gpu_count)]
+    namespace = {"probe_local_gpus": lambda: gpus, "LOCAL_GPU_INVENTORY": gpus,
+                 "CHILD_ENV": {"CUDA_VISIBLE_DEVICES": visible}, "PORT": 8000, "LOCAL_TEXT_PORT": 8001,
+                 "BASE_URL": "http://127.0.0.1:8000/v1", "LOCAL_TEXT_BASE_URL": "http://127.0.0.1:8001/v1",
+                 "MODEL_NAME": "Qwen/Qwen3-VL-4B-Instruct", "LOCAL_TEXT_MODEL_NAME": "google/gemma-3-4b-it",
+                 "MAX_MODEL_LEN": 10240, "LOCAL_TEXT_MAX_MODEL_LEN": 8192,
+                 "GPU_MEMORY_UTILIZATION": .85, "LOCAL_TEXT_GPU_MEMORY_UTILIZATION": .80,
+                 "VLLM_PARALLEL_MODE": "auto", "VISION_CONCURRENCY_OVERRIDE": None,
+                 "CONFIG": {"vision": {"concurrency": 1}}, "save_config": lambda: None,
+                 "RUNTIME_PYTHON": "mock-python", "OUTPUT_ROOT": "/mock-output", "IMAGE_MODE": "file", "re": re}
+    definitions = [node for node in ast.parse(source("pipeline")).body if isinstance(node, ast.FunctionDef)
+                   and node.name in {"prepare_dual_gpu", "qwen_command", "local_server_profile"}]
+    exec(compile(ast.Module(body=definitions, type_ignores=[]), str(NOTEBOOK), "exec"), namespace)
+    return namespace
+
+
+def test_dual_gpu_preflight_rejects_single_gpu_before_launch():
+    namespace = dual_command_harness(gpu_count=1)
+    with pytest.raises(RuntimeError, match="memerlukan 2 GPU"):
+        namespace["prepare_dual_gpu"]()
+
+
+def test_dual_gpu_assignment_respects_runtime_visible_device_mask():
+    namespace = dual_command_harness(visible="GPU-first,GPU-second")
+    _, assignment = namespace["prepare_dual_gpu"]()
+    assert assignment == {"vision": "GPU-first", "text": "GPU-second"}
+
+
+def test_dual_servers_use_single_gpu_command_and_separate_context():
+    namespace = dual_command_harness()
+    vision = namespace["qwen_command"]("vision")
+    text = namespace["qwen_command"]("text")
+    for command in (vision, text):
+        assert command[command.index("--tensor-parallel-size") + 1] == "1"
+        assert "--data-parallel-size" not in command
+        assert command[command.index("--dtype") + 1] == "half"
+    assert "--language-model-only" in text and "--allowed-local-media-path" not in text
+    assert "--language-model-only" not in vision and "--allowed-local-media-path" in vision
+    assert text[text.index("--model") + 1] == "google/gemma-3-4b-it"
+    assert text[text.index("--max-model-len") + 1] == "8192"
+    assert text[text.index("--gpu-memory-utilization") + 1] == "0.8"
+    assert namespace["CONFIG"]["vision"]["concurrency"] == 1
+    shared = namespace["qwen_command"]("shared")
+    assert shared[shared.index("--data-parallel-size") + 1] == "2"
+
+
+def test_gated_model_token_is_scoped_to_server_environment():
+    # Static contract: token is stored only in server-specific environment, never CLI config.
+    secret = source("secret")
+    assert 'MODEL_ACCESS_ENV["HF_TOKEN"] = hf_token' in secret
+    assert 'CHILD_ENV["HF_TOKEN"] =' not in secret
+    assert 'server_env.update(MODEL_ACCESS_ENV)' in source("pipeline")
+    assert 'MODEL_ACCESS_ENV' not in source("helpers").split('def run_cli(', 1)[1]
+
+
+def test_setup_rejects_checkout_without_structured_text_diagnostics():
+    assignment = next(node for node in ast.parse(source("setup")).body if isinstance(node, ast.Assign)
+                      and any(isinstance(target, ast.Name) and target.id == "required_markers"
+                              for target in node.targets))
+    markers = ast.literal_eval(assignment.value)
+    assert "class LLMDiagnostics" in markers["dubbingstory/llm/diagnostics.py"]
+    assert "json_schema" in markers["dubbingstory/llm/text_client.py"]
+    assert "response_json_schema" in markers["dubbingstory/vision/gemini_analyzer.py"]
+    assert "_narration_response_schema" in markers["dubbingstory/story/script_writer.py"]
 
 
 def test_standalone_stages_filter_cached_other_languages():
@@ -687,6 +880,15 @@ def test_output_bundle_preserves_visual_evidence_and_action_misses(tmp_path, mon
     with zipfile.ZipFile(bundle) as archive:
         for relative, payload in evidence.items():
             assert json.loads(archive.read(relative)) == payload
+
+
+def test_output_bundle_includes_optional_llm_diagnostics(tmp_path, monkeypatch):
+    run, project, _, bundle, _, _ = outputs_harness(tmp_path, monkeypatch)
+    diagnostic = '{"provider":"local","reason":"scene_coverage_mismatch"}\n'
+    (project / "llm_attempts.jsonl").write_text(diagnostic, encoding="utf-8")
+    run()
+    with zipfile.ZipFile(bundle) as archive:
+        assert archive.read("llm_attempts.jsonl").decode("utf-8") == diagnostic
 
 
 @pytest.mark.parametrize("failure", ["incomplete", "missing", "unreported"])
