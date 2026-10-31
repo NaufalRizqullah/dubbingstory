@@ -274,6 +274,27 @@ python -m pytest -q tests/test_scene_detection.py tests/test_segment_cli.py \
 
 Setelah suite lulus, uji video tanpa cut dan video dengan cut, lalu periksa analisis temporal serta kelengkapan durasi output. Jika decoding ditolak, simpan log segmentasi baru untuk membedakan hitungan frame, metadata, dan interval yang tidak cocok.
 
+## Analisis temporal gagal setelah storyboard
+
+Log pengguna berikutnya memastikan perbaikan segmentasi berhasil: 721 dari estimasi 721 frame terbaca, satu shot tanpa cut menjadi tiga analysis window, dan setiap window memiliki empat keyframe. Qwen menyelesaikan analisis ketiga scene dan membangun storyboard. Error muncul setelah itu di persiapan temporal, sebelum banner `Temporal vision`; ini bukan kegagalan startup model. Warning dependency lain pada setup tidak membuktikan penyebab ValueError tersebut, karena import preflight dan permintaan vision nyata sudah berhasil.
+
+Wrapper lama menyembunyikan pesan asli dan hanya menyimpan `failure_type`. Karena itu frame yang gagal tidak dapat dipastikan dari log lama saja. Ada celah konkret pada ekstraksi: seek dalam milidetik dekat akhir video atau batas scene dapat dibulatkan decoder ke frame berikutnya, yang mungkin sudah di luar scene atau melewati frame terakhir. Revisi ini mencoba seek sedikit lebih awal dan membaca maju secara terbatas untuk menemukan frame yang benar-benar terbaca, masih dalam scene, dekat waktu yang diminta, dan tidak mundur terhadap sampel sebelumnya. Waktu permintaan dan timestamp decoder disimpan terpisah. Clock tidak valid dan kegagalan yang tidak dapat dipulihkan tetap menghentikan analisis.
+
+Versi ekstraksi ikut dalam identitas cache; frame lama tidak dipakai untuk melewati perubahan ini. Log sekarang mencatat persiapan frame dan, bila gagal, `failure_stage`, `failure_code`, serta ID/waktu frame bila tersedia. Detail tersebut juga disimpan di `visual_timeline.json`, tanpa menyalin pesan provider mentah yang mungkin memuat data sensitif.
+
+Notebook repository memakai konfigurasi dari lampiran pengguna: interval satu detik, `ORIGINAL_VOLUME=0.20`, dan `AUDIO_STRATEGY` yang benar-benar diteruskan ke renderer. Pengaturan input, konfirmasi hak, model aktif dan komentar tambahan juga dipertahankan. Komentar daftar model merupakan catatan pengguna, bukan hasil verifikasi ketersediaan model oleh proyek. `START_FROM` tidak diubah otomatis.
+
+Untuk sesi yang sudah memiliki segmentasi valid, perbarui **kode repository dan notebook**, gunakan proyek/output yang sama, lalu pilih `START_FROM="analyze"`. Tidak perlu mengulang unduhan atau segmentasi untuk error ini; cache analisis scene dapat digunakan kembali bila identitasnya masih cocok. Untuk sesi fresh tanpa artefak, tetap mulai dari `segment`. Jika error berulang, simpan `notebook_analyze.log` dan `visual_timeline.json` baru agar tahap serta frame yang gagal terlihat.
+
+Tests berikut disiapkan untuk dijalankan di Kaggle, bukan pada komputer development:
+
+```bash
+python -m pytest -q tests/test_temporal_frame_sampling.py tests/test_temporal_analysis.py \
+  tests/test_social_notebook.py
+```
+
+Uji media yang dilaporkan pada interval satu detik. Pastikan seluruh sampel selesai dianalisis, termasuk sampel dekat akhir video, dan lanjutkan pemeriksaan narasi/TTS/render. Keberhasilan pemeriksaan sintaks lokal belum membuktikan hasil audiovisual revisi ini.
+
 ## Pengujian di Kaggle
 
 ### Pemulihan error canvas audio pada tahap dub

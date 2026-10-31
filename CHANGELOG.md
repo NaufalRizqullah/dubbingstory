@@ -11,6 +11,17 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.10.2]
+
+### Fixed
+- Recover dense temporal samples when timestamp seeking rounds into the next scene or beyond the last video frame. Use a bounded earlier seek and measured decoder timestamps, preserving every planned sample ID, scene membership, chronology and the existing tolerance; do not fabricate timestamps or silently omit frames.
+- Version temporal extraction caches so earlier frame manifests cannot bypass the new boundary handling. Report preparation progress and structured failure stage/code/frame timings without publishing raw provider exceptions.
+- Preserve the user's attached social notebook settings and runtime audio mapping, including the one-second interval, original volume 0.20, selectable `AUDIO_STRATEGY`, source input, rights setting and model-choice comments. Clear saved execution output in the delivered notebook; require the updated temporal implementation in setup.
+
+### Validation
+- New Kaggle logs confirm 721/721 frames decoded, three analysis windows, 12 representative keyframes, and successful Qwen storyboard generation. Failure occurs before the dense-vision batch banner; the old wrapper hides the original ValueError, so the exact failing frame is not established from these logs.
+- Add mocked EOF/scene-boundary extraction, cache-version invalidation, safe diagnostics and notebook audio-setting regressions. Only static syntax, notebook-source comparisons and diff checks run locally; tests, model inference and media validation remain for Kaggle.
+
 ## [0.10.1]
 
 ### Fixed

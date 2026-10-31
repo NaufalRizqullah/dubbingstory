@@ -109,6 +109,8 @@ Notebook Kaggle khusus TikTok/RedNote tersedia di [mereska-dubbingstory-tiktok-r
 
 Jika log lama menunjukkan `Scenes: 0` / `Keyframes: 0`, perbarui kode dan notebook lalu ulangi dari `START_FROM="segment"`. Video yang terbaca tanpa cut tetap menjadi rentang analisis; manifest kosong dihentikan sebelum model dimuat. Startup Qwen kini menampilkan progres tunggu. Lihat [pemulihan segmentasi kosong](docs/native-storytelling.md#segmentasi-kosong-dan-startup-qwen).
 
+Jika storyboard berhasil tetapi persiapan temporal gagal, lihat [pemulihan ekstraksi frame temporal](docs/native-storytelling.md#analisis-temporal-gagal-setelah-storyboard). Revisi notebook mempertahankan konfigurasi pengguna, termasuk `FRAME_INTERVAL_SECONDS=1`, `ORIGINAL_VOLUME=0.20`, dan pilihan `AUDIO_STRATEGY`; proyek dengan segmentasi valid dapat dilanjutkan dari `analyze` setelah kode diperbarui.
+
 Jika download YouTube gagal di notebook, ikuti [diagnostik download Kaggle](docs/native-storytelling.md#download-youtube-di-kaggle). Notebook repository memasang `yt-dlp[default]` sebelum download dan mencetak versi yang digunakan; downloader mengikuti pilihan client bawaan yt-dlp.
 
 Untuk mengubah video 16:9 menjadi canvas 9:16 dengan dua layer seperti editor video:

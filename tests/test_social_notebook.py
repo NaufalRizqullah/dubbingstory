@@ -141,18 +141,39 @@ def test_all_code_cells_parse_as_python_without_execution():
             ast.parse("".join(cell["source"]), filename=f"{NOTEBOOK.name}:{cell['id']}")
 
 
-def test_native_social_defaults_and_explicit_rights_gate():
-    assert literal_setting("VIDEO_INPUT") == "https://www.rednote.com/discovery/item/6ad206ee000000001400240a"
+def test_personalized_native_social_configuration():
+    assert "xhslink.com/" in literal_setting("VIDEO_INPUT")
     assert literal_setting("ENABLE_CANVAS") is False
-    assert literal_setting("I_HAVE_RIGHTS") is False
+    assert literal_setting("I_HAVE_RIGHTS") is True
     assert literal_setting("DOWNLOAD_QUALITY") == "max"
     assert literal_setting("NARRATION_SOURCE") == "visual"
     assert literal_setting("SUBTITLE_STYLE") == "karaoke"
     assert literal_setting("WORD_ALIGNMENT") == "auto"
     assert literal_setting("DENSE_VISUAL_ANALYSIS") is True
-    assert literal_setting("FRAME_INTERVAL_SECONDS") == 0.5
+    assert literal_setting("FRAME_INTERVAL_SECONDS") == 1
+    assert literal_setting("AUDIO_STRATEGY") == "dynamic_duck"
+    assert literal_setting("ORIGINAL_VOLUME") == .20
     assert literal_setting("ACTION_SYNC") is True
     assert literal_setting("NARRATION_FIT") == "rewrite"
+
+
+@pytest.mark.parametrize("strategy", ["dynamic_duck", "duck", "replace", "mute_original"])
+def test_selected_audio_strategy_reaches_render_configuration(strategy):
+    # Evaluate only the render mapping with literal settings and a pure helper;
+    # do not execute file/network/setup code from the notebook.
+    assignment = next(node for node in ast.parse(source("helpers")).body
+                      if isinstance(node, ast.Assign) and any(
+                          isinstance(target, ast.Name) and target.id == "CONFIG" for target in node.targets))
+    render = next(value for key, value in zip(assignment.value.keys, assignment.value.values)
+                  if isinstance(key, ast.Constant) and key.value == "render")
+    namespace = helpers()
+    for node in ast.walk(render):
+        if isinstance(node, ast.Name) and node.id != "render_options":
+            namespace[node.id] = strategy if node.id == "AUDIO_STRATEGY" else literal_setting(node.id)
+    configured = eval(compile(ast.Expression(body=render), str(NOTEBOOK), "eval"), namespace)
+    assert configured["audio_strategy"] == strategy
+    assert configured["original_volume"] == .20
+    assert configured["ratios"] == ["source"]
 
 
 @pytest.mark.parametrize("engine", ["edge", "azure", "chirp", "piper", "elevenlabs"])

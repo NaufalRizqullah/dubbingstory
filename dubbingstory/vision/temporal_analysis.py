@@ -15,7 +15,10 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 
-from dubbingstory.segment.keyframes import plan_temporal_frames, extract_temporal_frames_from_source
+from dubbingstory.segment.keyframes import (
+    TEMPORAL_EXTRACTION_VERSION, TemporalFrameExtractionError,
+    plan_temporal_frames, extract_temporal_frames_from_source,
+)
 from dubbingstory.vision.schemas import TIMED_FRAMES_SCHEMA_VERSION
 
 
@@ -62,6 +65,26 @@ def _read_json(path: str):
             return json.load(stream)
     except (OSError, ValueError):
         return None
+
+
+def _failure_metadata(exc: Exception, stage: str) -> dict:
+    """Publish controlled diagnostic fields, never raw provider errors or URLs."""
+    failure = {"failure_type": type(exc).__name__, "failure_stage": stage,
+               "failure_code": f"{stage}_failed"}
+    if isinstance(exc, TemporalFrameExtractionError):
+        if re.fullmatch(r"[a-z_]{1,80}", exc.code):
+            failure["failure_code"] = exc.code
+        details = {}
+        for key in ("frame_id", "scene_id"):
+            value = exc.details.get(key)
+            if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", value):
+                details[key] = value
+        for key in ("requested_timestamp", "decoder_timestamp", "scene_start", "scene_end", "tolerance_seconds"):
+            value = exc.details.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+                details[key] = value
+        failure["failure_details"] = details
+    return failure
 
 
 def build_timed_frame_prompt(frames: list[dict], domain_hint: str = "") -> str:
@@ -236,7 +259,7 @@ def run_temporal_analysis(segment_data: dict, storyboard: dict, project_dir: str
     except Exception as exc:
         artifact = _read_json(manifest_path) or {}
         if artifact.get("status") != "failed":
-            artifact.update(status="failed", failure_type=type(exc).__name__)
+            artifact.update(status="failed", **_failure_metadata(exc, "preflight"))
             _write_json(manifest_path, artifact)
         raise
 
@@ -269,7 +292,8 @@ def _run_temporal_analysis(segment_data: dict, storyboard: dict, project_dir: st
     image_settings = {"max_edge": int(getattr(cfg, "keyframes_max_edge", 768)),
                       "jpeg_quality": int(getattr(cfg, "keyframes_jpeg_quality", 88))}
     sampling_key = _identity({"source_sha256": source_hash, "samples": planned,
-                              "image_settings": image_settings, "version": TIMED_FRAMES_SCHEMA_VERSION})
+                              "image_settings": image_settings, "version": TIMED_FRAMES_SCHEMA_VERSION,
+                              "extraction_version": TEMPORAL_EXTRACTION_VERSION})
     root = os.path.join(project_dir, "temporal_frames", sampling_key[:20])
     os.makedirs(root, exist_ok=True)
     cache_dir = os.path.join(project_dir, "temporal_cache")
@@ -284,21 +308,27 @@ def _run_temporal_analysis(segment_data: dict, storyboard: dict, project_dir: st
     endpoint_hash = _identity(str(getattr(cfg, "vision_openai_base_url", ""))) if provider == "openai" else ""
     provenance = {"source_sha256": source_hash, "sampling_key": sampling_key,
                   "provider": provider, "model": str(getattr(analyzer, "model", "")),
-                  "provider_settings": fingerprint, "endpoint_hash": endpoint_hash}
+                  "provider_settings": fingerprint, "endpoint_hash": endpoint_hash,
+                  "extraction_version": TEMPORAL_EXTRACTION_VERSION}
     artifact = {"schema_version": TIMED_FRAMES_SCHEMA_VERSION, "status": "running", "settings": settings,
                 "provenance": provenance, "expected_frames": len(planned), "completed_frames": 0,
                 "observations": [], "events": []}
     _write_json(manifest_path, artifact)
+    stage = "frame_cache"
     try:
+        print(f"   Preparing temporal frames: {len(planned)} samples / {settings['interval_seconds']:g}s", flush=True)
         frame_manifest = _read_json(os.path.join(root, "frames.json"))
         frames = frame_manifest.get("frames") if isinstance(frame_manifest, dict) and frame_manifest.get("sampling_key") == sampling_key else None
         if not _cached_frames_valid(frames, planned, root):
+            stage = "frame_extraction"
             frames = extract_temporal_frames_from_source(source_path, planned, root, **image_settings)
+            stage = "frame_validation"
             for frame in frames:
                 frame["image_sha256"] = _file_hash(frame["path"])
             if not _cached_frames_valid(frames, planned, root):
                 raise ValueError("Decoded temporal frames do not match the source-time sampling plan")
             _write_json(os.path.join(root, "frames.json"), {"sampling_key": sampling_key, "frames": frames})
+        stage = "batch_cache"
         batches = _scene_batches(frames, settings["batch_size"])
         results = {}
         misses = []
@@ -321,6 +351,7 @@ def _run_temporal_analysis(segment_data: dict, storyboard: dict, project_dir: st
         print(f"   🕒 Temporal vision: {len(frames)} frames / {settings['interval_seconds']:g}s; "
               f"{len(batches) - len(misses)}/{len(batches)} cached batches")
         concurrency = max(1, min(4, int(getattr(cfg, "vision_concurrency", 2))))
+        stage = "frame_analysis"
         with ThreadPoolExecutor(max_workers=concurrency) as pool:
             futures = {pool.submit(analyze_frame_batch, analyzer, batch, settings["max_tokens"], domain_hint): (index, batch, key, path)
                        for index, batch, key, path in misses}
@@ -337,6 +368,7 @@ def _run_temporal_analysis(segment_data: dict, storyboard: dict, project_dir: st
                 artifact["completed_frames"] += len(result)
                 _write_json(manifest_path, artifact)
                 print(f"      Temporal observations: {artifact['completed_frames']}/{len(frames)}")
+        stage = "event_aggregation"
         observations = []
         for index, batch in enumerate(batches):
             result = _validate_observations(results[index], batch)
@@ -345,6 +377,7 @@ def _run_temporal_analysis(segment_data: dict, storyboard: dict, project_dir: st
         seconds = defaultdict(list)
         for observation in observations:
             seconds[int(observation["timestamp"])].append(observation["frame_id"])
+        stage = "artifact_publication"
         artifact.update(status="complete", observations=observations, events=events,
                         completed_frames=len(observations),
                         per_second=build_second_summaries(observations, max(float(scene["end_time"]) for scene in scenes)),
@@ -363,10 +396,12 @@ def _run_temporal_analysis(segment_data: dict, storyboard: dict, project_dir: st
                                       "frame_count": len(observations), "event_count": len(events)}
         return enriched
     except Exception as exc:
-        artifact.update(status="failed", failure_type=type(exc).__name__)
+        failure = _failure_metadata(exc, stage)
+        artifact.update(status="failed", **failure)
         _write_json(manifest_path, artifact)
+        details = json.dumps(failure.get("failure_details", {}), sort_keys=True, allow_nan=False)
         raise RuntimeError(
             "Temporal visual analysis did not complete; inspect visual_timeline.json status and "
             "resume analyze. Completed batches are cached; no partial scene evidence was published. "
-            f"Failure type: {type(exc).__name__}."
+            f"Stage: {stage}; code: {failure['failure_code']}; type: {type(exc).__name__}; details: {details}."
         ) from None

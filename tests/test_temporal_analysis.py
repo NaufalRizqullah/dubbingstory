@@ -275,6 +275,52 @@ def test_model_and_source_changes_invalidate_analysis_cache(stage):
     assert len(stage.extracts) == 2
 
 
+def test_changed_extraction_version_invalidates_frames_and_observations(stage, monkeypatch):
+    run(stage)
+    stage.calls.clear()
+    monkeypatch.setattr(temporal, "TEMPORAL_EXTRACTION_VERSION", temporal.TEMPORAL_EXTRACTION_VERSION + 1)
+    run(stage)
+    assert len(stage.extracts) == 2
+    assert len(stage.calls) == 3
+    artifact = json.loads((stage.root / "visual_timeline.json").read_text())
+    assert artifact["provenance"]["extraction_version"] == temporal.TEMPORAL_EXTRACTION_VERSION
+
+
+def test_extraction_failure_reports_frame_and_stage_without_raw_error(stage, monkeypatch):
+    def fail(*args, **kwargs):
+        raise keyframes.TemporalFrameExtractionError(
+            "frame_unavailable", "unsafe upstream URL https://private.invalid/?token=fake-secret",
+            details={"frame_id": "frame_000032", "scene_id": "scene_003",
+                     "requested_timestamp": 30.028, "decoder_timestamp": float("nan"),
+                     "scene_start": 20.028, "scene_end": 30.042,
+                     "tolerance_seconds": 0.1, "raw_error": "fake-secret"})
+
+    monkeypatch.setattr(temporal, "extract_temporal_frames_from_source", fail)
+    with pytest.raises(RuntimeError, match="frame_extraction; code: frame_unavailable") as error:
+        run(stage)
+    artifact_text = (stage.root / "visual_timeline.json").read_text()
+    artifact = json.loads(artifact_text)
+    assert artifact["status"] == "failed"
+    assert artifact["failure_stage"] == "frame_extraction"
+    assert artifact["failure_details"]["frame_id"] == "frame_000032"
+    assert artifact["failure_details"]["requested_timestamp"] == 30.028
+    assert "decoder_timestamp" not in artifact["failure_details"]
+    assert "fake-secret" not in artifact_text + str(error.value)
+    assert stage.calls == []
+
+
+def test_provider_failure_diagnostics_do_not_publish_arbitrary_exception_text(stage):
+    def fail(*args, **kwargs):
+        raise RuntimeError("fake-secret-provider-response")
+
+    stage.analyzer.analyze_timed_frames = fail
+    with pytest.raises(RuntimeError, match="frame_analysis_failed") as error:
+        run(stage)
+    artifact_text = (stage.root / "visual_timeline.json").read_text()
+    assert json.loads(artifact_text)["failure_stage"] == "frame_analysis"
+    assert "fake-secret-provider-response" not in artifact_text + str(error.value)
+
+
 def test_modified_frame_or_timestamp_is_reextracted_from_source(stage):
     run(stage)
     manifest_path = next((stage.root / "temporal_frames").glob("*/frames.json"))

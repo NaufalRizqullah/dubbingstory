@@ -8,6 +8,7 @@ reveal the process/action happening in the scene.
 
 import os
 import math
+import re
 import cv2
 
 
@@ -326,6 +327,25 @@ def extract_all_scenes(
     return all_keyframes
 
 
+TEMPORAL_EXTRACTION_VERSION = 2
+
+
+class TemporalFrameExtractionError(ValueError):
+    """Source-time extraction failure with bounded, nonsecret diagnostic fields."""
+
+    def __init__(self, code: str, message: str, *, details: dict | None = None):
+        self.code = code
+        self.details = {}
+        for key, value in (details or {}).items():
+            if key in {"frame_id", "scene_id"}:
+                if isinstance(value, str) and re.fullmatch(r"(?:frame|scene)_\d+", value):
+                    self.details[key] = value[:64]
+            elif key in {"requested_timestamp", "decoder_timestamp", "scene_start", "scene_end", "tolerance_seconds"}:
+                if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+                    self.details[key] = value
+        super().__init__(message)
+
+
 def plan_temporal_frames(scenes: list[dict], interval_seconds: float = 0.5,
                          max_frames: int = 0) -> list[dict]:
     """Plan dense samples on source time, without the legacy keyframe cap.
@@ -376,6 +396,88 @@ def plan_temporal_frames(scenes: list[dict], interval_seconds: float = 0.5,
     return result
 
 
+def _read_temporal_sample(cap, sample: dict, *, tolerance: float, fps: float,
+                          previous_timestamp: float):
+    """Recover seek rounding at scene/end boundaries using only decoded clocks.
+
+    Seeking in milliseconds can land after the last frame or in the next scene.
+    One bounded backward seek/forward scan may recover a nearby frame in this
+    scene. The requested timestamp remains unchanged; no timestamp is invented.
+    """
+    requested = float(sample["requested_timestamp"])
+    start, end = float(sample["scene_start"]), float(sample["scene_end"])
+    details = {key: sample[key] for key in
+               ("frame_id", "scene_id", "requested_timestamp", "scene_start", "scene_end")}
+    details["tolerance_seconds"] = tolerance
+
+    def failure(code, message, timestamp=None):
+        return TemporalFrameExtractionError(code, message, details={
+            **details, "decoder_timestamp": timestamp,
+        })
+
+    def check_clock(timestamp, prior=None):
+        if (not math.isfinite(timestamp) or timestamp < 0
+                or (prior is not None and timestamp < prior - 1e-6)):
+            raise failure("decoder_clock_invalid", "Temporal decoder clock is invalid or moved backwards", timestamp)
+
+    def acceptable(timestamp):
+        return (start <= timestamp < end and abs(timestamp - requested) <= tolerance
+                and timestamp >= previous_timestamp - 0.001)
+
+    scan_limit = min(256, max(8, math.ceil(2 * tolerance * fps) + 4)) if math.isfinite(fps) and fps > 0 else 16
+    cap.set(cv2.CAP_PROP_POS_MSEC, requested * 1000.0)
+    ok, frame = cap.read()
+    timestamp = None
+    if ok and frame is not None:
+        timestamp = float(cap.get(cv2.CAP_PROP_POS_MSEC)) / 1000.0
+        check_clock(timestamp)
+        if abs(timestamp - requested) > tolerance:
+            raise failure("decoder_clock_drift", "Temporal decoder timestamp is too far from the requested sample", timestamp)
+        if acceptable(timestamp):
+            return frame, timestamp
+        # Rounded scene starts may seek to the previous scene's last frame.
+        for _ in range(scan_limit):
+            if timestamp >= start:
+                break
+            ok, candidate = cap.read()
+            if not ok or candidate is None:
+                break
+            current = float(cap.get(cv2.CAP_PROP_POS_MSEC)) / 1000.0
+            check_clock(current, timestamp)
+            if current <= timestamp:
+                raise failure("decoder_clock_stalled", "Temporal decoder clock did not advance", current)
+            timestamp, frame = current, candidate
+            if acceptable(timestamp):
+                return frame, timestamp
+            if timestamp > requested + tolerance:
+                break
+
+    # Use an earlier *time*, not frame_count/fps: that arithmetic is not a
+    # reliable source timestamp on VFR video. Never reuse an unrelated sample.
+    seek_time = max(0.0, requested - tolerance)
+    cap.set(cv2.CAP_PROP_POS_MSEC, seek_time * 1000.0)
+    best, last = None, None
+    for _ in range(scan_limit):
+        ok, candidate = cap.read()
+        if not ok or candidate is None:
+            break
+        current = float(cap.get(cv2.CAP_PROP_POS_MSEC)) / 1000.0
+        check_clock(current, last)
+        if last is not None and current <= last:
+            raise failure("decoder_clock_stalled", "Temporal decoder clock did not advance", current)
+        last = current
+        timestamp = current
+        if current >= end or current > requested + tolerance:
+            break
+        if acceptable(current) and (best is None or abs(current - requested) < abs(best[1] - requested)):
+            best = (candidate, current)
+        if best is not None and current >= requested:
+            break
+    if best is not None:
+        return best
+    raise failure("sample_unavailable", "Cannot decode a nearby frame inside the temporal sample's scene", timestamp)
+
+
 def extract_temporal_frames_from_source(video_path: str, samples: list[dict],
                                         output_dir: str, max_edge: int = 768,
                                         jpeg_quality: int = 88) -> list[dict]:
@@ -393,7 +495,7 @@ def extract_temporal_frames_from_source(video_path: str, samples: list[dict],
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         cap.release()
-        raise ValueError("Cannot open source video for temporal sampling")
+        raise TemporalFrameExtractionError("source_open_failed", "Cannot open source video for temporal sampling")
     records = []
     try:
         fps = float(cap.get(cv2.CAP_PROP_FPS))
@@ -401,30 +503,8 @@ def extract_temporal_frames_from_source(video_path: str, samples: list[dict],
         previous_timestamp = -1.0
         for sample in samples:
             requested = float(sample["requested_timestamp"])
-            cap.set(cv2.CAP_PROP_POS_MSEC, requested * 1000.0)
-            ok, frame = cap.read()
-            if not ok or frame is None:
-                raise ValueError(f"Cannot decode temporal frame {sample['frame_id']} at {requested:.3f}s")
-            timestamp = float(cap.get(cv2.CAP_PROP_POS_MSEC)) / 1000.0
-            # Scene manifests round boundaries to milliseconds. A seek may
-            # return the preceding frame (e.g. 0.966667 for a 0.967 boundary).
-            # Read forward within a small bound instead of relabelling that
-            # frame's clock or accepting evidence from the previous scene.
-            for _ in range(2):
-                if not math.isfinite(timestamp) or timestamp >= float(sample["scene_start"]) or timestamp < 0:
-                    break
-                if abs(timestamp - requested) > tolerance:
-                    break
-                ok, frame = cap.read()
-                if not ok or frame is None:
-                    raise ValueError(f"Cannot decode a frame inside scene for {sample['frame_id']}")
-                timestamp = float(cap.get(cv2.CAP_PROP_POS_MSEC)) / 1000.0
-            if (not math.isfinite(timestamp) or timestamp < 0
-                    or abs(timestamp - requested) > tolerance
-                    or timestamp < previous_timestamp - 0.001
-                    or timestamp < float(sample["scene_start"]) - 1e-6
-                    or timestamp >= float(sample["scene_end"])):
-                raise ValueError(f"Unreliable decoder timestamp at {sample['frame_id']}; temporal analysis stopped")
+            frame, timestamp = _read_temporal_sample(
+                cap, sample, tolerance=tolerance, fps=fps, previous_timestamp=previous_timestamp)
             previous_timestamp = timestamp
             height, width = frame.shape[:2]
             scale = min(1.0, int(max_edge) / max(height, width))
@@ -434,7 +514,9 @@ def extract_temporal_frames_from_source(video_path: str, samples: list[dict],
                                    interpolation=cv2.INTER_AREA)
             path = os.path.join(output_dir, sample["frame_id"] + ".jpg")
             if not cv2.imwrite(path, frame, [cv2.IMWRITE_JPEG_QUALITY, int(jpeg_quality)]):
-                raise ValueError(f"Cannot save temporal frame {sample['frame_id']}")
+                raise TemporalFrameExtractionError("frame_write_failed", "Cannot save temporal frame", details={
+                    **sample, "decoder_timestamp": timestamp, "tolerance_seconds": tolerance,
+                })
             delta = timestamp - requested
             records.append({**sample, "timestamp": round(timestamp, 6), "path": path,
                             "sample_start": max(float(sample["scene_start"]), sample["sample_start"] + delta),
