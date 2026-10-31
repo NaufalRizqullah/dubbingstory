@@ -190,7 +190,12 @@ def test_analyze_preserves_storyboard_but_does_not_hide_text_route_failure(monke
     from dubbingstory import cli
     from dubbingstory.vision import scene_understanding
 
-    (tmp_path / "segment_manifest.json").write_text("{}", encoding="utf-8")
+    frame = tmp_path / "frame.jpg"
+    frame.write_bytes(b"mock frame; never decoded")
+    (tmp_path / "segment_manifest.json").write_text(json.dumps({
+        "status": "segmented", "scenes": BOARD["scenes"],
+        "keyframes": {scene["scene_id"]: [str(frame)] for scene in BOARD["scenes"]},
+    }), encoding="utf-8")
     monkeypatch.setattr(cli, "_resolve_project_name", lambda args: "sample")
     monkeypatch.setattr(cli, "_setup_project_dir", lambda cfg, project: str(tmp_path))
     monkeypatch.setattr(scene_understanding, "run_analysis", lambda **kwargs: BOARD)

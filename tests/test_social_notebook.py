@@ -1,5 +1,6 @@
 """Notebook contract checks for Kaggle; never run installation or media cells."""
 import ast
+import io
 import json
 import os
 import re
@@ -67,6 +68,14 @@ def pipeline_harness(tmp_path, *, start_from="segment", vision="qwen", provider=
         path = tmp_path / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
+    keyframe = tmp_path / "keyframes" / "scene_001.jpg"
+    keyframe.parent.mkdir(parents=True, exist_ok=True)
+    keyframe.write_bytes(b"keyframe fixture")
+    (tmp_path / "segment_manifest.json").write_text(json.dumps({
+        "status": "segmented", "total_scenes": 1,
+        "scenes": [{"scene_id": "scene_001", "start_time": 0.0, "end_time": 2.0}],
+        "keyframes": {"scene_001": [str(keyframe)]},
+    }), encoding="utf-8")
     state_path = tmp_path / "llm_runtime_state.json"
     state_path.write_text('{"previous_run": "keep"}', encoding="utf-8")
     events, saved_runs = [], []
@@ -95,8 +104,12 @@ def pipeline_harness(tmp_path, *, start_from="segment", vision="qwen", provider=
         "uuid": SimpleNamespace(uuid4=lambda: next(runs)), "run_cli": run_cli,
         "save_config": lambda: saved_runs.append(config["llm"]["fallback"]["run_id"]),
         "start_qwen_server": start_server, "stop_server": stop_server,
+        "REPO_DIR": ROOT, "sys": sys, "json": json,
     }
     statements = ast.parse(source("pipeline")).body
+    validation = [node for node in statements if isinstance(node, ast.FunctionDef)
+                  and node.name == "validate_segment_for_analysis"]
+    exec(compile(ast.Module(body=validation, type_ignores=[]), str(NOTEBOOK), "exec"), namespace)
     start = next(index for index, node in enumerate(statements) if isinstance(node, ast.Assign)
                  and any(isinstance(target, ast.Name) and target.id == "steps" for target in node.targets))
     orchestration = compile(ast.Module(body=statements[start:], type_ignores=[]), str(NOTEBOOK), "exec")
@@ -441,6 +454,107 @@ def test_pipeline_always_stops_model_after_cli_error(tmp_path):
     with pytest.raises(RuntimeError, match="simulated CLI failure"):
         run()
     assert events == ["start-server", ("narrate", "run-one"), "stop-server", "close-log"]
+
+
+@pytest.mark.parametrize("start_from", ["segment", "analyze"])
+@pytest.mark.parametrize("fault", ["empty", "invalid_json", "failed", "duplicate", "invalid_window",
+                                    "missing_keyframes", "missing_frame_file"])
+def test_invalid_segmentation_stops_before_model_startup(tmp_path, start_from, fault):
+    run, events, _, _ = pipeline_harness(tmp_path, start_from=start_from)
+    path = tmp_path / "segment_manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    if fault == "empty":
+        manifest.update(scenes=[], total_scenes=0, keyframes={})
+    elif fault == "failed":
+        manifest["status"] = "failed"
+    elif fault == "duplicate":
+        manifest["scenes"] *= 2
+        manifest["total_scenes"] = 2
+    elif fault == "invalid_window":
+        manifest["scenes"][0]["end_time"] = float("nan")
+    elif fault == "missing_keyframes":
+        manifest["keyframes"] = {}
+    elif fault == "missing_frame_file":
+        Path(manifest["keyframes"]["scene_001"][0]).unlink()
+    path.write_text("{broken" if fault == "invalid_json" else json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(RuntimeError, match='START_FROM="segment"'):
+        run()
+    assert events == ([("segment", "run-one")] if start_from == "segment" else [])
+
+
+def qwen_startup_harness(tmp_path, *, ready_after=65, timeout=900, exited=False):
+    """Only fake time/process/HTTP; no server, network, GPU or model is started."""
+    clock = SimpleNamespace(now=0.0)
+
+    def sleep(seconds):
+        clock.now += seconds
+
+    class Probe:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def connect_ex(self, address):
+            return 1
+
+    def urlopen(url, timeout):
+        if clock.now < ready_after:
+            raise OSError("not listening yet")
+        return io.StringIO(json.dumps({"data": [{"id": "fixture-model"}]}))
+
+    process = SimpleNamespace(poll=lambda: 1 if exited else None)
+    launches, stopped = [], []
+
+    def popen(command, **kwargs):
+        launches.append((command, kwargs))
+        return process
+
+    namespace = {
+        "socket": SimpleNamespace(socket=Probe), "PORT": 8000,
+        "qwen_command": lambda: ["mock-server"],
+        "CHILD_ENV": {"GOOGLE_API_KEY": "fake-google-secret", "ELEVENLABS_API_KEY": "fake-eleven-secret"},
+        "PROJECT_DIR": tmp_path, "REPO_DIR": ROOT, "json": json,
+        "subprocess": SimpleNamespace(Popen=popen, STDOUT=-2),
+        "time": SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep),
+        "SERVER_TIMEOUT_SECONDS": timeout, "MODEL_NAME": "fixture-model",
+        "BASE_URL": "http://127.0.0.1:8000/v1",
+        "urllib": SimpleNamespace(request=SimpleNamespace(urlopen=urlopen)),
+        "stop_server": lambda item: stopped.append(item),
+    }
+    definitions = [node for node in ast.parse(source("pipeline")).body if isinstance(node, ast.FunctionDef)
+                   and node.name == "start_qwen_server"]
+    exec(compile(ast.Module(body=definitions, type_ignores=[]), str(NOTEBOOK), "exec"), namespace)
+    return namespace["start_qwen_server"], launches, stopped, process
+
+
+def test_qwen_startup_reports_wait_and_readiness_without_exposing_credentials(tmp_path, capsys):
+    start, launches, stopped, process = qwen_startup_harness(tmp_path)
+    actual, log = start()
+    try:
+        assert actual is process
+        assert stopped == []
+        output = capsys.readouterr().out
+        assert "Menyiapkan Qwen/vLLM" in output
+        assert "30/900 detik" in output and "60/900 detik" in output
+        assert output.count("Menunggu Qwen siap:") == 2
+        assert "Qwen siap setelah 65 detik" in output
+        assert str(tmp_path / "vllm_server.log") in output
+        assert "fake-google-secret" not in output and "fake-eleven-secret" not in output
+        assert launches[0][1]["env"] == {}
+    finally:
+        log.close()
+
+
+@pytest.mark.parametrize("exited", [False, True])
+def test_qwen_failed_startup_still_stops_process_and_closes_log(tmp_path, capsys, exited):
+    start, launches, stopped, process = qwen_startup_harness(tmp_path, ready_after=100, timeout=35, exited=exited)
+    with pytest.raises(RuntimeError, match="berhenti sebelum siap" if exited else "timeout"):
+        start()
+    assert stopped == [process]
+    assert launches[0][1]["stdout"].closed
+    assert "Qwen siap setelah" not in capsys.readouterr().out
 
 
 def test_standalone_stages_filter_cached_other_languages():

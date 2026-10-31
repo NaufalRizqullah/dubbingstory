@@ -246,9 +246,33 @@ Untuk memulihkan sesi yang dilaporkan:
 1. Gunakan notebook TikTok/RedNote yang diperbarui dan `INSTALL_DEPENDENCIES=True`. Perbaikan CUDA ini berada di cell notebook; checkout tetap harus memenuhi preflight fitur RedNote existing.
 2. Jika Torch/TorchAudio/TorchVision/vLLM pernah diimpor langsung ke kernel, restart kernel sebelum mengganti wheel. Pertahankan folder output project. Jalur notebook memakai subprocess sehingga restart tidak dipaksakan untuk kernel yang belum mengimpor library tersebut.
 3. Jalankan ulang konfigurasi dan setup. Pastikan preflight import berhasil; jangan lanjut ketika gagal. Jangan menghapus TorchAudio atau menyamakan nomor dasar versinya secara sembarang.
-4. Pakai `PROJECT_NAME` dan `OUTPUT_ROOT` yang sama agar `source.mp4` dapat diverifikasi dan digunakan kembali. Bila `segment_manifest.json` masih tersedia, pilih `START_FROM="analyze"`; bila belum, gunakan `segment`. Artefak yang hilang dari sesi Kaggle sebelumnya tetap perlu dibuat kembali.
+4. Pakai `PROJECT_NAME` dan `OUTPUT_ROOT` yang sama agar `source.mp4` dapat diverifikasi dan digunakan kembali. Bila `segment_manifest.json` masih tersedia dengan scene dan keyframe yang valid, pilih `START_FROM="analyze"`; bila belum atau hasilnya kosong, gunakan `segment`. Artefak yang hilang dari sesi Kaggle sebelumnya tetap perlu dibuat kembali.
 
 Regresi notebook memakai subprocess palsu dan tidak memuat model. Tests hanya disiapkan untuk Kaggle; instalasi wheel, startup model dan pipeline revisi ini belum dijalankan pada komputer development.
+
+## Segmentasi kosong dan startup Qwen
+
+Log Kaggle yang diberikan berikutnya menunjukkan Qwen/vLLM mulai pada `22:18:59`, HTTP server siap pada `22:23:22`, dan `/v1/models` mengembalikan `200 OK`. Jadi jeda sekitar 4 menit 23 detik itu merupakan startup yang berhasil, bukan bukti model macet. Pesan FA2 tidak didukung diikuti pemilihan `TRITON_ATTN`; server tetap mencapai readiness. Pada `22:23:29` server menerima `SIGTERM`. Kedua log yang diberikan tidak memastikan apakah pemicunya pembatalan pengguna atau cleanup setelah tahap lain gagal.
+
+Masalah terpisah ada pada `notebook_segment.log`: nol scene dan nol keyframe masih dilaporkan sebagai sukses. Pemanggilan lama memakai default PySceneDetect `start_in_scene=False`, yang dapat menghasilkan daftar kosong saat tidak ada cut. [Dokumentasi API](https://www.scenedetect.com/docs/latest/api.html) menjelaskan opsi `start_in_scene=True`; [SceneManager](https://www.scenedetect.com/docs/latest/api/scene_manager.html) menyediakan jumlah frame yang diproses. Metadata ingest 720×1280 dan durasi sekitar 30,04 detik tidak membuktikan semua frame berhasil didekode. Karena log lama belum mencatat hitungan frame, penyebab spesifik media tersebut belum dipastikan.
+
+Implementasi baru mempertahankan video tanpa cut sebagai satu rentang yang benar-benar didekode, lalu memakai pembagian analysis window existing jika rentangnya panjang. Ini tidak memotong output mode `full`. Nol frame, interval tidak valid, atau jumlah frame jauh di bawah estimasi metadata menghentikan segmentasi. Perbandingan hitungan ini bersifat pemeriksaan awal dengan toleransi metadata, bukan jaminan media bebas kerusakan; sumber VFR dan metadata tidak akurat tetap perlu validasi di Kaggle. Manifest percobaan gagal tidak lagi menyimpan status `segmented` dari percobaan sebelumnya. CLI dan notebook juga menolak scene kosong atau keyframe hilang sebelum vision/model dimulai.
+
+Untuk memulihkan proyek ini:
+
+1. Perbarui **checkout kode Kaggle dan notebook**. Notebook baru saja tidak memperbarui checkout existing; preflight menolak kode yang belum memiliki perbaikan segmentasi.
+2. Gunakan `PROJECT_NAME`/`OUTPUT_ROOT` yang sama dan `START_FROM="segment"`. Jangan mulai dari `analyze` dengan manifest kosong. File `source.mp4` existing dapat dipakai ulang setelah ingest memverifikasi cache.
+3. Jalankan kembali konfigurasi/setup/ingest dan pipeline. Periksa `Decoded frames`, `Scenes`, serta `Keyframes`. Ketiganya harus menunjukkan hasil yang dapat dipakai; jangan mengedit manifest kosong secara manual agar lolos.
+4. Setelah segmentasi valid, notebook menampilkan waktu tunggu Qwen sekitar setiap 30 detik dan pesan saat siap. Detail tetap di `vllm_server.log`, timeout tetap 900 detik. `Draft Session` bukan timer khusus startup.
+
+Tests berikut disiapkan untuk Kaggle, tanpa unduhan, provider nyata, atau model. Tests, decode, dan render tidak dijalankan pada komputer development:
+
+```bash
+python -m pytest -q tests/test_scene_detection.py tests/test_segment_cli.py \
+  tests/test_social_notebook.py tests/test_text_routing_integration.py
+```
+
+Setelah suite lulus, uji video tanpa cut dan video dengan cut, lalu periksa analisis temporal serta kelengkapan durasi output. Jika decoding ditolak, simpan log segmentasi baru untuk membedakan hitungan frame, metadata, dan interval yang tidak cocok.
 
 ## Pengujian di Kaggle
 

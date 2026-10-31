@@ -11,6 +11,17 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.10.1]
+
+### Fixed
+- Retain a decoded video without detected cuts as a full analysis range using PySceneDetect `start_in_scene=True`; existing long-shot analysis windows still apply. Log processed frame counts and reject empty, invalid, or substantially truncated decoding instead of constructing scenes from metadata alone.
+- Reject empty/invalid segment manifests and missing keyframes before vision calls. Failed segmentation retries invalidate the previous completion status; the social notebook applies the same validation before starting Qwen.
+- Show Qwen startup elapsed time approximately every 30 seconds and confirm readiness. Keep the existing 900-second timeout, CUDA preset, and model configuration.
+
+### Validation
+- Supplied Kaggle logs show Qwen/vLLM successfully reached HTTP readiness in about 4 minutes 23 seconds, then received SIGTERM; they do not identify the shutdown trigger. The segment log reports zero scenes/keyframes despite a success banner. The original run did not log processed frame counts, so no-cut video versus decoding failure remains unconfirmed for that media.
+- Add mocked scene/no-cut/decoding, segment publication/validation, and notebook startup/cleanup regressions. Review is static only; tests and media processing remain for Kaggle.
+
 ## [0.10.0]
 
 ### Added

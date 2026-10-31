@@ -5,9 +5,10 @@ Detects scene boundaries in a video and splits it into individual
 scene files using FFmpeg.
 """
 
+import math
 import os
 
-from scenedetect import detect, AdaptiveDetector, ContentDetector, ThresholdDetector
+from scenedetect import open_video, SceneManager, AdaptiveDetector, ContentDetector, ThresholdDetector
 from scenedetect import split_video_ffmpeg
 
 
@@ -65,15 +66,47 @@ def detect_scenes(
     print(f"   🔍 Detecting scenes (method: {detector}, threshold: {threshold})...")
 
     det = _get_detector(detector, threshold)
-    scene_list = detect(video_path, det)
+    video = open_video(video_path)
+    manager = SceneManager()
+    manager.add_detector(det)
+    # Use the manager so a lack of cuts can be distinguished from no decoded
+    # frames. Never invent a full-video scene from container metadata alone.
+    processed_frames = manager.detect_scenes(video=video)
+    declared_duration = video.duration
+    expected_frames = declared_duration.get_frames() if declared_duration is not None else 0
+    print(f"   📊 Decoded frames: {processed_frames}; metadata estimate: {expected_frames or 'unknown'}")
+    if processed_frames <= 0:
+        raise ValueError("Scene detection decoded no frames; inspect the source video before retrying segment")
+    # Container counts can be approximate (notably VFR). Reject a substantial
+    # short read, allowing a small metadata discrepancy without extending the
+    # measured scene to pretend that unread frames were analyzed.
+    if expected_frames > 0:
+        tolerance = max(2, math.ceil(expected_frames * 0.01))
+        if processed_frames < expected_frames - tolerance:
+            raise ValueError(
+                f"Scene decoding stopped early: processed {processed_frames} frames, "
+                f"metadata estimates {expected_frames}. Inspect decoding/source metadata before retrying segment."
+            )
+    scene_list = manager.get_scene_list(start_in_scene=True)
+    if not scene_list:
+        raise ValueError("Scene detection produced no usable scene intervals; inspect decoding before retrying segment")
 
     print(f"   📊 Raw scenes detected: {len(scene_list)}")
+    if len(scene_list) == 1:
+        print("   ℹ️ No scene cuts detected; retaining the decoded video as one analysis range.")
 
     # Convert to our format
     scenes = []
+    previous_end_frame, previous_end_sec = 0, 0.0
     for i, (start, end) in enumerate(scene_list):
         start_sec = start.get_seconds()
         end_sec = end.get_seconds()
+        start_frame, end_frame = start.get_frames(), end.get_frames()
+        if (not math.isfinite(start_sec) or not math.isfinite(end_sec)
+                or start_sec < 0 or end_sec <= start_sec
+                or start_frame != previous_end_frame or end_frame <= start_frame
+                or abs(start_sec - previous_end_sec) > 0.001):
+            raise ValueError("Scene detection returned invalid or incomplete source intervals; retry segment with a readable source")
         duration = end_sec - start_sec
 
         scenes.append({
@@ -82,9 +115,18 @@ def detect_scenes(
             "start_time": round(start_sec, 3),
             "end_time": round(end_sec, 3),
             "duration": round(duration, 3),
-            "start_frame": start.get_frames(),
-            "end_frame": end.get_frames(),
+            "start_frame": start_frame,
+            "end_frame": end_frame,
         })
+        previous_end_frame, previous_end_sec = end_frame, end_sec
+
+    # Newer backends derive FrameTimecode from PTS, so its frame index can
+    # differ from the number of decoded images on VFR sources. Compare the
+    # scene endpoint with the decoder clock, not with that image count.
+    decoded_end_sec = (video.position + 1).get_seconds()
+    if (not math.isfinite(decoded_end_sec) or decoded_end_sec <= 0
+            or abs(previous_end_sec - decoded_end_sec) > 0.001):
+        raise ValueError("Scene intervals do not cover the decoded video; inspect decoding before retrying segment")
 
     # Merge short scenes first, then split abnormally long continuous shots into
     # bounded analysis/selectable windows. This preserves visual coverage for

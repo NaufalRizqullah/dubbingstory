@@ -252,6 +252,42 @@ def cmd_ingest(args, cfg):
 # SUBCOMMAND: segment
 # ==============================================================================
 
+def validate_segment_manifest(segment_data: dict, *, require_keyframes: bool = True) -> None:
+    """Reject unusable segmentation before a CLI/provider or notebook model starts."""
+    recovery = "Rerun segment before analyze (notebook START_FROM='segment')."
+    if not isinstance(segment_data, dict) or segment_data.get("status") != "segmented":
+        raise ValueError(f"Segment manifest is incomplete or invalid. {recovery}")
+    scenes = segment_data.get("scenes")
+    if not isinstance(scenes, list) or not scenes:
+        raise ValueError(f"Segment manifest contains no scenes. {recovery}")
+    if "total_scenes" in segment_data and segment_data["total_scenes"] != len(scenes):
+        raise ValueError(f"Segment manifest scene count is inconsistent. {recovery}")
+    seen, previous_end = set(), 0.0
+    frames = segment_data.get("keyframes", {})
+    for scene in scenes:
+        if not isinstance(scene, dict):
+            raise ValueError(f"Segment manifest contains an invalid scene. {recovery}")
+        sid = scene.get("scene_id")
+        if not isinstance(sid, str) or not sid.strip() or sid in seen:
+            raise ValueError(f"Segment manifest scene IDs are missing or duplicated. {recovery}")
+        seen.add(sid)
+        try:
+            start, end = float(scene["start_time"]), float(scene["end_time"])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError(f"Segment scene times are invalid. {recovery}") from None
+        if (not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start
+                or start < previous_end - 0.001):
+            raise ValueError(f"Segment scene intervals are invalid or out of order. {recovery}")
+        previous_end = end
+        if require_keyframes:
+            paths = frames.get(sid) if isinstance(frames, dict) else None
+            if not isinstance(paths, list) or not paths:
+                raise ValueError(f"Segment scene {sid} has no keyframes. {recovery}")
+            for path in paths:
+                if not isinstance(path, str) or not os.path.isfile(path) or os.path.getsize(path) <= 0:
+                    raise ValueError(f"Segment scene {sid} has missing or empty keyframes. {recovery}")
+
+
 def cmd_segment(args, cfg):
     """Detect scenes and extract keyframes."""
     from dubbingstory.segment import scene_detect, keyframes
@@ -276,58 +312,74 @@ def cmd_segment(args, cfg):
     print("=" * 70)
     print(f"   Video: {video_path}")
 
-    analysis_mode = getattr(cfg, "vision_analysis_mode", "keyframes")
-    
-    if analysis_mode == "keyframes":
-        # Don't split the video physically, just detect boundaries
-        scene_list = scene_detect.detect_scenes(
-            video_path=video_path,
-            detector=getattr(cfg, "segment_detector", "adaptive"),
-            threshold=getattr(cfg, "segment_adaptive_threshold", 3.0),
-            min_duration=getattr(cfg, "segment_min_scene_duration", 2.0),
-            max_duration=getattr(cfg, "segment_max_scene_duration", 15.0),
-            merge_short=getattr(cfg, "segment_merge_short_scenes", True),
-        )
-    else:
-        # Scene detection + split
-        scenes_dir = os.path.join(project_dir, "scenes")
-        scene_list = scene_detect.detect_and_split(
-            video_path=video_path,
-            output_dir=scenes_dir,
-            detector=getattr(cfg, "segment_detector", "adaptive"),
-            threshold=getattr(cfg, "segment_adaptive_threshold", 3.0),
-            min_duration=getattr(cfg, "segment_min_scene_duration", 2.0),
-            max_duration=getattr(cfg, "segment_max_scene_duration", 15.0),
-            merge_short=getattr(cfg, "segment_merge_short_scenes", True),
-        )
-
-    # Keyframe extraction
-    keyframes_dir = os.path.join(project_dir, "keyframes")
-    all_keyframes = keyframes.extract_all_scenes(
-        scenes=scene_list,
-        scenes_dir=os.path.join(project_dir, "scenes"),
-        output_dir=keyframes_dir,
-        strategy=getattr(cfg, "keyframes_strategy", "distributed"),
-        interval_seconds=getattr(cfg, "keyframes_interval_seconds", 2.0),
-        max_per_scene=getattr(cfg, "keyframes_max_per_scene", 7),
-        source_video=video_path,
-        max_edge=getattr(cfg, "keyframes_max_edge", 768),
-        jpeg_quality=getattr(cfg, "keyframes_jpeg_quality", 88),
-        shared_boundary_anchor=bool(getattr(cfg, "keyframes_shared_boundary_anchor", True)),
-        adaptive=getattr(cfg, "keyframes_adaptive", True),
-    )
-
-    # Save segment manifest
-    segment_manifest = {
-        "video_path": video_path,
-        "total_scenes": len(scene_list),
-        "scenes": scene_list,
-        "keyframes": all_keyframes,
-        "status": "segmented",
-    }
     segment_path = os.path.join(project_dir, "segment_manifest.json")
-    with open(segment_path, "w", encoding="utf-8") as f:
-        json.dump(segment_manifest, f, ensure_ascii=False, indent=2)
+    # A failed retry must not leave a previous successful manifest usable.
+    pending_manifest = {"video_path": video_path, "total_scenes": 0, "scenes": [],
+                        "keyframes": {}, "status": "segmenting"}
+    with open(segment_path, "w", encoding="utf-8") as handle:
+        json.dump(pending_manifest, handle, ensure_ascii=False, indent=2)
+    try:
+        analysis_mode = getattr(cfg, "vision_analysis_mode", "keyframes")
+
+        if analysis_mode == "keyframes":
+            # Don't split the video physically, just detect boundaries
+            scene_list = scene_detect.detect_scenes(
+                video_path=video_path,
+                detector=getattr(cfg, "segment_detector", "adaptive"),
+                threshold=getattr(cfg, "segment_adaptive_threshold", 3.0),
+                min_duration=getattr(cfg, "segment_min_scene_duration", 2.0),
+                max_duration=getattr(cfg, "segment_max_scene_duration", 15.0),
+                merge_short=getattr(cfg, "segment_merge_short_scenes", True),
+            )
+        else:
+            # Scene detection + split
+            scenes_dir = os.path.join(project_dir, "scenes")
+            scene_list = scene_detect.detect_and_split(
+                video_path=video_path,
+                output_dir=scenes_dir,
+                detector=getattr(cfg, "segment_detector", "adaptive"),
+                threshold=getattr(cfg, "segment_adaptive_threshold", 3.0),
+                min_duration=getattr(cfg, "segment_min_scene_duration", 2.0),
+                max_duration=getattr(cfg, "segment_max_scene_duration", 15.0),
+                merge_short=getattr(cfg, "segment_merge_short_scenes", True),
+            )
+
+        # Empty/invalid scenes must fail before keyframe work.
+        validate_segment_manifest({"status": "segmented", "scenes": scene_list}, require_keyframes=False)
+
+        # Keyframe extraction
+        keyframes_dir = os.path.join(project_dir, "keyframes")
+        all_keyframes = keyframes.extract_all_scenes(
+            scenes=scene_list,
+            scenes_dir=os.path.join(project_dir, "scenes"),
+            output_dir=keyframes_dir,
+            strategy=getattr(cfg, "keyframes_strategy", "distributed"),
+            interval_seconds=getattr(cfg, "keyframes_interval_seconds", 2.0),
+            max_per_scene=getattr(cfg, "keyframes_max_per_scene", 7),
+            source_video=video_path,
+            max_edge=getattr(cfg, "keyframes_max_edge", 768),
+            jpeg_quality=getattr(cfg, "keyframes_jpeg_quality", 88),
+            shared_boundary_anchor=bool(getattr(cfg, "keyframes_shared_boundary_anchor", True)),
+            adaptive=getattr(cfg, "keyframes_adaptive", True),
+        )
+
+        # Save segment manifest
+        segment_manifest = {
+            "video_path": video_path,
+            "total_scenes": len(scene_list),
+            "scenes": scene_list,
+            "keyframes": all_keyframes,
+            "status": "segmented",
+        }
+        validate_segment_manifest(segment_manifest, require_keyframes=analysis_mode == "keyframes")
+        with open(segment_path, "w", encoding="utf-8") as f:
+            json.dump(segment_manifest, f, ensure_ascii=False, indent=2)
+
+    except Exception as exc:
+        pending_manifest.update(status="failed", failure_type=type(exc).__name__)
+        with open(segment_path, "w", encoding="utf-8") as handle:
+            json.dump(pending_manifest, handle, ensure_ascii=False, indent=2)
+        raise
 
     print(f"\n✅ Segmentation selesai!")
     print(f"   Scenes: {len(scene_list)}")
@@ -360,6 +412,9 @@ def cmd_analyze(args, cfg):
 
     with open(segment_path, "r", encoding="utf-8") as f:
         segment_data = json.load(f)
+
+    validate_segment_manifest(
+        segment_data, require_keyframes=getattr(cfg, "vision_analysis_mode", "keyframes") == "keyframes")
 
     # Load ingest manifest for subtitle context
     ingest_path = os.path.join(project_dir, "ingest_manifest.json")
