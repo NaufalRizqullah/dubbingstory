@@ -85,6 +85,12 @@ def test_single_attempt_uses_primary_and_reports_actual_count(monkeypatch):
     assert clock.sleeps == []
 
 
+def test_text_output_budget_reaches_sdk_and_remains_on_retries(monkeypatch):
+    analyzer, models, _ = analyzer_with_fake_sdk(monkeypatch, [ServiceError(503), '{"ok":true}'])
+    assert analyzer.generate_json_with_retry("Return JSON", max_output_tokens=1234) == {"ok": True}
+    assert [call["config"].max_output_tokens for call in models.calls] == [1234, 1234]
+
+
 @pytest.mark.parametrize("status", [400, 401, 403, 404])
 def test_nonretryable_http_errors_stop_immediately(monkeypatch, status):
     analyzer, models, clock = analyzer_with_fake_sdk(monkeypatch, [ServiceError(status)])

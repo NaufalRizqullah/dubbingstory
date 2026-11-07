@@ -6,6 +6,7 @@ Subcommands:
     ingest    Download/validate video + read subtitles
     segment   Detect scenes + extract keyframes
     analyze   Visual understanding with Gemini
+    plan      Resume global story planning from saved visual evidence
     narrate   Generate narration scripts
     dub       Generate TTS audio
     render    Mix audio + render final video
@@ -446,6 +447,9 @@ def cmd_analyze(args, cfg):
     with open(storyboard_path, "w", encoding="utf-8") as f:
         json.dump(storyboard, f, ensure_ascii=False, indent=2)
 
+    from dubbingstory.story.checkpoint import write_analysis_checkpoint
+    write_analysis_checkpoint(project_dir)
+
     # V2: transform local scene facts into persistent global story artifacts.
     # This runs after vision so narration/selection can reason over the whole
     # story instead of independently describing one scene at a time.
@@ -470,6 +474,29 @@ def cmd_analyze(args, cfg):
     print(f"   Storyboard: {storyboard_path}")
 
     return storyboard
+
+
+# ==============================================================================
+# SUBCOMMAND: plan
+# ==============================================================================
+
+def cmd_plan(args, cfg):
+    """Resume text-only planning without repeating scene/frame analysis."""
+    from dubbingstory.story.checkpoint import load_analysis_checkpoint
+    from dubbingstory.story.story_planner import generate_story_artifacts
+
+    project_dir = _setup_project_dir(cfg, _resolve_project_name(args))
+    storyboard = load_analysis_checkpoint(
+        project_dir, require_temporal=bool(getattr(cfg, "narration_action_sync", False)))
+    subtitle_context = None
+    if getattr(cfg, "narration_source", "visual") == "audio":
+        with open(os.path.join(project_dir, "ingest_manifest.json"), encoding="utf-8") as handle:
+            subtitle_context = json.load(handle).get("subtitle_data")
+    print("Story planning: reusing verified visual evidence; no vision requests")
+    result = generate_story_artifacts(storyboard, subtitle_context=subtitle_context,
+                                      cfg=cfg, project_dir=project_dir)
+    print(f"Story planning complete: {project_dir}")
+    return result
 
 
 # ==============================================================================
@@ -1610,6 +1637,9 @@ def main():
         help="Parallel per-scene vision requests."
     )
 
+    p_plan = subparsers.add_parser("plan", help="Resume story planning from verified saved visual evidence")
+    p_plan.add_argument("--project", "-p", type=str, required=True)
+
     # ── narrate ───────────────────────────────────────────────────────────
     p_narrate = subparsers.add_parser("narrate", help="Generate narration scripts")
     p_narrate.add_argument("--project", "-p", type=str, required=True)
@@ -1714,6 +1744,7 @@ def main():
         "ingest": cmd_ingest,
         "segment": cmd_segment,
         "analyze": cmd_analyze,
+        "plan": cmd_plan,
         "narrate": cmd_narrate,
         "dub": cmd_dub,
         "render": cmd_render,

@@ -362,6 +362,7 @@ class GeminiVideoAnalyzer:
         response_validator=None,
         task_name: str = "json",
         model: str | None = None,
+        max_output_tokens: int | None = None,
     ) -> dict | list:
         """Generate text-only JSON while preserving the exact prompt across retries."""
         return self._generate_with_retry(
@@ -370,6 +371,7 @@ class GeminiVideoAnalyzer:
             response_validator=response_validator,
             task_name=task_name,
             model_override=model,
+            max_output_tokens=max_output_tokens,
         )
 
     def analyze_timed_frames(self, frames: list[dict], prompt: str,

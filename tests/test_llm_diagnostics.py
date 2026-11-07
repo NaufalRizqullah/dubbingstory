@@ -109,3 +109,15 @@ def test_usage_copies_only_integer_token_counts():
     assert response_usage(SimpleNamespace(prompt_token_count=2, candidates_token_count=3,
                                          total_token_count=5, thoughts_token_count=0), gemini=True) == {
         "prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5, "thoughts_tokens": 0}
+
+
+def test_capacity_metadata_retains_only_allowlisted_integer_counts(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    trace = LLMDiagnostics(enabled=True, path=path)
+    record(trace, token_budget={"input_tokens": 9000, "effective_context": 8192,
+                               "available_output_tokens": -1064, "deficit_tokens": 3112,
+                               "output_tokens": True, "api_key": "fixture-secret", "prompt": "private"})
+    row = json.loads(path.read_text())
+    assert row["token_budget"] == {"input_tokens": 9000, "effective_context": 8192,
+                                   "available_output_tokens": -1064, "deficit_tokens": 3112}
+    assert "fixture-secret" not in path.read_text() and "private" not in path.read_text()

@@ -17,6 +17,8 @@ _SECRET_VALUE = re.compile(
     r"(?i)(\b(?:[\w-]*(?:token|secret|signature|credential)|api[-_]?key|password|passwd|authorization|cookie)\b[\"']?\s*[:=]\s*)(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^\s,;&}]+)"
 )
 _QUERY_SECRET = re.compile(r"(?i)([?&](?:[\w-]*(?:token|key|secret|signature|credential)[\w-]*)=)[^&\s\"'<>]+")
+_BUDGET_FIELDS = frozenset({"input_tokens", "configured_context", "server_context", "effective_context",
+                            "output_tokens", "safety_margin", "available_output_tokens", "deficit_tokens"})
 
 
 class LLMDiagnostics:
@@ -110,7 +112,7 @@ class LLMDiagnostics:
     def record(self, *, call_id, task, provider, model, attempt, outcome,
                category=None, error_type=None, validation_error=None, raw_response=None, payload=None,
                finish_reason=None, usage=None, latency_seconds=None, http_status=None,
-               provider_request_id=None):
+               provider_request_id=None, token_budget=None):
         if not self.enabled:
             return
         try:
@@ -139,6 +141,11 @@ class LLMDiagnostics:
                 "payload": None if payload_truncated else safe_payload,
                 "payload_truncated": payload_truncated,
             }
+            if isinstance(token_budget, dict):
+                # Capacity is measured metadata, not model output. Do not send
+                # it through the credential-key filter that redacts "token".
+                record["token_budget"] = {key: value for key, value in token_budget.items()
+                                          if key in _BUDGET_FIELDS and type(value) is int}
             if payload_truncated:
                 record["payload_preview"] = serialized[:self.max_output_chars]
             if not self.path:

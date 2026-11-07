@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
+from dubbingstory.llm.batching import budgeted_groups, context_batching_enabled
+
 from dubbingstory.story.action_anchors import (
     canonical_action_anchors, normalized_tokens, preserve_action_phrases,
 )
@@ -16,7 +18,10 @@ from dubbingstory.story.gemini_json import (
 from dubbingstory.story.language_guard import payload_language_mismatch_reason
 from dubbingstory.story.narration_planner import build_narration_plan
 from dubbingstory.story.narration_qa import evaluate_narration
-from dubbingstory.story.prompt_templates import build_rewrite_prompt, build_v2_narration_prompt
+from dubbingstory.story.prompt_templates import (
+    batch_continuity_note, batch_story_context, narration_batch_plan,
+    build_rewrite_prompt, build_v2_narration_prompt,
+)
 from dubbingstory.story.story_planner import fallback_story_artifacts
 
 
@@ -49,6 +54,7 @@ def _call_json(
     language: str | None = None,
     task_name: str = "narration",
     payload_validator: Callable[[Any], str | None] | None = None,
+    max_output_tokens: int | None = None,
 ) -> Any:
     """Generate JSON with retries while preserving the selected language.
 
@@ -79,6 +85,8 @@ def _call_json(
             response_validator=response_validator if language or payload_validator else None,
             task_name=f"{task_name}-{language or 'generic'}",
             model=model,
+            **({"max_output_tokens": max_output_tokens}
+               if max_output_tokens is not None and hasattr(analyzer, "preflight") else {}),
         )
         validation_error = response_validator(payload)
         if validation_error:
@@ -415,6 +423,103 @@ def _fallback_narration(scenes: list[dict], narration_plan: dict, language: str)
     return _validate_narration(raw, scenes, narration_plan, language)
 
 
+def _batch_limits(cfg) -> tuple[int, int]:
+    size = int(getattr(cfg, "llm_batching_max_beats", 4))
+    tokens = int(getattr(cfg, "llm_batching_output_tokens", 2048))
+    if size <= 0 or tokens <= 0:
+        raise ValueError("Narration batch size and output token budget must be positive")
+    return size, tokens
+
+
+def _generate_batched_narration(*, scenes, narration_plan, story_plan, story_memory,
+                                language, style, style_config, hedging_threshold,
+                                analyzer, model, cfg) -> list[dict]:
+    entries = narration_plan.get("segments", []) or []
+    max_items, tokens = _batch_limits(cfg)
+    merged = []
+
+    def prompt_for(group):
+        group_plan = narration_batch_plan(narration_plan, group)
+        scoped_story, scoped_memory = batch_story_context(story_plan, story_memory, group)
+        return build_v2_narration_prompt(
+            scenes=scenes, narration_plan=group_plan, story_plan=scoped_story,
+            story_memory=scoped_memory, language=language, style=style,
+            style_config=style_config, hedging_threshold=hedging_threshold, mode="full",
+        ) + batch_continuity_note(group, entries, merged)
+
+    for index, group in enumerate(budgeted_groups(
+        entries, prompt_for, analyzer, task_name=f"full-narration-{language}",
+        max_items=max_items, max_output_tokens=tokens,
+    ), 1):
+        group_plan = narration_batch_plan(narration_plan, group)
+        raw = _extract_segment_list(_call_json(
+            analyzer, model, prompt_for(group), language=language,
+            task_name=f"full-narration-batch-{index}",
+            payload_validator=_narration_response_validator(group_plan), max_output_tokens=tokens,
+        ))
+        validated = _validate_narration(raw, scenes, group_plan, language)
+        merged.extend(validated)
+        print(f"   Narration batches: {len(merged)}/{len(entries)} beats validated")
+    # No caller receives any partial narration when a later group fails.
+    error = _narration_response_validator(narration_plan)(merged)
+    if error:
+        raise ValueError(error)
+    return merged
+
+
+def _batched_qa_rewrite(narration, *, qa, narration_plan, story_plan, language,
+                        style, style_config, analyzer, model, cfg, scenes):
+    entries = narration_plan.get("segments", []) or []
+    original = {item["scene_id"]: item for item in narration}
+    max_items, tokens = _batch_limits(cfg)
+    merged = []
+
+    def prompt_for(group):
+        scoped_story, _ = batch_story_context(story_plan, {}, group)
+        current = [{key: original[item["scene_id"]].get(key) for key in (
+            "scene_id", "text", "claims", "importance", "action_anchors")
+            if key in original[item["scene_id"]]} for item in group]
+        return build_rewrite_prompt(
+            current_segments=current, qa=qa, narration_plan=narration_batch_plan(narration_plan, group),
+            story_plan=scoped_story, language=language, style=style, style_config=style_config,
+        ) + batch_continuity_note(group, entries, merged)
+
+    for index, group in enumerate(budgeted_groups(
+        entries, prompt_for, analyzer, task_name=f"narration-rewrite-{language}",
+        max_items=max_items, max_output_tokens=tokens,
+    ), 1):
+        group_plan = narration_batch_plan(narration_plan, group)
+        base_validator = _narration_response_validator(group_plan)
+
+        def validator(payload):
+            error = base_validator(payload)
+            if error:
+                return error
+            for item in _extract_segment_list(payload):
+                try:
+                    preserve_action_phrases(item["text"], original[item["scene_id"]].get("action_anchors", []))
+                except ValueError as exc:
+                    return f"{item['scene_id']}: {exc}"
+            return None
+
+        validator.response_schema = base_validator.response_schema
+        raw = _extract_segment_list(_call_json(
+            analyzer, model, prompt_for(group), temperature=0.25, language=language,
+            task_name=f"narration-rewrite-batch-{index}", payload_validator=validator,
+            max_output_tokens=tokens,
+        ))
+        revised = _validate_narration(raw, scenes, group_plan, language)
+        for item in revised:
+            if item.get("action_sync_enabled"):
+                anchors = original[item["scene_id"]].get("action_anchors", [])
+                item["action_anchors"] = canonical_action_anchors(anchors, item["text"], item)
+        merged.extend(revised)
+    error = _narration_response_validator(narration_plan)(merged)
+    if error:
+        raise ValueError(error)
+    return merged
+
+
 def _maybe_rewrite(
     narration: list[dict],
     *,
@@ -433,6 +538,19 @@ def _maybe_rewrite(
         return narration, qa
 
     try:
+        if context_batching_enabled(cfg) and narration_plan.get("mode", "full") == "full":
+            revised = _batched_qa_rewrite(
+                narration, qa=qa, narration_plan=narration_plan, story_plan=story_plan,
+                language=language, style=style, style_config=style_config,
+                analyzer=analyzer, model=model, cfg=cfg, scenes=scenes,
+            )
+            revised_qa = evaluate_narration(revised, narration_plan, language=language)
+            before = (len(qa.get("issues", [])), abs(1.0 - float(qa.get("target_word_ratio", 1.0))))
+            after = (len(revised_qa.get("issues", [])), abs(1.0 - float(revised_qa.get("target_word_ratio", 1.0))))
+            if after <= before:
+                print(f"   {language.upper()} batched QA rewrite applied: {qa.get('issues', [])} -> {revised_qa.get('issues', [])}")
+                return revised, revised_qa
+            return narration, qa
         prompt = build_rewrite_prompt(
             current_segments=[
                 {
@@ -647,31 +765,29 @@ def _generate(
         if language not in {"id", "en"}:
             raise ValueError(f"Unsupported narration language: {raw_language!r}")
         print(f"\n   ✍️ Generating {language.upper()} {mode.upper()} narration (story-aware)...")
-        prompt = build_v2_narration_prompt(
-            scenes=scenes,
-            narration_plan=narration_plan,
-            story_plan=story_plan,
-            story_memory=story_memory,
-            language=language,
-            style=style,
-            style_config=style_config,
-            hedging_threshold=hedging_threshold,
-            mode=mode,
-        )
         try:
-            raw = _extract_segment_list(
-                _call_json(
-                    analyzer,
-                    model,
-                    prompt,
-                    temperature=0.45,
-                    language=language,
-                    task_name=f"{mode}-narration",
-                    payload_validator=_narration_response_validator(narration_plan)
-                    if strict_text_routing(cfg) or narration_plan.get("action_sync_enabled") else None,
+            if mode == "full" and context_batching_enabled(cfg):
+                narration = _generate_batched_narration(
+                    scenes=scenes, narration_plan=narration_plan, story_plan=story_plan,
+                    story_memory=story_memory, language=language, style=style,
+                    style_config=style_config, hedging_threshold=hedging_threshold,
+                    analyzer=analyzer, model=model, cfg=cfg,
                 )
-            )
-            narration = _validate_narration(raw, scenes, narration_plan, language)
+            else:
+                prompt = build_v2_narration_prompt(
+                    scenes=scenes, narration_plan=narration_plan, story_plan=story_plan,
+                    story_memory=story_memory, language=language, style=style,
+                    style_config=style_config, hedging_threshold=hedging_threshold, mode=mode,
+                )
+                raw = _extract_segment_list(
+                    _call_json(
+                        analyzer, model, prompt, temperature=0.45, language=language,
+                        task_name=f"{mode}-narration",
+                        payload_validator=_narration_response_validator(narration_plan)
+                        if strict_text_routing(cfg) or narration_plan.get("action_sync_enabled") else None,
+                    )
+                )
+                narration = _validate_narration(raw, scenes, narration_plan, language)
             narration, qa = _maybe_rewrite(
                 narration,
                 language=language,
@@ -698,6 +814,13 @@ def _generate(
         except Exception as exc:
             if narration_plan.get("action_sync_enabled"):
                 raise RuntimeError(f"{language} action-grounded narration failed: {exc}") from exc
+            if mode == "full" and context_batching_enabled(cfg):
+                # A completed prefix is not a complete video narration. The
+                # opt-in batch path must not publish a template after failure.
+                from dubbingstory.llm.text_client import TextGenerationError
+                if isinstance(exc, TextGenerationError):
+                    raise
+                raise TextGenerationError(f"{mode}-narration: batched narration failed validation") from None
             raise_if_strict_text_error(cfg, exc, f"{mode}-narration")
             print(f"   ❌ {language.upper()} narration failed: {exc}")
             result[language] = _fallback_narration(scenes, narration_plan, language)

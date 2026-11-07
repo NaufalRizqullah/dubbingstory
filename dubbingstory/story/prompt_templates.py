@@ -170,6 +170,78 @@ def _examples(style_config: dict, language: str) -> str:
     return "\n".join(f"- {value}" for value in rendered[:4]) or "- No fixed example; follow the style rules."
 
 
+def _context_excerpt(value, limit: int = 600) -> str:
+    """Bound secondary continuity context, never the current beat's evidence."""
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(" ", 1)[0] + " … [context excerpt]"
+
+
+def batch_story_context(story_plan: dict, story_memory: dict, entries: list[dict]) -> tuple[dict, dict]:
+    """Scope a global plan to one group; original artifacts remain complete.
+
+    These fields provide continuity only. Complete selected-beat evidence and
+    required anchors are supplied separately, and may not be discarded to fit.
+    """
+    ids = {str(sid) for entry in entries
+           for sid in entry.get("covers_scene_ids", [entry.get("scene_id")])}
+    ids.update(str(entry.get("scene_id")) for entry in entries)
+    roles = [item for item in story_plan.get("scene_roles", []) or []
+             if str(item.get("scene_id")) in ids]
+    plan = {key: _context_excerpt(story_plan.get(key), limit)
+            for key, limit in (("premise", 600), ("main_goal", 300), ("central_conflict", 300))}
+    plan["scene_roles"] = [{key: item.get(key) for key in (
+        "scene_id", "role", "story_importance", "plot_thread", "reason")}
+        for item in roles]
+    plan["context_scope"] = "Current group only; other scenes remain in the complete story artifact."
+    memory = {}
+    omitted = {}
+    for key in ("known_facts", "continuity_rules", "open_questions"):
+        values = story_memory.get(key, []) or []
+        selected = values if len(values) <= 8 else values[:4] + values[-4:]
+        memory[key] = [_context_excerpt(value, 240) for value in selected]
+        omitted[key] = max(0, len(values) - len(selected))
+    for key in ("characters", "important_objects"):
+        values = story_memory.get(key, story_plan.get(key, [])) or []
+        memory[key] = [{field: _context_excerpt(item.get(field), 160)
+                        for field in ("id", "label", "goal", "purpose", "state") if item.get(field)}
+                       for item in values[:4] if isinstance(item, dict)]
+        omitted[key] = max(0, len(values) - 4)
+    memory["context_entries_omitted"] = omitted
+    return plan, memory
+
+
+def narration_batch_plan(plan: dict, entries: list[dict]) -> dict:
+    """Keep fixed beat timings while updating group-level QA totals."""
+    return {**plan, "segments": entries, "narration_beat_count": len(entries),
+            "total_target_words": sum(int(item.get("target_words", 0)) for item in entries),
+            "total_duration": sum(max(0.0, float(item.get("timeline_end", 0))
+                                       - float(item.get("timeline_start", 0))) for item in entries)}
+
+
+def batch_continuity_note(entries: list[dict], all_entries: list[dict], previous: list[dict],
+                          *, previous_field: str = "text") -> str:
+    positions = {str(entry["scene_id"]): index for index, entry in enumerate(all_entries)}
+    start = positions[str(entries[0]["scene_id"])]
+    end = positions[str(entries[-1]["scene_id"])] + 1
+    next_entry = all_entries[end] if end < len(all_entries) else None
+    context = {
+        "beat_ids": [str(entry["scene_id"]) for entry in entries],
+        "is_video_opening": start == 0, "is_video_ending": end == len(all_entries),
+        "previous_narration" if previous_field == "text" else "previous_planning_intents": [
+            {"scene_id": item["scene_id"], previous_field: _context_excerpt(item.get(previous_field), 700)}
+            for item in previous[-2:]],
+        "next_beat": ({"scene_id": next_entry["scene_id"], "story_role": next_entry.get("story_role"),
+                       "intent": _context_excerpt(next_entry.get("intent"), 300)} if next_entry else None),
+    }
+    return ("\nBATCH CONTINUITY (context only, never additional output rows):\n"
+            + json.dumps(context, ensure_ascii=False)
+            + "\nWrite only beat_ids above. Opening/closing rules apply only when is_video_opening/ending is true. "
+              "Continue the previous narration or planning intent without repeating facts or starting a new hook. "
+              "Leave next_beat actions for that beat; do not invent missing context.\n")
+
+
 def _output_contract(narration_plan: dict) -> str:
     """Use the same complete field contract for initial and QA generation."""
     entries = narration_plan.get("segments", []) or []

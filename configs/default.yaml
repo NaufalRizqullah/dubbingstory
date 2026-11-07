@@ -86,6 +86,14 @@ vision:
 # ── Bounded Text Generation ─────────────────────────────────────────────────
 llm:
   provider: "gemini"               # "gemini" | "local" (local needs no Gemini key)
+  preflight:
+    enabled: false                 # Social notebook enables tokenizer checks before cloud/fallback
+    safety_margin: 256             # Reserve space beyond requested output
+  batching:
+    enabled: false                 # Opt-in bounded story/narration groups; no dropped scene IDs
+    max_scenes: 4
+    max_beats: 4
+    output_tokens: 2048
   gemini:                          # Also bounds Gemini vision calls
     max_attempts: 3                # TOTAL calls including the first
     timeout_seconds: 30

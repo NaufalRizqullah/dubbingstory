@@ -11,12 +11,14 @@ import json
 import math
 from typing import Any
 
+from dubbingstory.llm.batching import budgeted_groups, context_batching_enabled
 from dubbingstory.story.action_anchors import compact_visual_events, scene_visual_events, select_anchor_events
 
 from dubbingstory.story.gemini_json import (
-    generate_story_json, raise_if_strict_text_error, strict_text_routing,
+    build_story_client, generate_story_json, raise_if_strict_text_error, strict_text_routing,
     text_llm_available, validate_scene_items, validate_string_list,
 )
+from dubbingstory.story.prompt_templates import batch_story_context, batch_continuity_note
 
 
 PLAN_REFINEMENT_PROMPT = """You are planning a coherent video narration, not writing the narration itself.
@@ -395,7 +397,61 @@ def _refinement_response_validator(entries: list[dict]):
                     return "continuity and transition fields must be strings"
         return None
 
+    properties = {
+        "scene_id": {"type": "string", "enum": [str(entry["scene_id"]) for entry in entries]},
+        "intent": {"type": "string", "minLength": 1},
+        "must_explain": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "continuity_from_previous": {"type": "string"},
+        "transition_strategy": {"type": "string"},
+        "avoid_repeating": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    }
+    validator.response_schema = {
+        "type": "array", "minItems": len(entries), "maxItems": len(entries),
+        "items": {"type": "object", "properties": properties,
+                  "required": list(properties), "additionalProperties": False},
+    }
     return validator
+
+
+def _batched_refinement(entries, compact_scenes, *, story_plan, story_memory, cfg):
+    """Return a fully validated refinement before mutating any source entries."""
+    client, model = build_story_client(cfg, model_attr="story_model")
+    compact_by_id = {item["scene_id"]: item for item in compact_scenes}
+    max_items = int(getattr(cfg, "llm_batching_max_beats", 4))
+    output_tokens = int(getattr(cfg, "llm_batching_output_tokens", 2048))
+    if max_items <= 0 or output_tokens <= 0:
+        raise ValueError("Refinement batch size and output token budget must be positive")
+    merged = []
+
+    def prompt_for(group):
+        scoped_story, scoped_memory = batch_story_context(story_plan, story_memory, group)
+        return PLAN_REFINEMENT_PROMPT.format(
+            story_plan_json=json.dumps(scoped_story, ensure_ascii=False),
+            story_memory_json=json.dumps(scoped_memory, ensure_ascii=False),
+            mode="full", scenes_json=json.dumps([compact_by_id[item["scene_id"]] for item in group], ensure_ascii=False),
+        ) + batch_continuity_note(group, entries, merged, previous_field="intent")
+
+    for index, group in enumerate(budgeted_groups(
+        entries, prompt_for, client, task_name="narration-plan-refine",
+        max_items=max_items, max_output_tokens=output_tokens,
+    ), 1):
+        validator = _refinement_response_validator(group)
+        payload = client.generate_json_with_retry(
+            prompt_for(group), task_name=f"narration-plan-refine-batch-{index}",
+            temperature=0.2, model=model, response_validator=validator,
+            **({"max_output_tokens": output_tokens} if hasattr(client, "preflight") else {}),
+        )
+        error = validator(payload)
+        if error:
+            raise ValueError(error)
+        # Output order may differ; deterministic playback order is authoritative.
+        by_id = {item["scene_id"]: item for item in payload}
+        merged.extend(by_id[item["scene_id"]] for item in group)
+        print(f"   Narration refinement: {len(merged)}/{len(entries)} beats validated")
+    error = _refinement_response_validator(entries)(merged)
+    if error:
+        raise ValueError(error)
+    return merged
 
 
 def _refine_plan_with_gemini(
@@ -433,25 +489,25 @@ def _refine_plan_with_gemini(
             }
         )
 
-    anchored = any(entry.get("action_sync_enabled") for entry in entries)
-    plan_json = json.dumps(story_plan, ensure_ascii=False, indent=None if anchored else 2)
-    memory_json = json.dumps(story_memory, ensure_ascii=False, indent=None if anchored else 2)
-    prompt = PLAN_REFINEMENT_PROMPT.format(
-        story_plan_json=plan_json if anchored or strict_text_routing(cfg) else plan_json[:24000],
-        story_memory_json=memory_json if anchored or strict_text_routing(cfg) else memory_json[:12000],
-        mode=mode,
-        scenes_json=json.dumps(compact_scenes, ensure_ascii=False, indent=None if anchored else 2),
-    )
-
     try:
-        raw = generate_story_json(
-            cfg,
-            prompt,
-            task_name="narration-plan-refine",
-            temperature=0.2,
-            model_attr="story_model",
-            response_validator=_refinement_response_validator(entries) if strict_text_routing(cfg) else None,
-        )
+        if mode == "full" and context_batching_enabled(cfg):
+            raw = _batched_refinement(entries, compact_scenes, story_plan=story_plan,
+                                      story_memory=story_memory, cfg=cfg)
+        else:
+            anchored = any(entry.get("action_sync_enabled") for entry in entries)
+            plan_json = json.dumps(story_plan, ensure_ascii=False, indent=None if anchored else 2)
+            memory_json = json.dumps(story_memory, ensure_ascii=False, indent=None if anchored else 2)
+            prompt = PLAN_REFINEMENT_PROMPT.format(
+                story_plan_json=plan_json if anchored or strict_text_routing(cfg) else plan_json[:24000],
+                story_memory_json=memory_json if anchored or strict_text_routing(cfg) else memory_json[:12000],
+                mode=mode,
+                scenes_json=json.dumps(compact_scenes, ensure_ascii=False, indent=None if anchored else 2),
+            )
+            raw = generate_story_json(
+                cfg, prompt, task_name="narration-plan-refine", temperature=0.2,
+                model_attr="story_model",
+                response_validator=_refinement_response_validator(entries) if strict_text_routing(cfg) else None,
+            )
         if not isinstance(raw, list):
             return
         by_id = {

@@ -11,6 +11,19 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.10.4]
+
+### Added
+- Opt-in tokenizer preflight for text/fallback capacity, including numeric input/context/output/margin diagnostics before generation. Keep retry limits and fail explicitly for a single item that cannot fit.
+- Bounded hierarchical global story planning and full-mode narration/refinement/QA groups, retaining complete scene/beat coverage, chronology, evidence references and action anchors. Cache validated planning work for resume.
+- Add `plan --project` and social notebook `START_FROM="plan"` to resume text planning from verified saved visual evidence. New source-bound analysis checkpoints and legacy dense-timeline validation prevent stale-source resume.
+- Per-run notebook configuration, stage/server logs and LLM trace under `runs/<run_id>`, with a sanitized diagnostics ZIP on success or failure. Exclude stale project-level traces from new result bundles.
+
+### Compatibility and validation
+- Ordinary CLI defaults leave preflight/batching disabled; social notebook enables both with four-scene/four-beat initial groups. Preserve the attached notebook's source/audio settings, one-second visual sampling, existing CUDA/model settings and native video timeline.
+- User's 107.9-second run completed 20 scene analyses and 119 visual observations, then failed at Gemini story planning (504) and local context preflight. Provided standalone logs/trace belonged to a different shorter project; no claim of a visual/GPU failure is made.
+- Add mocked capacity, many-scene planning/narration, resume, cache, diagnostics isolation and notebook lifecycle regressions. Verification on the development computer is static only; test execution and audiovisual/model validation remain for Kaggle.
+
 ## [0.10.3]
 
 ### Fixed

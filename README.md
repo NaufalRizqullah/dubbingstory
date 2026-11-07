@@ -113,6 +113,8 @@ Jika storyboard berhasil tetapi persiapan temporal gagal, lihat [pemulihan ekstr
 
 Jika narasi/revisi TTS ditolak dengan `response_validation` atau `schema_or_language_rejected`, lihat [diagnosis narasi dan structured output](docs/native-storytelling.md#diagnosis-narasi-dan-structured-output). Kontrak prompt dan skema kini diselaraskan, dan notebook menyimpan `llm_attempts.jsonl` berisi keluaran yang disanitasi serta alasan validasi. [Dua model lokal](docs/native-storytelling.md#qwen-vision-dan-penulis-lokal-terpisah) dapat dipilih untuk Qwen vision dan penulis lain pada GPU terpisah; default server bersama tetap tersedia.
 
+Untuk video dengan banyak scene, notebook menyediakan [planning dan narasi bertahap sesuai budget token](docs/native-storytelling.md#video-panjang-dan-budget-teks). Jika visual sudah selesai tetapi global story gagal, lanjutkan dengan `START_FROM="plan"` atau `dubbingstory plan --project NAMA_PROJECT`. Hasil visual diverifikasi dan digunakan ulang tanpa memanggil vision. ZIP `diagnostics_<run_id>.zip` tersedia juga ketika pipeline gagal; snapshot config, log dan trace diambil dari run yang sama.
+
 Jika download YouTube gagal di notebook, ikuti [diagnostik download Kaggle](docs/native-storytelling.md#download-youtube-di-kaggle). Notebook repository memasang `yt-dlp[default]` sebelum download dan mencetak versi yang digunakan; downloader mengikuti pilihan client bawaan yt-dlp.
 
 Untuk mengubah video 16:9 menjadi canvas 9:16 dengan dua layer seperti editor video:

@@ -275,6 +275,63 @@ Model berbeda memakai dua GPU: Qwen vision pada GPU 0/port `PORT`, penulis pada 
 
 Server teks memakai `--dtype half` dan `--language-model-only` dari preset vLLM 0.27.1. Wheel CUDA existing tidak diganti. `LOCAL_TEXT_GPU_MEMORY_UTILIZATION` dan batas konteks teks dapat diatur terpisah; jangan langsung memakai konteks maksimum model. Endpoint model pengganti harus menyediakan `/tokenize`, `/v1/chat/completions`, dan decoding `json_schema`. Mengganti nama model saja tidak memastikan chat template, hardware, akses model, atau kualitasnya cocok.
 
+## Video panjang dan budget teks
+
+Run pengguna untuk video 107,9 detik berhasil memproses 20 scene dan 119 sampel visual. Kegagalan terjadi sesudah visual selesai: global story planner mendapat HTTP 504 tiga kali dari Gemini, kemudian fallback lokal menolak prompt yang melebihi kapasitas konteks. Ini berbeda dari crash vLLM atau error JSON narasi. Notebook/run panjang tersebut juga berbeda project dari log analyze/narrate/trace pendek yang dilampirkan bersamaan.
+
+Workflow baru mengukur prompt memakai `/tokenize` pada endpoint lokal yang dikonfigurasi. Jika preflight aktif dan route memakai lokal atau menjanjikan fallback lokal, kapasitas diperiksa sebelum generation cloud. Budget mencakup input yang sudah dibungkus chat template, output yang diminta, kapasitas server/config efektif, dan margin. Penolakan konteks mencatat angka-angka tersebut meskipun belum ada respons model. Menambah jumlah retry tidak memperbaiki prompt yang tidak muat.
+
+```yaml
+llm:
+  preflight:
+    enabled: true
+    safety_margin: 256
+  batching:
+    enabled: true
+    max_scenes: 4
+    max_beats: 4
+    output_tokens: 2048
+```
+
+CLI biasa mempertahankan kedua toggle `enabled: false` untuk kompatibilitas. Notebook sosial mengaktifkan `TEXT_PREFLIGHT` dan `TEXT_BATCHING`; pengaturan audio, sampling satu detik, provider, wheel CUDA, dan konteks model existing dipertahankan. `TEXT_BATCH_MAX_SCENES`/`TEXT_BATCH_MAX_BEATS` adalah batas awal kelompok, yang dapat dipecah lagi jika prompt tidak muat. Satu scene/beat yang masih terlalu besar dihentikan dengan error eksplisit; evidence dan scene terakhir tidak dibuang diam-diam. Menaikkan output reserve justru mengurangi ruang input.
+
+Pemecahan otomatis berlaku pada prompt sebelum generation. Prompt koreksi setelah respons gagal validasi dihitung ulang, tetapi tambahan koreksi yang melampaui konteks saat retry masih menghentikan tugas tersebut. Untuk kasus ini turunkan ukuran kelompok awal (misalnya dari 4 ke 2) atau naikkan `TEXT_SAFETY_MARGIN` sebelum mengulang; jangan menambah retry. Batas ini tidak menyebabkan pemotongan evidence atau publikasi hasil parsial.
+
+Global story dibentuk dari kelompok scene berurutan, kemudian ringkasannya digabung bertahap. Semua peran/ID scene tetap digabung secara deterministik dan diperiksa terhadap sumber; reduction tidak mengganti waktu event. Refinement rencana narasi, penulisan, dan QA full-mode juga dikelompokkan, dengan konteks cerita yang dibatasi serta konteks tetangga untuk kesinambungan. Validasi bahasa, anchor, cakupan beat, dan QA gabungan tetap berlaku. Timestamp visual dan output video tidak berubah. Jalur summary existing tetap dipertahankan; fitur ini tidak mengubahnya menjadi native full mode.
+
+Batch planning yang berhasil disimpan sebagai cache tervalidasi berdasarkan evidence, prompt, kontrak dan konfigurasi terkait. Cache menyimpan keluaran yang dapat digunakan ulang, bukan credential atau prompt request. Gagal di tengah proses tidak menerbitkan story plan/naskah parsial sebagai hasil selesai. Cache yang tidak cocok dengan evidence/kontrak diperiksa ulang atau dihitung kembali.
+
+### Melanjutkan sesudah visual selesai
+
+```bash
+python main.py --config notebook_runtime.yaml plan --project NAMA_PROJECT
+```
+
+Di notebook pilih `START_FROM="plan"`, lalu jalankan ulang konfigurasi/Secrets dan cell pipeline. Jalur ini menjalankan plan → narrate → dub → render, tanpa segment atau vision. Jangan menghapus source, segment manifest, storyboard, maupun visual timeline yang sudah berhasil. `analysis_checkpoint.json` mengikat hasil visual baru pada hash sumber, segment manifest dan storyboard. Run dense lama yang belum memiliki checkpoint baru dapat memakai bukti hash source/timeline yang sudah disimpan; evidence tidak lengkap atau tidak cocok ditolak. Run non-temporal lama perlu analyze sekali untuk membuat checkpoint sumber.
+
+Untuk server terpisah, resume `plan` memuat model teks saja. Server bersama tetap menggunakan model existing; `LOCAL_TEXT_MAX_MODEL_LEN` hanya berlaku saat model teks dipisah. Mode data parallel tidak otomatis memperbesar konteks per request. Kapasitas GPU dan kualitas hasil kelompok tetap harus diuji di Kaggle.
+
+### Diagnostik satu run
+
+Setiap eksekusi pipeline notebook membuat `PROJECT_DIR/runs/<run_id>/` dengan:
+
+- `run_manifest.json`: project, ID run, status dan urutan tahap.
+- `notebook_runtime.yaml`: snapshot konfigurasi yang telah disanitasi.
+- `notebook_<stage>.log` dan log server yang benar-benar dimulai pada run ini.
+- `llm_attempts.jsonl`: trace per-attempt dan angka token preflight bila diagnostics diaktifkan.
+
+Setelah cleanup server, ZIP `diagnostics_<run_id>.zip` dibuat juga ketika tahap gagal. Hanya log yang terdaftar pada run tersebut serta trace dengan ID run yang sama dimasukkan; log lama di root project tidak otomatis diambil. Log dibatasi hingga 8 MiB terakhir per file dalam ZIP, dengan penanda jika dipotong. Nilai credential yang telah diberikan ke notebook disamarkan; file media, `.env`, isi notebook dan prompt request tidak dikumpulkan. Trace dapat memuat narasi, jadi tetap periksa isi sebelum membagikannya. Kegagalan membuat ZIP tidak menutupi error pipeline asli.
+
+Tests baru menggunakan tokenizer/provider palsu, fixture scene banyak, cache invalidation, checkpoint sumber, dan ZIP antar-run. Tidak ada tests atau model yang dijalankan pada komputer development. Di Kaggle, verifikasi run 20 scene: setiap ID muncul tepat sekali, seluruh 119 observasi tetap tersedia, global story/narasi lengkap, serta resume `plan` tidak menambah panggilan vision. Periksa kesinambungan antarbatch dan durasi/sinkronisasi suara pada video final.
+
+Jalankan regression test berikut dari root checkout yang sudah diperbarui di Kaggle. Test ini memakai provider palsu dan tidak memuat model:
+
+```bash
+python -m pytest -q tests/test_text_budget.py tests/test_text_llm.py tests/test_bounded_gemini.py tests/test_llm_diagnostics.py tests/test_hierarchical_story.py tests/test_planning_cache.py tests/test_batched_narration.py tests/test_story_checkpoint.py tests/test_run_diagnostics.py tests/test_social_notebook.py tests/test_text_routing_integration.py
+```
+
+Notebook baru memerlukan perubahan source repository ini juga; memperbarui notebook saja tidak memperbarui checkout existing. Cell setup memeriksa fitur yang dibutuhkan sebelum pipeline berjalan. Default `START_FROM="segment"` tetap dipertahankan untuk video baru; pilih `plan` hanya jika artefak visual lengkap dari project yang sama masih tersedia.
+
 ## Konflik CUDA saat startup vLLM
 
 Log yang diterima pada 28 Oktober 2026 menunjukkan ingest RedNote berhasil, lalu `vllm_server.log` berhenti pada import `transformers.audio_utils` → `torchaudio`, sebelum model dimuat. Pesan akhirnya menyebut **PyTorch CUDA 13.0** dan **TorchAudio CUDA 12.8**. Ini konflik build dependency; menambah retry Gemini atau waktu tunggu server tidak memperbaikinya.

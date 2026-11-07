@@ -190,6 +190,7 @@ def test_analyze_preserves_storyboard_but_does_not_hide_text_route_failure(monke
     from dubbingstory import cli
     from dubbingstory.vision import scene_understanding
 
+    (tmp_path / "source.mp4").write_bytes(b"source fixture; never decoded")
     frame = tmp_path / "frame.jpg"
     frame.write_bytes(b"mock frame; never decoded")
     (tmp_path / "segment_manifest.json").write_text(json.dumps({
@@ -207,3 +208,4 @@ def test_analyze_preserves_storyboard_but_does_not_hide_text_route_failure(monke
     with pytest.raises(TextGenerationError, match="local route exhausted"):
         cli.cmd_analyze(SimpleNamespace(), local_config())
     assert json.loads((tmp_path / "storyboard.json").read_text(encoding="utf-8")) == BOARD
+    assert json.loads((tmp_path / "analysis_checkpoint.json").read_text())["status"] == "complete"

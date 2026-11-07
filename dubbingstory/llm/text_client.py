@@ -25,6 +25,29 @@ class TextGenerationError(RuntimeError):
     """A configured text route failed; do not substitute invented narration."""
 
 
+class ContextBudgetError(TextGenerationError):
+    """Exact tokenizer capacity failure, available to callers that split work."""
+
+    def __init__(self, budget: dict):
+        self.budget = dict(budget)
+        super().__init__(
+            "context_budget_exceeded: "
+            f"input={budget['input_tokens']}, output={budget['output_tokens']}, "
+            f"margin={budget['safety_margin']}, context={budget['effective_context']}, "
+            f"deficit={budget['deficit_tokens']} tokens. Split the request into smaller groups "
+            "or increase the configured and server text context; evidence was not truncated."
+        )
+
+
+_LOCAL_SYSTEM = (
+    'Follow the supplied video evidence, language and JSON contract. '
+    'Return a JSON object with exactly one key "result" whose value is '
+    'the requested JSON object or array. The user output contract describes '
+    'the VALUE of result; always wrap that value in {"result": ...}. '
+    'Do not add facts, markdown or commentary.'
+)
+
+
 def strict_text_routing(cfg) -> bool:
     return (getattr(cfg, "llm_provider", "gemini") == "local"
             or bool(getattr(cfg, "llm_fallback_enabled", False)))
@@ -78,6 +101,90 @@ class TextLLMClient:
             raise TextGenerationError("llm.provider must be gemini or local")
         self.fallback = bool(getattr(cfg, "llm_fallback_enabled", False))
         self.diagnostics = LLMDiagnostics.from_config(cfg)
+
+    def _preflight_enabled(self) -> bool:
+        return bool(getattr(self.cfg, "llm_preflight_enabled", False)
+                    or getattr(self.cfg, "llm_batching_enabled", False))
+
+    def _local_endpoint(self) -> tuple[str, str]:
+        base_url = str(getattr(self.cfg, "llm_local_base_url", "http://127.0.0.1:8000/v1")).rstrip("/")
+        url = urlsplit(base_url)
+        if (url.scheme not in {"http", "https"} or url.hostname not in {"localhost", "127.0.0.1", "::1"}
+                or url.username or url.password or url.query or url.fragment or url.path != "/v1"):
+            raise TextGenerationError("llm.local.base_url must be a loopback vLLM URL ending in /v1")
+        return base_url, str(getattr(self.cfg, "llm_local_model", "Qwen/Qwen3-VL-4B-Instruct"))
+
+    def _output_tokens(self, requested=None) -> int:
+        if requested is None:
+            return _positive_int(self.cfg, "llm_local_max_tokens", 2048)
+        if type(requested) is not int or requested <= 0:
+            raise TextGenerationError("max_output_tokens must be a positive integer")
+        return requested
+
+    @staticmethod
+    def _messages(prompt, correction="") -> list[dict]:
+        return [{"role": "system", "content": _LOCAL_SYSTEM + correction},
+                {"role": "user", "content": prompt}]
+
+    def _token_budget(self, session, base_url, local_model, messages, output_tokens, timeout, deadline):
+        tokenized = self._post(session, base_url[:-3] + "/tokenize",
+                               {"model": local_model, "messages": messages,
+                                "add_generation_prompt": True}, timeout, deadline)
+        count, server_window = tokenized.get("count"), tokenized.get("max_model_len")
+        if type(count) is not int or count < 0 or type(server_window) is not int or server_window <= 0:
+            raise _LocalFailure("invalid_tokenizer_response", retryable=False)
+        configured = _positive_int(self.cfg, "llm_local_context_window", 10240)
+        margin = (_positive_int(self.cfg, "llm_preflight_safety_margin", 256)
+                  if self._preflight_enabled() else 64)
+        effective = min(configured, server_window)
+        available = effective - count - margin
+        budget = dict(input_tokens=count, configured_context=configured, server_context=server_window,
+                      effective_context=effective, output_tokens=output_tokens, safety_margin=margin,
+                      available_output_tokens=available, deficit_tokens=max(0, output_tokens - available))
+        if budget["deficit_tokens"]:
+            raise ContextBudgetError(budget)
+        return budget
+
+    def preflight(self, prompt, *, task_name="text", max_output_tokens=None) -> dict:
+        """Check exact local/fallback capacity without generation or routing changes.
+
+        Cloud-only routing has no local capacity constraint. Opting out preserves
+        the historical local check at generation time, including repair prompts.
+        """
+        if not self._preflight_enabled() or not (self.provider == "local" or self.fallback):
+            return {}
+        base_url, local_model = self._local_endpoint()
+        output_tokens = self._output_tokens(max_output_tokens)
+        timeout = _positive(self.cfg, "llm_local_timeout_seconds", 60)
+        duration = min(timeout, _positive(self.cfg, "llm_local_budget_seconds", 120))
+        started = time.monotonic()
+        call_id = uuid4().hex
+        token_budget = None
+        try:
+            with requests.Session() as session:
+                session.trust_env = False
+                token_budget = self._token_budget(
+                    session, base_url, local_model, self._messages(prompt), output_tokens,
+                    timeout, started + duration)
+        except ContextBudgetError as exc:
+            self.diagnostics.record(
+                call_id=call_id, task=task_name, provider="local", model=local_model, attempt=0,
+                outcome="rejected", category="context_budget_exceeded", error_type=type(exc).__name__,
+                token_budget=exc.budget, latency_seconds=time.monotonic() - started)
+            print(f"   LLM {task_name}: {exc}")
+            raise
+        except (_LocalFailure, requests.RequestException, ValueError, TypeError) as exc:
+            category = exc.category if isinstance(exc, _LocalFailure) else "local_preflight_transport_error"
+            self.diagnostics.record(
+                call_id=call_id, task=task_name, provider="local", model=local_model, attempt=0,
+                outcome="rejected", category=category, error_type=type(exc).__name__,
+                http_status=getattr(exc, "status_code", None), latency_seconds=time.monotonic() - started)
+            raise TextGenerationError(f"Local text preflight failed ({category}); check the text server before retrying.") from None
+        self.diagnostics.record(
+            call_id=call_id, task=task_name, provider="local", model=local_model, attempt=0,
+            outcome="accepted", category="context_preflight", token_budget=token_budget,
+            latency_seconds=time.monotonic() - started)
+        return token_budget
 
     def _read_state(self) -> dict:
         run_id = str(getattr(self.cfg, "llm_fallback_run_id", "") or "")
@@ -153,11 +260,16 @@ class TextLLMClient:
                 pass
 
     def generate_json_with_retry(self, prompt, *, temperature=0.2,
-                                 response_validator=None, task_name="text", model=None):
+                                 response_validator=None, task_name="text", model=None,
+                                 max_output_tokens=None):
         kwargs = dict(temperature=temperature, response_validator=response_validator,
                       task_name=task_name, model=model or self.model, _call_id=uuid4().hex)
+        if max_output_tokens is not None:
+            kwargs["max_output_tokens"] = self._output_tokens(max_output_tokens)
         if self.provider == "local" or (self.fallback and self._read_state()):
             return self._generate_local(prompt, **kwargs)
+
+        self.preflight(prompt, task_name=task_name + "-preflight", max_output_tokens=max_output_tokens)
 
         from dubbingstory.vision.gemini_analyzer import GeminiGenerationError
 
@@ -179,19 +291,13 @@ class TextLLMClient:
             return self._generate_local(prompt, **kwargs)
 
     def _generate_local(self, prompt, *, temperature, response_validator, task_name, model,
-                        _call_id=None):
+                        _call_id=None, max_output_tokens=None):
         del model  # Cloud model names must never leak into the local request.
-        base_url = str(getattr(self.cfg, "llm_local_base_url", "http://127.0.0.1:8000/v1")).rstrip("/")
-        url = urlsplit(base_url)
-        if (url.scheme not in {"http", "https"} or url.hostname not in {"localhost", "127.0.0.1", "::1"}
-                or url.username or url.password or url.query or url.fragment or url.path != "/v1"):
-            raise TextGenerationError("llm.local.base_url must be a loopback vLLM URL ending in /v1")
-        local_model = str(getattr(self.cfg, "llm_local_model", "Qwen/Qwen3-VL-4B-Instruct"))
+        base_url, local_model = self._local_endpoint()
         timeout = _positive(self.cfg, "llm_local_timeout_seconds", 60)
         budget = _positive(self.cfg, "llm_local_budget_seconds", 120)
         attempts = _positive_int(self.cfg, "llm_local_max_attempts", 2)
-        max_tokens = _positive_int(self.cfg, "llm_local_max_tokens", 2048)
-        context_window = _positive_int(self.cfg, "llm_local_context_window", 10240)
+        max_tokens = self._output_tokens(max_output_tokens)
         deadline = time.monotonic() + budget
         started = time.monotonic()
         category = "budget_exhausted"
@@ -208,13 +314,6 @@ class TextLLMClient:
                 "schema": {"type": "object", "properties": {"result": payload_schema},
                            "required": ["result"], "additionalProperties": False},
             }}
-        system = (
-            'Follow the supplied video evidence, language and JSON contract. '
-            'Return a JSON object with exactly one key "result" whose value is '
-            'the requested JSON object or array. The user output contract describes '
-            'the VALUE of result; always wrap that value in {"result": ...}. '
-            'Do not add facts, markdown or commentary.'
-        )
         # No environment proxy/auth forwarding and no redirects from local to
         # external services. requests itself performs no automatic retries.
         with requests.Session() as session:
@@ -223,23 +322,15 @@ class TextLLMClient:
                 if time.monotonic() >= deadline:
                     break
                 used = attempt
-                messages = [{"role": "system", "content": system + correction},
-                            {"role": "user", "content": prompt}]
+                messages = self._messages(prompt, correction)
                 attempt_started = time.monotonic()
                 content, payload, raw = None, None, {}
                 finish_reason, validation_error, status_code = None, "", None
                 error_type = ""
+                token_budget = None
                 try:
-                    tokenized = self._post(session, base_url[:-3] + "/tokenize",
-                                           {"model": local_model, "messages": messages,
-                                            "add_generation_prompt": True}, timeout, deadline)
-                    count = tokenized.get("count")
-                    server_window = tokenized.get("max_model_len")
-                    if type(count) is not int or count < 0 or type(server_window) is not int or server_window <= 0:
-                        raise _LocalFailure("invalid_tokenizer_response", retryable=False)
-                    available = min(context_window, server_window) - count - 64
-                    if available < max_tokens:
-                        raise _LocalFailure("context_budget_exceeded: increase MAX_MODEL_LEN or reduce analysis evidence", retryable=False)
+                    token_budget = self._token_budget(session, base_url, local_model, messages,
+                                                      max_tokens, timeout, deadline)
                     raw = self._post(session, base_url + "/chat/completions",
                                      {"model": local_model, "messages": messages,
                                       "temperature": temperature, "max_tokens": max_tokens,
@@ -273,10 +364,20 @@ class TextLLMClient:
                         attempt=attempt, outcome="accepted", raw_response=content, payload=payload,
                         finish_reason=finish_reason, usage=response_usage(raw.get("usage")),
                         provider_request_id=raw.get("id"), http_status=200,
+                        token_budget=token_budget,
                         latency_seconds=time.monotonic() - attempt_started,
                     )
                     print(f"   LLM {task_name}: local attempt {attempt}/{attempts} succeeded ({time.monotonic() - started:.1f}s)")
                     return payload
+                except ContextBudgetError as exc:
+                    diagnostics.record(
+                        call_id=call_id, task=task_name, provider="local", model=local_model,
+                        attempt=attempt, outcome="rejected", category="context_budget_exceeded",
+                        error_type=type(exc).__name__, token_budget=exc.budget,
+                        latency_seconds=time.monotonic() - attempt_started,
+                    )
+                    print(f"   LLM {task_name}: {exc}")
+                    raise
                 except _LocalFailure as exc:
                     error_type = type(exc).__name__
                     category = exc.category
@@ -302,6 +403,7 @@ class TextLLMClient:
                     validation_error=safe_error, raw_response=content, payload=payload,
                     finish_reason=finish_reason, usage=response_usage(raw.get("usage")),
                     provider_request_id=raw.get("id"), http_status=status_code,
+                    token_budget=token_budget,
                     latency_seconds=time.monotonic() - attempt_started,
                 )
                 print(f"   LLM {task_name}: local attempt {attempt}/{attempts} failed ({category})")

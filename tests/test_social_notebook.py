@@ -12,6 +12,8 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from dubbingstory.llm.run_diagnostics import RunDiagnostics
+
 
 ROOT = Path(__file__).resolve().parents[1]
 NOTEBOOK = ROOT / "notebooks" / "mereska-dubbingstory-tiktok-rednote.ipynb"
@@ -64,7 +66,7 @@ def setup_helpers(names, **namespace):
 
 def pipeline_harness(tmp_path, *, start_from="segment", vision="qwen", provider="gemini",
                      fallback=True, fail_stage=None, separate=False, fail_start=None,
-                     fail_stop=None):
+                     fail_stop=None, fail_checkpoint=False):
     """Execute only orchestration with fake CLI/server functions, never media or models."""
     for relative in ("source.mp4", "segment_manifest.json", "storyboard.json",
                      "scripts/script_id.json", "audio/audio_id.manifest.json"):
@@ -82,7 +84,7 @@ def pipeline_harness(tmp_path, *, start_from="segment", vision="qwen", provider=
     state_path = tmp_path / "llm_runtime_state.json"
     state_path.write_text('{"previous_run": "keep"}', encoding="utf-8")
     events, saved_runs = [], []
-    config = {"llm": {"fallback": {"run_id": "old", "state_path": str(state_path)}}}
+    config = {"llm": {"fallback": {"run_id": "old", "state_path": str(state_path)}, "diagnostics": {}}}
     runs = iter(["run-one", "run-two"])
     server = object()
     split_servers = {role: object() for role in ("vision", "text")}
@@ -116,6 +118,11 @@ def pipeline_harness(tmp_path, *, start_from="segment", vision="qwen", provider=
         if stage == fail_stage:
             raise RuntimeError("simulated CLI failure")
 
+    def load_checkpoint(*args, **kwargs):
+        if fail_checkpoint:
+            raise ValueError("stale source checkpoint; resume analyze first")
+        return {}
+
     namespace = {
         **helpers(), **runtime_policy(), "ACTIVE_PROJECT": "sample", "START_FROM": start_from,
         "PROJECT_DIR": tmp_path, "VISION_BACKEND": vision, "TEXT_LLM_PROVIDER": provider,
@@ -126,13 +133,16 @@ def pipeline_harness(tmp_path, *, start_from="segment", vision="qwen", provider=
         "start_qwen_server": start_server, "stop_server": stop_server,
         "start_local_server": start_local_server,
         "REPO_DIR": ROOT, "sys": sys, "json": json,
+        "RunDiagnostics": RunDiagnostics, "CHILD_ENV": {}, "MODEL_ACCESS_ENV": {},
+        "ACTION_SYNC": True, "WORK_ROOT": tmp_path, "os": SimpleNamespace(chdir=lambda path: None),
+        "load_analysis_checkpoint": load_checkpoint,
     }
     statements = ast.parse(source("pipeline")).body
     validation = [node for node in statements if isinstance(node, ast.FunctionDef)
                   and node.name == "validate_segment_for_analysis"]
     exec(compile(ast.Module(body=validation, type_ignores=[]), str(NOTEBOOK), "exec"), namespace)
     start = next(index for index, node in enumerate(statements) if isinstance(node, ast.Assign)
-                 and any(isinstance(target, ast.Name) and target.id == "steps" for target in node.targets))
+                 and any(ast.unparse(target) == "CONFIG['llm']['fallback']['run_id']" for target in node.targets))
     orchestration = compile(ast.Module(body=statements[start:], type_ignores=[]), str(NOTEBOOK), "exec")
 
     def run():
@@ -446,6 +456,8 @@ def test_text_configuration_matches_router_contract(tmp_path, separate):
                                "max_tokens": 2048, "context_window": context_window}
     assert config["diagnostics"] == {"enabled": True, "path": str(tmp_path / "llm_attempts.jsonl"),
                                       "max_output_chars": 12000}
+    assert config["preflight"] == {"enabled": True, "safety_margin": 256}
+    assert config["batching"] == {"enabled": True, "max_scenes": 4, "max_beats": 4, "output_tokens": 2048}
 
 
 def test_separate_text_model_is_opt_in_with_existing_runtime_defaults():
@@ -486,6 +498,39 @@ def test_dual_model_resume_loads_only_text(tmp_path, start):
     assert events[:3] == ["gpu-preflight", "start-text", (start, "run-one")]
     assert "start-vision" not in events
     assert events[-3:] == ["stop-text", "close-text-log", ("render", "run-one")]
+
+
+def test_plan_resume_skips_visual_stages_and_only_starts_text(tmp_path):
+    run, events, _, _ = pipeline_harness(tmp_path, separate=True, start_from="plan")
+    run()
+    assert events[:3] == ["gpu-preflight", "start-text", ("plan", "run-one")]
+    assert not any(stage in events for stage in ("start-vision", ("segment", "run-one"), ("analyze", "run-one")))
+    manifest = json.loads((tmp_path / "runs" / "run-one" / "run_manifest.json").read_text())
+    assert manifest["status"] == "complete"
+    assert [row["stage"] for row in manifest["stages"] if row["status"] == "complete"] == ["plan", "narrate", "dub", "render"]
+
+
+def test_pipeline_failure_produces_run_scoped_diagnostic_bundle(tmp_path):
+    run, _, _, _ = pipeline_harness(tmp_path, fail_stage="analyze")
+    with pytest.raises(RuntimeError, match="simulated CLI failure"):
+        run()
+    with zipfile.ZipFile(tmp_path / "diagnostics_run-one.zip") as archive:
+        manifest = json.loads(archive.read("run_manifest.json"))
+        assert manifest["run_id"] == "run-one" and manifest["status"] == "failed"
+        assert manifest["stages"][-1]["stage"] == "analyze"
+        assert manifest["stages"][-1]["status"] == "failed"
+
+
+def test_plan_stale_evidence_stops_before_loading_local_model(tmp_path):
+    run, events, _, _ = pipeline_harness(
+        tmp_path, start_from="plan", separate=True, fail_checkpoint=True)
+    with pytest.raises(ValueError, match="stale source checkpoint"):
+        run()
+    assert events == []
+    with zipfile.ZipFile(tmp_path / "diagnostics_run-one.zip") as archive:
+        manifest = json.loads(archive.read("run_manifest.json"))
+        assert manifest["status"] == "failed"
+        assert manifest["stages"][-1]["stage"] == "plan"
 
 
 def test_dual_model_startup_failure_cleans_up_already_running_vision(tmp_path):
@@ -790,7 +835,7 @@ def test_canvas_toggle_keeps_source_output(enabled, ratios, layout, names):
     assert functions["expected_output_names"](enabled) == names
 
 
-def outputs_harness(tmp_path, monkeypatch, *, preview_failure=None, manifest_failure=None):
+def outputs_harness(tmp_path, monkeypatch, *, preview_failure=None, manifest_failure=None, diagnostics=None):
     """Run packaging with dummy MP4 bytes and fake display objects, never video decoding."""
     project = tmp_path / "outputs" / "sample"
     project.mkdir(parents=True)
@@ -837,7 +882,7 @@ def outputs_harness(tmp_path, monkeypatch, *, preview_failure=None, manifest_fai
     monkeypatch.chdir(tmp_path)  # Restore cwd after the notebook's os.chdir.
     namespace = {**helpers(), "Path": Path, "json": json, "os": os,
                  "PROJECT_DIR": project, "WORK_ROOT": tmp_path, "ACTIVE_PROJECT": "sample",
-                 "CONFIG_PATH": config_path, "ENABLE_CANVAS": True}
+                 "CONFIG_PATH": config_path, "ENABLE_CANVAS": True, "diagnostic_bundle": diagnostics}
 
     def run():
         exec(compile(source("outputs"), str(NOTEBOOK), "exec"), namespace)
@@ -882,13 +927,25 @@ def test_output_bundle_preserves_visual_evidence_and_action_misses(tmp_path, mon
             assert json.loads(archive.read(relative)) == payload
 
 
-def test_output_bundle_includes_optional_llm_diagnostics(tmp_path, monkeypatch):
+def test_output_bundle_excludes_stale_project_diagnostics(tmp_path, monkeypatch):
     run, project, _, bundle, _, _ = outputs_harness(tmp_path, monkeypatch)
     diagnostic = '{"provider":"local","reason":"scene_coverage_mismatch"}\n'
     (project / "llm_attempts.jsonl").write_text(diagnostic, encoding="utf-8")
     run()
     with zipfile.ZipFile(bundle) as archive:
-        assert archive.read("llm_attempts.jsonl").decode("utf-8") == diagnostic
+        # A project-level trace can belong to older runs; only the explicit
+        # current run diagnostics ZIP may be included in the result bundle.
+        assert "llm_attempts.jsonl" not in archive.namelist()
+
+
+def test_output_bundle_includes_explicit_current_run_diagnostics(tmp_path, monkeypatch):
+    diagnostic = tmp_path / "outputs" / "sample" / "diagnostics_current.zip"
+    run, _, _, bundle, _, _ = outputs_harness(tmp_path, monkeypatch, diagnostics=diagnostic)
+    with zipfile.ZipFile(diagnostic, "w") as archive:
+        archive.writestr("run_manifest.json", '{"run_id":"current","status":"complete"}')
+    run()
+    with zipfile.ZipFile(bundle) as archive:
+        assert archive.read(diagnostic.name) == diagnostic.read_bytes()
 
 
 @pytest.mark.parametrize("failure", ["incomplete", "missing", "unreported"])
