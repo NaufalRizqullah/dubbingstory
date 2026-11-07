@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from dubbingstory.story.action_anchors import compact_visual_events
+from dubbingstory.story.action_anchors import compact_visual_events, speech_part_bindings
 
 
 V2_NARRATION_PROMPT = """You are a professional video storyteller.
@@ -38,7 +38,8 @@ SCENES + NARRATION PLAN, in final playback order:
 
 HARD RULES:
 0. LANGUAGE CONTRACT IS NON-NEGOTIABLE. The required output language is
-   {language_label} with code `{language_code}`. Every `text` value MUST be written
+   {language_label} with code `{language_code}`. Every spoken value (`text` or each
+   `speech_parts` string) MUST be written
    entirely in that language. Source evidence, titles, story-plan fields, or retry
    context may be English; they are INPUT ONLY and MUST NOT change the output language.
    If the required language is Bahasa Indonesia (`id`), translate English evidence
@@ -46,7 +47,7 @@ HARD RULES:
    brand names, model numbers, and literal on-screen text may remain unchanged.
    On retries, NEVER infer the language from a previous response; always obey
    OUTPUT_LANGUAGE_CODE/OUTPUT_LANGUAGE_NAME above. Before returning JSON, verify
-   every narration `text` field follows this language contract.
+   every spoken narration field follows this language contract.
 1. Return one narration item for every supplied NARRATION BEAT scene_id, in the same order.
    A beat may cover multiple visual scene IDs; narrate them as one thought.
 2. Tell one continuous story. A later segment must sound like a continuation,
@@ -74,7 +75,7 @@ HARD RULES:
 15. If confidence is below {hedging_threshold}, hedge only the uncertain fact.
 16. Add `claims`: a short list of atomic factual claims actually stated by the narration.
     Every claim MUST be directly supported by the FIXED evidence for that beat. Do not
-    add facts to `claims` that are not present in `text`, and do not use `claims` to
+    add facts to `claims` that are not present in the assembled speech, and do not use `claims` to
     smuggle in unsupported interpretation.
 17. OPENING BEAT: Start the narration with the core PROBLEM, GOAL, or TRANSFORMATION
     that drives the entire video. Do not start with "In this video..." or generic filler.
@@ -105,13 +106,13 @@ STYLE EXAMPLES (rhythm/structure reference only; never copy unsupported facts):
 {examples}
 
 LANGUAGE CONTRACT (NON-NEGOTIABLE):
-- Rewrite every narration `text` field entirely in {language_label} (`{language_code}`).
+- Rewrite every spoken value (`text` or each `speech_parts` string) entirely in {language_label} (`{language_code}`).
 - CURRENT NARRATION may contain the wrong language because of a failed prior attempt;
   do not preserve that mistake. Translate/rewrite it into the required output language.
 - Story plan, QA details, source evidence, and retry context are INPUT ONLY and must
   never override OUTPUT_LANGUAGE_CODE/OUTPUT_LANGUAGE_NAME.
 - Proper nouns, model numbers, brands, and literal on-screen text may remain unchanged.
-- Before returning JSON, verify every `text` field follows the required language.
+- Before returning JSON, verify every spoken field follows the required language.
 
 QA ISSUES:
 {issues_json}
@@ -252,18 +253,30 @@ def _output_contract(narration_plan: dict) -> str:
         "Return ONLY a valid JSON array, with exactly one object per narration beat.\n"
         "Every object must contain these fields:\n"
         '- "scene_id": string, copied EXACTLY from the narration beat (not a visual event ID).\n'
-        '- "text": nonempty spoken narration in the requested output language.\n'
         '- "claims": array of strings stating only evidence-supported facts actually spoken; [] is valid.\n'
         '- "importance": number between 0 and 1.\n'
     )
     if anchored:
         fields += (
-            '- "action_anchors": array of objects with only "event_id" and "phrase".\n'
-            '  Example shape: [{"event_id": "COPY_A_SELECTED_ID", "phrase": "COPY_EXACT_SPOKEN_WORDS"}].\n'
-            "  These are shape placeholders, not narration or event IDs to copy.\n"
-            "  Return one entry for EACH of this beat's anchor_event_ids, in chronological order;\n"
-            "  return [] only when this beat has no selected IDs. Copy each phrase from your text.\n"
+            '- "speech_parts": object of spoken strings for each action-sync beat; use EXACTLY the keys below.\n'
+            '  Write lead_in, action_1, after_action_1, then action_2/after_action_2 if present.\n'
+            '  The application joins these strings with spaces in that order to create one connected paragraph.\n'
+            '  action_N is a short 1-6 word phrase describing its bound visual action in the OUTPUT language.\n'
+            '  It is part of the speech, not a label or a copied observation. Do not repeat it in another part.\n'
+            '  lead_in and after_action_N provide connecting prose and may be empty strings.\n'
+            '  With no selected events use only lead_in containing the whole nonempty narration.\n'
+            '  Do not return separate text, action_anchors, event IDs, or timestamps on action-sync beats.\n'
+            '  For a beat without action sync, return text instead of speech_parts.\n'
+            'Fixed speech keys -> visual event bindings (null = connecting prose, NOT an output value):\n'
+            + json.dumps({str(entry["scene_id"]): speech_part_bindings(entry)
+                          for entry in entries if entry.get("action_sync_enabled")}, ensure_ascii=False)
+            + '\nExample Indonesian speech_parts for a SINGLE observed cutting action:\n'
+            '  {"lead_in": "Setelah ditandai,", "action_1": "besi dipotong perlahan", '
+            '"after_action_1": "hingga bagian ujungnya terpisah."}\n'
+            '  This illustrates the structure only. Never copy this cutting action unless supported by YOUR evidence.\n'
         )
+    else:
+        fields += '- "text": nonempty spoken narration in the requested output language.\n'
     fields += (
         "Do not return timestamps, evidence, plan fields, markdown or explanatory prose.\n"
         "Required narration beat IDs, in playback order: "
@@ -334,15 +347,16 @@ ACTION_SYNC_RULES = """ACTION TIMING CONTRACT (full-video narration only):
   a supported result. Keep explanation and transitions natural. Do not infer
   technical causes, materials, temperatures, identities or purposes without evidence.
 - Every beat has anchor_event_ids, containing at most two important visible actions.
-  Mention each selected action in that beat and quote its exact spoken phrase in
-  action_anchors. Choose 1-6 consecutive words containing the action, unique within
-  that beat. Place phrases in the same chronological order as the visual events.
-- Return action_anchors: [{"event_id": "ID from anchor_event_ids", "phrase":
-  "exact words copied from text"}] on every item; use [] when no IDs are selected.
-  Do not provide or change timestamps. Do not invent an event ID. A phrase must
-  express the action of the referenced event, not a generic transition word.
-- During QA rewriting preserve all existing action_anchors and their exact phrases
-  in the revised text. Remove other detail first; do not drop the required action.
+  Write each selected action directly in its bound speech_parts.action_N field.
+  Choose 1-6 spoken words containing the action, unique within the complete beat.
+  A short verb phrase is enough; do not copy a whole visual observation sentence.
+  The field bindings fix the source chronology. Do not generate or change event IDs/times.
+- Speak only evidence-supported actions: an observed motion does not establish
+  technical purpose, cooling, required consistency or an unseen final product.
+  Each action_N must express its bound event, not a generic transition word.
+- During QA rewriting copy the existing action_anchors phrase for each event into
+  its bound action_N field EXACTLY. Rewrite only surrounding prose, not that phrase.
+  Keep the combined speech within the beat's word budget, not a budget per field.
 """
 
 

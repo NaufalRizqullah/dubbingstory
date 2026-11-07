@@ -16,6 +16,48 @@ def normalized_tokens(text: str) -> list[str]:
     return re.findall(r"[^\W_]+(?:['’][^\W_]+)*", unicodedata.normalize("NFKC", str(text)).casefold())
 
 
+def speech_part_bindings(planned: dict) -> dict[str, str | None]:
+    """Bind spoken action slots to fixed plan IDs, never to model-generated IDs."""
+    required = planned.get("anchor_event_ids", [])
+    if (not isinstance(required, list) or len(required) > 2
+            or any(not isinstance(value, str) or not value for value in required)
+            or len(set(required)) != len(required)):
+        raise ValueError("Speech parts require zero to two unique selected event IDs")
+    fields = {"lead_in": None}
+    for index, event_id in enumerate(required, 1):
+        fields[f"action_{index}"] = event_id
+        fields[f"after_action_{index}"] = None
+    return fields
+
+
+def assemble_speech_parts(parts: object, planned: dict) -> tuple[str, list[dict]]:
+    """Assemble speech once; anchor phrases come from the very same strings.
+
+    Only whitespace at field boundaries is normalized. No words are invented,
+    shortened or matched fuzzily. Canonical validation still verifies word
+    count, uniqueness, evidence, chronology and source timing afterwards.
+    """
+    fields = speech_part_bindings(planned)
+    if not isinstance(parts, dict) or set(parts) != set(fields):
+        raise ValueError("speech_parts must contain exactly: " + ", ".join(fields))
+    chunks, anchors = [], []
+    for name, event_id in fields.items():
+        value = parts[name]
+        if not isinstance(value, str):
+            raise ValueError(f"speech_parts.{name} must be a string")
+        value = value.strip()
+        if event_id and not 1 <= len(normalized_tokens(value)) <= 6:
+            raise ValueError(f"speech_parts.{name} must contain 1-6 spoken words describing {event_id}")
+        if value:
+            chunks.append(value)
+        if event_id:
+            anchors.append({"event_id": event_id, "phrase": value})
+    text = " ".join(chunks)
+    if not text:
+        raise ValueError("speech_parts must form nonempty narration")
+    return text, anchors
+
+
 def phrase_word_span(words: list[dict], phrase: str) -> tuple[int, int]:
     """Find a unique contiguous phrase; return word indexes [first, stop).
 

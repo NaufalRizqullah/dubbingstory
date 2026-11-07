@@ -117,6 +117,8 @@ Untuk video dengan banyak scene, notebook menyediakan [planning dan narasi berta
 
 Jika planning sudah berhasil tetapi narasi lokal timeout, notebook memakai dua beat per kelompok dan timeout lokal 120 detik, dengan pemecahan otomatis untuk batch yang masih terlalu lambat. Jatah output teks Gemini terpisah dari reservasi konteks lokal. Lihat [pemulihan timeout narasi](docs/native-storytelling.md#timeout-narasi-sesudah-planning-berhasil); pada project yang sama dengan hasil visual/planning lengkap, gunakan `START_FROM="narrate"`.
 
+Untuk action sync, model menulis frasa aksi langsung sebagai bagian ucapan; aplikasi membentuk teks narasi dan anchor dari bagian yang sama. Format naskah TTS/render tetap `text` dan `action_anchors`. Lihat [pemulihan kegagalan kontrak frasa aksi](docs/native-storytelling.md#kontrak-frasa-aksi-pada-narasi).
+
 Jika download YouTube gagal di notebook, ikuti [diagnostik download Kaggle](docs/native-storytelling.md#download-youtube-di-kaggle). Notebook repository memasang `yt-dlp[default]` sebelum download dan mencetak versi yang digunakan; downloader mengikuti pilihan client bawaan yt-dlp.
 
 Untuk mengubah video 16:9 menjadi canvas 9:16 dengan dua layer seperti editor video:

@@ -11,6 +11,17 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.10.6]
+
+### Fixed
+- Generate action-synchronized narration with fixed `speech_parts` fields bound to the plan's selected events. Assemble canonical `text` and `action_anchors` from the same spoken strings, avoiding independently generated phrases that are absent from narration or mapped to duplicate IDs. Per-beat provider schemas constrain action slots; canonical 1–6-word, uniqueness, chronology and source-time checks remain authoritative.
+- Normalize speech parts before language validation and before downstream narration/QA. QA schemas retain original action phrases. Existing scripts, custom canonical responses, summary narration and measured-duration rewrite formats remain supported; no extra model pass or dependency is added.
+- Report bounded validation feedback for multiple affected beats, and require the updated contract in social notebook setup. Preserve every attached notebook configuration value.
+
+### Validation
+- Run `830270cb-4854-4da8-af1e-265db4f2f92c` completed visual analysis/global planning. Both Gemini and Qwen returned complete narration responses; Qwen attempts took about 49 seconds. Failure was semantic anchor validation (absent phrases, more than six words, duplicate event IDs), not the earlier token cap or timeout. Intermittent HTTP 429/503 occurred separately.
+- Add mocked speech assembly, provider-schema, language, per-beat binding, zero/two-event, QA, compatibility and batch-continuity regressions for Kaggle. Only static checks and source review run locally; live provider/schema behavior, tests and audiovisual quality still require Kaggle validation. Resume the same completed visual project from narrate.
+
 ## [0.10.5]
 
 ### Fixed

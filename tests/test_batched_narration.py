@@ -108,6 +108,38 @@ def test_twenty_beats_use_bounded_prompts_and_keep_source_timing_and_continuity(
         assert actual["action_anchors"][0]["start_time"] == expected["visual_events"][0]["start_time"]
 
 
+def test_speech_parts_pass_through_full_batches_and_qa_as_canonical_scripts(monkeypatch):
+    board, plan, story = fixture(5)
+    calls = []
+
+    class PartsNarrator(Narrator):
+        def generate_json_with_retry(self, prompt, *, response_validator, **kwargs):
+            context = continuity(prompt)
+            calls.append(context)
+            rows = [{"scene_id": bid, "claims": ["The metal is cut"], "importance": .7,
+                     "speech_parts": {"lead_in": "Lalu", "action_1": "besi dipotong perlahan",
+                                      "after_action_1": "sebelum tahap berikutnya dimulai."}}
+                    for bid in reversed(context["beat_ids"])]
+            assert response_validator(rows) is None
+            return rows
+
+    client = PartsNarrator(plan)
+    monkeypatch.setattr(script_writer, "_client", lambda cfg: (client, "mock"))
+    original = script_writer.generate_narration(
+        board, languages=["id"], cfg=config(), story_plan=story, narration_plan=plan)["id"]
+    assert calls[1]["previous_narration"][-1]["text"] == original[3]["text"]
+    revised = script_writer._batched_qa_rewrite(
+        original, qa={"issues": ["repetition"]}, narration_plan=plan, story_plan=story,
+        language="id", style="natural", style_config={}, analyzer=client,
+        model="mock", cfg=config(), scenes=board["scenes"])
+    assert [row["scene_id"] for row in revised] == [row["scene_id"] for row in plan["segments"]]
+    for expected, actual in zip(original, revised):
+        assert "speech_parts" not in actual
+        assert actual["text"] == expected["text"]
+        assert actual["action_anchors"] == expected["action_anchors"]
+        assert actual["timeline_start"] == expected["timeline_start"]
+
+
 def test_late_batch_failure_never_returns_partial_or_template_narration(monkeypatch):
     board, plan, story = fixture(9, anchored=False)
     client = Narrator(plan, fail_on=2)

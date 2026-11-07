@@ -8,7 +8,8 @@ from typing import Any, Callable
 from dubbingstory.llm.batching import generate_budgeted_batches, context_batching_enabled
 
 from dubbingstory.story.action_anchors import (
-    canonical_action_anchors, normalized_tokens, preserve_action_phrases,
+    assemble_speech_parts, canonical_action_anchors, normalized_tokens,
+    preserve_action_phrases, speech_part_bindings,
 )
 
 from dubbingstory.story.gemini_json import (
@@ -65,7 +66,13 @@ def _call_json(
     obviously wrong-language response before it can reach TTS.
     """
 
+    normalize = getattr(payload_validator, "normalize_payload", lambda payload: payload)
+
     def response_validator(payload: Any) -> str | None:
+        try:
+            payload = normalize(payload)
+        except (KeyError, TypeError, ValueError) as exc:
+            return str(exc)
         if payload_validator:
             error = payload_validator(payload)
             if error:
@@ -91,7 +98,7 @@ def _call_json(
         validation_error = response_validator(payload)
         if validation_error:
             raise ValueError(validation_error)
-        return payload
+        return normalize(payload)
 
     # Backward-compatible one-shot path for custom analyzers. Keep the same
     # semantic validation even though retry support is unavailable.
@@ -112,7 +119,7 @@ def _call_json(
     validation_error = response_validator(payload)
     if validation_error:
         raise ValueError(validation_error)
-    return payload
+    return normalize(payload)
 
 
 def _extract_segment_list(payload: Any) -> list[dict]:
@@ -133,11 +140,11 @@ def _plan_map(narration_plan: dict) -> dict[str, dict]:
     }
 
 
-def _narration_response_schema(narration_plan: dict) -> dict:
+def _narration_response_schema(narration_plan: dict, *, preserved_anchors=None) -> dict:
     """Constrain generated JSON; semantic evidence checks remain authoritative.
 
-    Providers generate the existing canonical array. Historical object envelopes
-    are still accepted by the validator for custom clients and saved integrations.
+    Anchored providers generate fixed speech slots; canonical text/anchors remain
+    accepted for historical/custom clients and are still the saved script format.
     """
     plan_map = _plan_map(narration_plan)
     scene_id_schema = {"type": "string"}
@@ -151,25 +158,34 @@ def _narration_response_schema(narration_plan: dict) -> dict:
     }
     required = list(properties)
     if any(entry.get("action_sync_enabled") for entry in plan_map.values()):
-        selected = list(dict.fromkeys(
-            event_id for entry in plan_map.values()
-            for event_id in entry.get("anchor_event_ids", [])
-        ))
-        event_schema = {"type": "string"}
-        if selected:
-            event_schema["enum"] = selected
-        properties["action_anchors"] = {
-            "type": "array", "maxItems": 2 if selected else 0,
-            "items": {
-                "type": "object",
-                "properties": {
-                    "event_id": event_schema,
-                    "phrase": {"type": "string", "minLength": 1},
-                },
-                "required": ["event_id", "phrase"], "additionalProperties": False,
-            },
-        }
-        required.append("action_anchors")
+        variants = []
+        for scene_id, entry in plan_map.items():
+            fields = {**properties, "scene_id": {"type": "string", "enum": [scene_id]}}
+            if entry.get("action_sync_enabled"):
+                parts = {}
+                preserved = {a["event_id"]: a["phrase"] for a in (preserved_anchors or {}).get(scene_id, [])}
+                for name, event_id in speech_part_bindings(entry).items():
+                    if event_id:
+                        parts[name] = {
+                            "type": "string", "minLength": 1,
+                            "pattern": r"^\S+(?:\s+\S+){0,5}$",
+                            "description": f"1-6 spoken words describing selected visual event {event_id}; do not repeat elsewhere.",
+                        }
+                        if event_id in preserved:
+                            # Legacy phrases can have standalone punctuation;
+                            # the canonical Unicode word count is authoritative.
+                            parts[name].pop("pattern")
+                            parts[name]["enum"] = [preserved[event_id]]
+                    else:
+                        parts[name] = {"type": "string", "description": "Connecting spoken prose; empty string allowed."}
+                speech_schema = {"type": "object", "properties": parts,
+                                 "required": list(parts), "additionalProperties": False}
+                fields = {("speech_parts" if key == "text" else key):
+                          (speech_schema if key == "text" else value) for key, value in fields.items()}
+            variants.append({"type": "object", "properties": fields,
+                             "required": list(fields), "additionalProperties": False})
+        return {"type": "array", "minItems": len(plan_map), "maxItems": len(plan_map),
+                "items": variants[0] if len(variants) == 1 else {"anyOf": variants}}
     return {
         "type": "array", "minItems": len(plan_map), "maxItems": len(plan_map),
         "items": {"type": "object", "properties": properties,
@@ -177,19 +193,49 @@ def _narration_response_schema(narration_plan: dict) -> dict:
     }
 
 
-def _narration_response_validator(narration_plan: dict):
+def _narration_response_validator(narration_plan: dict, *, preserved_anchors=None):
     plan_map = _plan_map(narration_plan)
     expected_ids = set(plan_map)
 
-    def validator(payload: Any) -> str | None:
+    def normalize_payload(payload):
         # Accept the historical envelopes, but never silently discard bad rows.
         if isinstance(payload, dict):
             payload = next((payload[key] for key in ("segments", "narration", "items")
                             if isinstance(payload.get(key), list)), None)
+        if not isinstance(payload, list):
+            return payload
+        result = []
+        errors = []
+        for item in payload:
+            if not isinstance(item, dict) or "speech_parts" not in item:
+                result.append(item)
+                continue
+            scene_id = item.get("scene_id")
+            planned = plan_map.get(scene_id) if isinstance(scene_id, str) else None
+            try:
+                if not planned or not planned.get("action_sync_enabled"):
+                    raise ValueError("speech_parts requires a selected narration beat with action sync")
+                if "text" in item or "action_anchors" in item:
+                    raise ValueError("return speech_parts only; do not also generate text/action_anchors")
+                text, anchors = assemble_speech_parts(item["speech_parts"], planned)
+                result.append({**{k: v for k, v in item.items() if k != "speech_parts"},
+                               "text": text, "action_anchors": anchors})
+            except (KeyError, TypeError, ValueError) as exc:
+                errors.append(f"{scene_id}: {exc}")
+        if errors:
+            raise ValueError("; ".join(errors[:4]))
+        return result
+
+    def validator(payload: Any) -> str | None:
+        try:
+            payload = normalize_payload(payload)
+        except (KeyError, TypeError, ValueError) as exc:
+            return str(exc)
         error = validate_scene_items(payload, expected_ids)
         if error:
             expected = ", ".join(list(plan_map)[:20])
             return f"{error}; use each narration beat scene_id exactly once: {expected}"
+        errors = []
         for item in payload:
             scene_id = str(item["scene_id"])
             if not isinstance(item.get("text"), str) or not item["text"].strip():
@@ -203,12 +249,15 @@ def _narration_response_validator(narration_plan: dict):
             if planned.get("action_sync_enabled"):
                 try:
                     canonical_action_anchors(item.get("action_anchors"), item["text"], planned)
+                    if preserved_anchors is not None:
+                        preserve_action_phrases(item["text"], preserved_anchors.get(scene_id, []))
                 except (KeyError, TypeError, ValueError) as exc:
                     required = json.dumps(planned.get("anchor_event_ids", []), ensure_ascii=False)
-                    return f"{scene_id}.action_anchors: {exc}; required event IDs: {required}"
-        return None
+                    errors.append(f"{scene_id}.action_anchors: {exc}; required event IDs: {required}")
+        return "; ".join(errors[:4]) if errors else None
 
-    validator.response_schema = _narration_response_schema(narration_plan)
+    validator.normalize_payload = normalize_payload
+    validator.response_schema = _narration_response_schema(narration_plan, preserved_anchors=preserved_anchors)
     return validator
 
 
@@ -488,20 +537,9 @@ def _batched_qa_rewrite(narration, *, qa, narration_plan, story_plan, language,
 
     def generate(group):
         group_plan = narration_batch_plan(narration_plan, group)
-        base_validator = _narration_response_validator(group_plan)
-
-        def validator(payload):
-            error = base_validator(payload)
-            if error:
-                return error
-            for item in _extract_segment_list(payload):
-                try:
-                    preserve_action_phrases(item["text"], original[item["scene_id"]].get("action_anchors", []))
-                except ValueError as exc:
-                    return f"{item['scene_id']}: {exc}"
-            return None
-
-        validator.response_schema = base_validator.response_schema
+        validator = _narration_response_validator(group_plan, preserved_anchors={
+            item["scene_id"]: original[item["scene_id"]].get("action_anchors", []) for item in group
+        })
         raw = _extract_segment_list(_call_json(
             analyzer, model, prompt_for(group), temperature=0.25, language=language,
             task_name=f"narration-rewrite-{language}-{group[0]['scene_id']}-{group[-1]['scene_id']}", payload_validator=validator,
@@ -583,7 +621,9 @@ def _maybe_rewrite(
                 temperature=0.25,
                 language=language,
                 task_name="narration-rewrite",
-                payload_validator=_narration_response_validator(narration_plan)
+                payload_validator=_narration_response_validator(narration_plan, preserved_anchors={
+                    item["scene_id"]: item.get("action_anchors", []) for item in narration
+                })
                 if strict_text_routing(cfg) or narration_plan.get("action_sync_enabled") else None,
             )
         )

@@ -326,6 +326,32 @@ Untuk run ini, perbarui **source repository dan notebook**, pertahankan folder o
 
 Trace mencatat `local_read_timeout`/`local_connect_timeout`, `request_stage` (`tokenize` atau `completion`), `request_timeout_seconds`, latensi dan token budget. Prompt, credential, dan pesan mentah transport tidak disimpan. Jika masih gagal, kirim `diagnostics_<run_id>.zip` dari run baru; berkas tambahan dari run lama belum diperlukan untuk diagnosis ini.
 
+### Kontrak frasa aksi pada narasi
+
+Run `830270cb-4854-4da8-af1e-265db4f2f92c` sudah memakai perbaikan timeout/budget. Vision dan global planning selesai; Gemini mengembalikan `STOP`, Qwen mengembalikan `stop` dalam sekitar 49 detik per percobaan. Kegagalan terakhir adalah validasi isi: frasa seperti `Bahan kuning mengalir keluar` tidak ada dalam teks yang dihasilkan, frasa lain melebihi enam kata, dan Qwen sempat mengulang ID event. HTTP 429/503 yang juga muncul bukan penyebab penolakan akhir ini. Menambah timeout atau mengganti TTS tidak menyelesaikan ketidaksesuaian dua field tersebut.
+
+Kontrak internal model untuk narasi dengan action sync kini memakai `speech_parts`. Satu aksi memakai `lead_in`, `action_1`, `after_action_1`; dua aksi menambahkan `action_2` dan `after_action_2`. Tanpa aksi terpilih, hanya `lead_in` yang berisi narasi. Pemetaan action ke ID event berasal dari rencana, bukan dibuat ulang model. Contoh bentuk untuk aksi pemotongan yang memang terlihat:
+
+```json
+{"speech_parts": {"lead_in": "Setelah ditandai,", "action_1": "besi dipotong perlahan", "after_action_1": "hingga ujungnya terpisah."}}
+```
+
+Kode menggabungkan string dalam urutan rencana dengan spasi dan mengambil frasa anchor dari `action_1` yang sama. Tidak ada pencarian frasa dengan kemiripan, pemotongan frasa otomatis, atau pengubahan waktu event. Model tidak mengirim salinan `text`/`action_anchors` tambahan. Schema dibedakan per beat, menyediakan slot yang tepat dan membatasi panjang frasa aksi; validator lokal tetap memeriksa 1–6 kata, kemunculan unik, chronology, ID/evidence dan batas timeline. QA harus mempertahankan frasa asli, dan pemeriksaan bahasa berjalan terhadap ucapan yang sudah digabung.
+
+Output `scripts/script_id.json` tetap menggunakan `text` dan `action_anchors`; TTS, subtitle/alignment, renderer dan format duration rewrite tidak berubah. Respons canonical lama dari custom adapter masih diterima bila valid. Tidak ada dependency atau panggilan model tambahan untuk merakit bagian ucapan. Log raw response menunjukkan `speech_parts`, sedangkan naskah akhir memuat teks/anchor canonical.
+
+Perubahan ini menghilangkan ketidaksesuaian salinan frasa, tetapi tidak membuktikan bahwa semua penjelasan model benar secara visual. Tinjau hasil dubbing untuk klaim sebab, suhu, tujuan, material dan hasil akhir; prompt tetap melarang menambahkan detail tanpa evidence. Jangan mematikan validasi anchor agar respons yang salah dianggap berhasil.
+
+Gunakan source repository dan notebook baru, lalu `START_FROM="narrate"` pada project yang sama dengan artefak visual/planning lengkap. Semua nilai config pada notebook pengguna dipertahankan. Setup memeriksa adanya kontrak baru sebelum pipeline dijalankan. Tidak perlu mengulang ingest atau vision untuk error ini; sesi fresh tanpa artefak tetap perlu mulai dari segment.
+
+Tests disiapkan untuk dijalankan di Kaggle, bukan di komputer development:
+
+```bash
+python -m pytest -q tests/test_narration_contract.py tests/test_batched_narration.py tests/test_action_story.py tests/test_text_routing_integration.py tests/test_social_notebook.py
+```
+
+Setelah itu ulangi narrate → dub → render. Periksa bahwa seluruh beat ada, frasa anchor muncul sekali dalam teks, waktunya tetap berasal dari event visual, dan subtitle/audio sesuai. Jika masih gagal, kirim `diagnostics_<run_id>.zip` dari run terbaru; jangan mencampurkan log project/run lama.
+
 ### Melanjutkan sesudah visual selesai
 
 ```bash
