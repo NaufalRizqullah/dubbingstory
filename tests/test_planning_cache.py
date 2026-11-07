@@ -39,6 +39,8 @@ def test_cache_reuses_valid_response_without_storing_prompt_or_configuration(tmp
     {"evidence_identity": {"source": "new-source", "storyboard": "board-hash"}},
     {"cfg": SimpleNamespace(llm_local_model="other-model")},
     {"cfg": SimpleNamespace(llm_local_model="fixture-model", llm_local_base_url="http://other/v1")},
+    {"cfg": SimpleNamespace(llm_local_model="fixture-model", llm_gemini_max_output_tokens=8192)},
+    {"cfg": SimpleNamespace(llm_local_model="fixture-model", llm_gemini_thinking_budget=0)},
 ])
 def test_model_evidence_prompt_or_contract_change_invalidates_cache(tmp_path, change):
     calls = []

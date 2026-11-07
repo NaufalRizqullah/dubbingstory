@@ -25,7 +25,7 @@ from dubbingstory.story.gemini_json import (
     build_story_client, generate_story_json, raise_if_strict_text_error, strict_text_routing,
     text_llm_available, validate_scene_items, validate_string_list,
 )
-from dubbingstory.llm.batching import budgeted_groups, context_batching_enabled
+from dubbingstory.llm.batching import generate_budgeted_batches, context_batching_enabled
 from dubbingstory.llm.text_client import TextGenerationError
 from dubbingstory.story.planning_cache import atomic_json, cached_json, payload_hash
 from dubbingstory.tts.word_alignment import file_sha256
@@ -454,11 +454,16 @@ def _hierarchical_story_artifacts(storyboard, compact, cfg, project_dir):
             generate=lambda: analyzer.generate_json_with_retry(prompt, **options),
         )
 
-    for group in budgeted_groups(compact, map_prompt, analyzer, task_name="story-map-preflight",
-                                 max_items=max_scenes, max_output_tokens=output_tokens):
+    def generate_map(group):
         scene_ids = [str(item["scene_id"]) for item in group]
         task = f"story-map-{scene_ids[0]}-{scene_ids[-1]}"
-        raw = generate(task, map_prompt(group), _batch_response_validator(scene_ids, roles=True))
+        return generate(task, map_prompt(group), _batch_response_validator(scene_ids, roles=True))
+
+    for group, raw in generate_budgeted_batches(
+        compact, map_prompt, analyzer, generate_map, task_name="story-map",
+        max_items=max_scenes, max_output_tokens=output_tokens,
+    ):
+        scene_ids = [str(item["scene_id"]) for item in group]
         role_map = {item["scene_id"]: item for item in raw["scene_roles"]}
         all_roles.extend(role_map[sid] for sid in scene_ids)
         summary = {key: raw[key] for key in _summary_schema()["properties"]}
@@ -488,20 +493,24 @@ def _hierarchical_story_artifacts(storyboard, compact, cfg, project_dir):
     while len(nodes) > 1:
         level += 1
         reduced = []
-        for group in budgeted_groups(nodes, reduction_prompt, analyzer,
-                                     task_name=f"story-reduce-{level}-preflight",
-                                     max_items=max(2, max_scenes), max_output_tokens=output_tokens):
-            scene_ids = [sid for node in group for sid in node["scene_ids"]]
+
+        def generate_reduction(group):
             if len(group) == 1:
-                reduced.append(group[0])
-                continue
+                return group[0]["summary"]
+            scene_ids = [sid for node in group for sid in node["scene_ids"]]
             task = f"story-reduce-{level}-{scene_ids[0]}-{scene_ids[-1]}"
-            summary = generate(task, reduction_prompt(group), _batch_response_validator(scene_ids, roles=False))
+            return generate(task, reduction_prompt(group), _batch_response_validator(scene_ids, roles=False))
+
+        for group, summary in generate_budgeted_batches(
+            nodes, reduction_prompt, analyzer, generate_reduction,
+            task_name=f"story-reduce-{level}", max_items=max(2, max_scenes), max_output_tokens=output_tokens,
+        ):
+            scene_ids = [sid for node in group for sid in node["scene_ids"]]
             reduced.append({"scene_ids": scene_ids, "summary": summary})
         if len(reduced) >= len(nodes):
             raise TextGenerationError(
-                "Story summary reduction cannot fit two summaries in the text context. "
-                "Increase the text context or reduce per-summary output limits; cached scene batches are reusable."
+                "Story summary reduction cannot process two summaries within the text context/time limit. "
+                "Check text context and local timeout/budget settings; cached scene batches are reusable."
             )
         nodes = reduced
     if nodes[0]["scene_ids"] != ordered_ids or [role["scene_id"] for role in all_roles] != ordered_ids:

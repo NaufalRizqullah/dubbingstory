@@ -112,7 +112,8 @@ class LLMDiagnostics:
     def record(self, *, call_id, task, provider, model, attempt, outcome,
                category=None, error_type=None, validation_error=None, raw_response=None, payload=None,
                finish_reason=None, usage=None, latency_seconds=None, http_status=None,
-               provider_request_id=None, token_budget=None):
+               provider_request_id=None, token_budget=None,
+               request_stage=None, request_timeout_seconds=None):
         if not self.enabled:
             return
         try:
@@ -146,6 +147,11 @@ class LLMDiagnostics:
                 # it through the credential-key filter that redacts "token".
                 record["token_budget"] = {key: value for key, value in token_budget.items()
                                           if key in _BUDGET_FIELDS and type(value) is int}
+            if request_stage in {"tokenize", "completion"}:
+                record["request_stage"] = request_stage
+            if (type(request_timeout_seconds) in {int, float}
+                    and math.isfinite(request_timeout_seconds) and request_timeout_seconds >= 0):
+                record["request_timeout_seconds"] = round(request_timeout_seconds, 3)
             if payload_truncated:
                 record["payload_preview"] = serialized[:self.max_output_chars]
             if not self.path:

@@ -1,12 +1,13 @@
 """Capacity and chronological batching fixtures; intended for Kaggle, no model needed."""
 
 import json
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
 
 from dubbingstory.llm import text_client as routing
-from dubbingstory.llm.batching import budgeted_groups
+from dubbingstory.llm.batching import budgeted_groups, generate_budgeted_batches
 from dubbingstory.llm.diagnostics import LLMDiagnostics
 
 
@@ -203,3 +204,89 @@ def test_single_item_that_cannot_fit_is_never_dropped_or_truncated():
 def test_custom_analyzer_without_preflight_keeps_fixed_bounded_groups():
     assert list(budgeted_groups(range(5), lambda group: pytest.fail("no tokenizer"), object(), max_items=2)) == [
         [0, 1], [2, 3], [4]]
+
+
+@pytest.mark.parametrize("splitting,attempts", [(True, 1), (False, 2)])
+def test_completion_timeout_is_scoped_to_splitting_callers(monkeypatch, tmp_path, splitting, attempts):
+    client, session = setup(monkeypatch, [7801, 7801], cfg=settings(
+        llm_provider="local", llm_batching_enabled=True,
+        llm_local_timeout_seconds=120, llm_local_budget_seconds=240))
+    path = tmp_path / "trace.jsonl"
+    client.diagnostics = LLMDiagnostics(enabled=True, path=path)
+    original_post = session.post
+    completions = []
+
+    def post(url, **kwargs):
+        if url.endswith("/chat/completions"):
+            completions.append(kwargs)
+            raise routing.requests.ReadTimeout("private-request-body")
+        return original_post(url, **kwargs)
+
+    session.post = post
+    expected = routing.LocalGenerationTimeout if splitting else routing.TextGenerationError
+    with pytest.raises(expected), (routing.batch_timeout_recovery() if splitting else nullcontext()):
+        client.generate_json_with_retry("private-evidence", max_output_tokens=2048)
+    assert len(completions) == attempts
+    assert not routing._BATCH_TIMEOUT_RECOVERY.get()
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert all(row["category"] == "local_read_timeout" for row in rows)
+    assert all(row["request_stage"] == "completion" for row in rows)
+    assert all(row["request_timeout_seconds"] == 120 for row in rows)
+    assert rows[0]["token_budget"]["deficit_tokens"] == 0
+    assert "private" not in path.read_text()
+
+
+@pytest.mark.parametrize("stage,error", [
+    ("tokenize", routing.requests.ReadTimeout),
+    ("completion", routing.requests.ConnectTimeout),
+    ("completion", routing.requests.ConnectionError),
+])
+def test_non_completion_read_failures_never_request_splitting(monkeypatch, stage, error):
+    client, session = setup(monkeypatch, [1000, 1000], cfg=settings(llm_provider="local"))
+    original_post = session.post
+    failures = []
+
+    def post(url, **kwargs):
+        if (stage == "tokenize") == url.endswith("/tokenize"):
+            failures.append(url)
+            raise error("unavailable")
+        return original_post(url, **kwargs)
+
+    session.post = post
+    with pytest.raises(routing.TextGenerationError) as exc, routing.batch_timeout_recovery():
+        client.generate_json_with_retry("evidence")
+    assert not isinstance(exc.value, routing.LocalGenerationTimeout)
+    assert len(failures) == 2
+
+
+@pytest.mark.parametrize("failure", [routing.LocalGenerationTimeout("slow"), overflow()])
+def test_generation_failure_splits_without_losing_continuity(failure):
+    emitted, attempts = [], []
+
+    def generate(group):
+        assert routing._BATCH_TIMEOUT_RECOVERY.get()
+        attempts.append((list(group), list(emitted)))
+        if len(group) > 2:
+            raise failure
+        return list(group)
+
+    for group, payload in generate_budgeted_batches(range(5), lambda group: group, object(), generate):
+        assert not routing._BATCH_TIMEOUT_RECOVERY.get()
+        assert payload == group
+        emitted.extend(payload)
+    assert emitted == list(range(5))
+    assert attempts == [([0, 1, 2, 3], []), ([0, 1], []), ([2, 3], [0, 1]), ([4], [0, 1, 2, 3])]
+
+
+def test_timeout_singleton_stops_and_unrelated_failure_never_splits():
+    for error in (routing.LocalGenerationTimeout("slow"), routing.TextGenerationError("unavailable")):
+        groups = []
+
+        def generate(group):
+            groups.append(list(group))
+            raise error
+
+        with pytest.raises(type(error)):
+            list(generate_budgeted_batches([1, 2], lambda group: group, object(), generate))
+        assert groups == ([[1, 2], [1]] if isinstance(error, routing.LocalGenerationTimeout) else [[1, 2]])
+        assert not routing._BATCH_TIMEOUT_RECOVERY.get()

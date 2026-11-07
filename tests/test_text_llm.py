@@ -85,6 +85,29 @@ def test_disabled_fallback_preserves_cloud_error(monkeypatch):
         routing.TextLLMClient(config(llm_fallback_enabled=False), "model").generate_json_with_retry("prompt")
 
 
+def test_cloud_cap_does_not_inflate_local_fallback_reservation(monkeypatch):
+    from dubbingstory.vision import gemini_analyzer
+
+    cloud_calls, local_calls, closed = [], [], []
+
+    def cloud(prompt, **kwargs):
+        cloud_calls.append(kwargs)
+        raise service_error()
+
+    analyzer = SimpleNamespace(generate_json_with_retry=cloud,
+                               client=SimpleNamespace(close=lambda: closed.append(True)))
+    monkeypatch.setattr(gemini_analyzer, "GeminiVideoAnalyzer", lambda **kwargs: analyzer)
+    client = routing.TextLLMClient(config(llm_gemini_max_output_tokens=8192,
+                                         llm_gemini_thinking_budget=0), "gemini-2.5-flash")
+    monkeypatch.setattr(client, "_generate_local", lambda prompt, **kw: local_calls.append(kw) or {"ok": True})
+    assert client.generate_json_with_retry("evidence", max_output_tokens=2048) == {"ok": True}
+    assert cloud_calls[0]["max_output_tokens"] == 8192
+    assert cloud_calls[0]["thinking_budget"] == 0
+    assert local_calls[0]["max_output_tokens"] == 2048
+    assert "thinking_budget" not in local_calls[0]
+    assert closed == [True]
+
+
 def test_explicit_local_needs_no_gemini_key(monkeypatch):
     cfg = config(llm_provider="local", api_key_gemini="", llm_fallback_enabled=False)
     assert routing.text_llm_available(cfg)

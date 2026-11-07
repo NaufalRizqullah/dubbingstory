@@ -95,6 +95,24 @@ def install_client(monkeypatch, client):
     monkeypatch.setattr(story_planner, "build_story_client", lambda *args, **kwargs: (client, "fixture-cloud"))
 
 
+def test_generation_timeouts_split_map_and_reduce_without_losing_scene_coverage(monkeypatch):
+    from dubbingstory.llm.text_client import LocalGenerationTimeout
+
+    class SlowClient(StoryClient):
+        def generate_json_with_retry(self, prompt, **kwargs):
+            phase, group = prompt_group(prompt)
+            if len(group) > 2:
+                raise LocalGenerationTimeout("slow completion")
+            return super().generate_json_with_retry(prompt, **kwargs)
+
+    client = SlowClient()
+    install_client(monkeypatch, client)
+    source = board(16)
+    _, plan, _ = story_planner.generate_story_artifacts(source, subtitle_context=None, cfg=config())
+    assert [row["scene_id"] for row in plan["scene_roles"]] == [row["scene_id"] for row in source["scenes"]]
+    assert all(len(group) <= 2 for _, _, group in client.calls)
+
+
 def test_twenty_scenes_keep_all_roles_and_ending_without_a_giant_final_prompt(tmp_path, monkeypatch):
     client = StoryClient()
     install_client(monkeypatch, client)
@@ -157,7 +175,7 @@ def test_completed_map_batches_are_reused_after_later_failure(tmp_path, monkeypa
 def test_summary_reduction_cannot_spin_when_only_singletons_fit(tmp_path, monkeypatch):
     client = StoryClient(reduce_capacity=1)
     install_client(monkeypatch, client)
-    with pytest.raises(TextGenerationError, match="cannot fit two summaries"):
+    with pytest.raises(TextGenerationError, match="cannot process two summaries"):
         story_planner.generate_story_artifacts(board(8), subtitle_context=None,
                                                cfg=config(), project_dir=str(tmp_path))
     assert len(client.calls) == 2  # Two map calls, no wasteful singleton reductions.

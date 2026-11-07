@@ -95,6 +95,8 @@ llm:
     max_beats: 4
     output_tokens: 2048
   gemini:                          # Also bounds Gemini vision calls
+    max_output_tokens: null         # Text only; null keeps caller/SDK cap, independent of local reservation
+    thinking_budget: null           # Text only, opt-in Gemini 2.5 policy; notebook uses 0 for Flash
     max_attempts: 3                # TOTAL calls including the first
     timeout_seconds: 30
     budget_seconds: 90             # Shared deadline including backoff

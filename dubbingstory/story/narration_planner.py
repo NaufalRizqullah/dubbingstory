@@ -11,7 +11,7 @@ import json
 import math
 from typing import Any
 
-from dubbingstory.llm.batching import budgeted_groups, context_batching_enabled
+from dubbingstory.llm.batching import generate_budgeted_batches, context_batching_enabled
 from dubbingstory.story.action_anchors import compact_visual_events, scene_visual_events, select_anchor_events
 
 from dubbingstory.story.gemini_json import (
@@ -431,19 +431,22 @@ def _batched_refinement(entries, compact_scenes, *, story_plan, story_memory, cf
             mode="full", scenes_json=json.dumps([compact_by_id[item["scene_id"]] for item in group], ensure_ascii=False),
         ) + batch_continuity_note(group, entries, merged, previous_field="intent")
 
-    for index, group in enumerate(budgeted_groups(
-        entries, prompt_for, client, task_name="narration-plan-refine",
-        max_items=max_items, max_output_tokens=output_tokens,
-    ), 1):
+    def generate(group):
         validator = _refinement_response_validator(group)
         payload = client.generate_json_with_retry(
-            prompt_for(group), task_name=f"narration-plan-refine-batch-{index}",
+            prompt_for(group), task_name=f"narration-plan-refine-{group[0]['scene_id']}-{group[-1]['scene_id']}",
             temperature=0.2, model=model, response_validator=validator,
             **({"max_output_tokens": output_tokens} if hasattr(client, "preflight") else {}),
         )
         error = validator(payload)
         if error:
             raise ValueError(error)
+        return payload
+
+    for group, payload in generate_budgeted_batches(
+        entries, prompt_for, client, generate, task_name="narration-plan-refine",
+        max_items=max_items, max_output_tokens=output_tokens,
+    ):
         # Output order may differ; deterministic playback order is authoritative.
         by_id = {item["scene_id"]: item for item in payload}
         merged.extend(by_id[item["scene_id"]] for item in group)

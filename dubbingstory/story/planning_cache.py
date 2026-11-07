@@ -47,6 +47,7 @@ def cached_json(project_dir, cfg, *, task, prompt, response_validator, generate,
             "llm_provider", "llm_fallback_enabled", "llm_local_model", "story_model",
             "narration_model", "vision_gemini_model", "llm_local_context_window",
             "llm_batching_output_tokens", "llm_local_max_tokens",
+            "llm_gemini_max_output_tokens", "llm_gemini_thinking_budget",
             "llm_local_base_url", "llm_local_structured_outputs", "llm_local_allow_schema_fallback",
         )},
     }

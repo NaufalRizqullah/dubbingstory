@@ -85,6 +85,42 @@ def test_single_attempt_uses_primary_and_reports_actual_count(monkeypatch):
     assert clock.sleeps == []
 
 
+@pytest.mark.parametrize("model,expected", [
+    ("gemini-2.5-flash", 0), ("models/gemini-2.5-flash-lite", 0),
+    ("gemini-2.5-flash-preview-09-2025", 0), ("gemini-2.5-pro", None),
+    ("gemini-3-flash-preview", None), ("custom-model", None),
+])
+def test_text_thinking_budget_is_gated_by_actual_model(monkeypatch, model, expected):
+    analyzer, models, _ = analyzer_with_fake_sdk(monkeypatch, ['{"ok": true}'], max_attempts=1)
+    analyzer.generate_json_with_retry("JSON", model=model, max_output_tokens=8192, thinking_budget=0)
+    config = models.calls[0]["config"]
+    assert config.max_output_tokens == 8192
+    assert (config.thinking_config.thinking_budget if config.thinking_config else None) == expected
+
+
+def test_cloud_model_switch_does_not_forward_legacy_thinking_to_gemini3(monkeypatch):
+    analyzer, models, _ = analyzer_with_fake_sdk(monkeypatch, [ServiceError(503), '{"ok": true}'], max_attempts=2)
+    analyzer.model, analyzer.fallback_model = "gemini-2.5-flash", "gemini-3-flash-preview"
+    analyzer.generate_json_with_retry("JSON", thinking_budget=0)
+    assert models.calls[0]["config"].thinking_config.thinking_budget == 0
+    assert models.calls[1]["config"].thinking_config is None
+
+
+def test_vision_never_receives_text_thinking_policy(monkeypatch):
+    analyzer, models, _ = analyzer_with_fake_sdk(monkeypatch, ['{"ok": true}'], max_attempts=1)
+    analyzer.model = "gemini-2.5-flash"
+    analyzer._generate_with_retry([object(), "image instruction"], thinking_budget=0)
+    assert models.calls[0]["config"].thinking_config is None
+
+
+@pytest.mark.parametrize("budget", [True, "0", 1.5, -2, 32769])
+def test_invalid_thinking_budget_is_rejected_before_provider_call(monkeypatch, budget):
+    analyzer, models, _ = analyzer_with_fake_sdk(monkeypatch, [])
+    with pytest.raises(ValueError, match="thinking_budget"):
+        analyzer.generate_json_with_retry("JSON", thinking_budget=budget)
+    assert not models.calls
+
+
 def test_text_output_budget_reaches_sdk_and_remains_on_retries(monkeypatch):
     analyzer, models, _ = analyzer_with_fake_sdk(monkeypatch, [ServiceError(503), '{"ok":true}'])
     assert analyzer.generate_json_with_retry("Return JSON", max_output_tokens=1234) == {"ok": True}

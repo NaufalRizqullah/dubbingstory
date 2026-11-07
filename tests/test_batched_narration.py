@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from dubbingstory.llm.text_client import TextGenerationError
+from dubbingstory.llm.text_client import TextGenerationError, LocalGenerationTimeout
 from dubbingstory.story import narration_planner, script_writer
 from dubbingstory.story.prompt_templates import batch_story_context
 
@@ -118,6 +118,57 @@ def test_late_batch_failure_never_returns_partial_or_template_narration(monkeypa
     assert len(client.calls) == 2
 
 
+@pytest.mark.parametrize("rewrite", [False, True])
+def test_slow_narration_batches_split_and_preserve_anchors_and_continuity(monkeypatch, rewrite):
+    board, plan, story = fixture(4)
+    attempts = []
+
+    class SlowNarrator(Narrator):
+        def generate_json_with_retry(self, prompt, **kwargs):
+            context = continuity(prompt)
+            attempts.append(context)
+            if len(context["beat_ids"]) > 2:
+                raise LocalGenerationTimeout("slow completion")
+            return super().generate_json_with_retry(prompt, **kwargs)
+
+    client = SlowNarrator(plan)
+    monkeypatch.setattr(script_writer, "_client", lambda cfg: (client, "mock"))
+    if rewrite:
+        original = script_writer._validate_narration(
+            [spoken(item) for item in plan["segments"]], board["scenes"], plan, "id")
+        result = script_writer._batched_qa_rewrite(
+            original, qa={"issues": ["repetition"]}, narration_plan=plan, story_plan=story,
+            language="id", style="jozzr_social", style_config={}, analyzer=client,
+            model="mock", cfg=config(), scenes=board["scenes"])
+    else:
+        result = script_writer.generate_narration(
+            board, languages=["id"], cfg=config(), story_plan=story, narration_plan=plan)["id"]
+    assert [len(context["beat_ids"]) for context in attempts] == [4, 2, 2]
+    assert attempts[-1]["previous_narration"][-1]["scene_id"] == "beat_001"
+    assert [row["scene_id"] for row in result] == [row["scene_id"] for row in plan["segments"]]
+    assert [row["timeline_start"] for row in result] == [row["timeline_start"] for row in plan["segments"]]
+    assert all(row["action_anchors"] for row in result)
+
+
+def test_single_beat_timeout_does_not_return_partial_narration(monkeypatch):
+    board, plan, story = fixture(2)
+    calls = []
+
+    class SlowNarrator(Narrator):
+        def generate_json_with_retry(self, prompt, **kwargs):
+            ids = continuity(prompt)["beat_ids"]
+            calls.append(ids)
+            if "beat_001" in ids:
+                raise LocalGenerationTimeout("single beat still slow")
+            return super().generate_json_with_retry(prompt, **kwargs)
+
+    monkeypatch.setattr(script_writer, "_client", lambda cfg: (SlowNarrator(plan), "mock"))
+    with pytest.raises(RuntimeError, match="single beat") as exc:
+        script_writer.generate_narration(board, languages=["id"], cfg=config(), story_plan=story, narration_plan=plan)
+    assert isinstance(exc.value.__cause__, LocalGenerationTimeout)
+    assert calls == [["beat_000", "beat_001"], ["beat_000"], ["beat_001"]]
+
+
 @pytest.mark.parametrize("fault", ["missing", "duplicate", "unknown_event", "wrong_language"])
 def test_batch_rejects_invalid_custom_client_output(monkeypatch, fault):
     board, plan, story = fixture(2)
@@ -179,6 +230,28 @@ class Refiner:
                    for sid in reversed(context["beat_ids"])]
         assert response_validator(payload) is None
         return payload
+
+
+def test_refinement_timeout_splits_with_latest_intents(monkeypatch):
+    board, plan, story = fixture(4)
+    before = copy.deepcopy(plan["segments"])
+
+    class SlowRefiner(Refiner):
+        def generate_json_with_retry(self, prompt, **kwargs):
+            if len(continuity(prompt)["beat_ids"]) > 2:
+                raise LocalGenerationTimeout("slow planning")
+            return super().generate_json_with_retry(prompt, **kwargs)
+
+    client = SlowRefiner()
+    monkeypatch.setattr(narration_planner, "build_story_client", lambda *args, **kwargs: (client, "mock"))
+    narration_planner._refine_plan_with_gemini(
+        plan["segments"], scenes=board["scenes"], story_plan=story, story_memory={}, cfg=config(), mode="full")
+    assert [len(item["beat_ids"]) for item in client.calls] == [2, 2]
+    assert client.calls[1]["previous_planning_intents"][-1]["intent"] == "Intent for beat_001"
+    for old, revised in zip(before, plan["segments"]):
+        assert revised["intent"] == f"Intent for {old['scene_id']}"
+        assert revised["visual_events"] == old["visual_events"]
+        assert revised["timeline_start"] == old["timeline_start"]
 
 
 def test_refinement_batches_keep_complete_coverage_without_retiming(monkeypatch):

@@ -289,17 +289,42 @@ llm:
   batching:
     enabled: true
     max_scenes: 4
-    max_beats: 4
+    max_beats: 2
     output_tokens: 2048
 ```
 
 CLI biasa mempertahankan kedua toggle `enabled: false` untuk kompatibilitas. Notebook sosial mengaktifkan `TEXT_PREFLIGHT` dan `TEXT_BATCHING`; pengaturan audio, sampling satu detik, provider, wheel CUDA, dan konteks model existing dipertahankan. `TEXT_BATCH_MAX_SCENES`/`TEXT_BATCH_MAX_BEATS` adalah batas awal kelompok, yang dapat dipecah lagi jika prompt tidak muat. Satu scene/beat yang masih terlalu besar dihentikan dengan error eksplisit; evidence dan scene terakhir tidak dibuang diam-diam. Menaikkan output reserve justru mengurangi ruang input.
 
-Pemecahan otomatis berlaku pada prompt sebelum generation. Prompt koreksi setelah respons gagal validasi dihitung ulang, tetapi tambahan koreksi yang melampaui konteks saat retry masih menghentikan tugas tersebut. Untuk kasus ini turunkan ukuran kelompok awal (misalnya dari 4 ke 2) atau naikkan `TEXT_SAFETY_MARGIN` sebelum mengulang; jangan menambah retry. Batas ini tidak menyebabkan pemotongan evidence atau publikasi hasil parsial.
+Pemecahan otomatis berlaku pada preflight, kapasitas yang terlampaui saat generation/repair, dan read timeout completion lokal pada jalur batch. Kelompok dibagi dua secara kronologis; prompt kelompok berikutnya memakai narasi/intent terakhir yang sudah tervalidasi. Satu item yang masih gagal dihentikan secara eksplisit. Kegagalan koneksi, tokenizer, schema atau bahasa tidak memicu pemecahan timeout. Tidak ada evidence yang dipotong atau naskah parsial yang diterbitkan sebagai hasil selesai.
 
 Global story dibentuk dari kelompok scene berurutan, kemudian ringkasannya digabung bertahap. Semua peran/ID scene tetap digabung secara deterministik dan diperiksa terhadap sumber; reduction tidak mengganti waktu event. Refinement rencana narasi, penulisan, dan QA full-mode juga dikelompokkan, dengan konteks cerita yang dibatasi serta konteks tetangga untuk kesinambungan. Validasi bahasa, anchor, cakupan beat, dan QA gabungan tetap berlaku. Timestamp visual dan output video tidak berubah. Jalur summary existing tetap dipertahankan; fitur ini tidak mengubahnya menjadi native full mode.
 
 Batch planning yang berhasil disimpan sebagai cache tervalidasi berdasarkan evidence, prompt, kontrak dan konfigurasi terkait. Cache menyimpan keluaran yang dapat digunakan ulang, bukan credential atau prompt request. Gagal di tengah proses tidak menerbitkan story plan/naskah parsial sebagai hasil selesai. Cache yang tidak cocok dengan evidence/kontrak diperiksa ulang atau dihitung kembali.
+
+### Timeout narasi sesudah planning berhasil
+
+Log terbaru (`run_id=74577111-d1e7-4fb4-89d6-598ee6a64f41`) menunjukkan analyze dan global planning berhasil. Kegagalan terakhir terjadi pada completion narasi lokal: preflight mengukur 7801 input + 2048 output + 256 margin = 10105 token, masih di bawah konteks 10240. Kedua request terkena `ReadTimeout` sekitar 60 dan 59 detik. vLLM masih menghasilkan sekitar 13–14 token/detik sebelum client timeout. `EngineDeadError` muncul setelah SIGTERM cleanup notebook; log ini tidak membuktikan GPU crash sebagai penyebab awal.
+
+Gemini juga berulang kali mengembalikan `MAX_TOKENS`: sekitar 1962–1965 token dipakai untuk thinking, sehingga jawaban JSON hanya mendapat sekitar 67–72 token dari cap 2048. HTTP 503/504 pada request lain merupakan kegagalan layanan terpisah. Memperbaiki budget tidak menjamin layanan cloud selalu tersedia.
+
+Notebook kini memakai:
+
+| Pengaturan | Default notebook | Tujuan |
+|---|---:|---|
+| `GEMINI_TEXT_MAX_TOKENS` | 8192 | Batas output teks cloud, terpisah dari output lokal |
+| `GEMINI_TEXT_THINKING_BUDGET` | 0 | Menonaktifkan thinking untuk Gemini 2.5 Flash/Flash-Lite teks |
+| `LOCAL_TIMEOUT_SECONDS` | 120 | Memberi completion lokal waktu lebih panjang |
+| `LOCAL_BUDGET_SECONDS` | 240 | Batas per panggilan termasuk retry; bukan batas seluruh pipeline |
+| `TEXT_BATCH_MAX_BEATS` | 2 | Kelompok awal lebih kecil untuk narasi/refinement/QA |
+| `TEXT_BATCH_OUTPUT_TOKENS` | 2048 | Reservasi output lokal tetap; tidak menjadi 8192 |
+
+Konfigurasi YAML ekuivalen untuk cloud: `llm.gemini.max_output_tokens` dan `llm.gemini.thinking_budget`. Default CLI keduanya `null`, sehingga mempertahankan cap caller/default SDK. Kontrol thinking hanya dikirim pada request teks ke model Gemini 2.5 yang dikenali. Untuk 2.5 Pro, nilai 0 diabaikan karena tidak bisa menonaktifkan thinking; Gemini 3+ dan model lain tetap menggunakan default model. Gunakan `None`/`null` untuk mempertahankan default. Lihat [aturan thinking per model dari Google](https://firebase.google.com/docs/ai-logic/thinking).
+
+Recovery batch membagi permintaan yang read-timeout setelah percobaan completion pertama, kemudian memvalidasi ulang tiap kelompok kecil. Jumlah pembagian terbatas oleh ukuran kelompok; satu beat yang masih timeout berhenti. Summary dan penulisan ulang durasi TTS yang tidak melalui helper batch tetap memakai retry existing. Setiap kelompok baru memiliki budget panggilannya sendiri, jadi total proses dapat lebih lama dari 240 detik. Angka 120 detik belum merupakan benchmark keberhasilan pada semua GPU/model.
+
+Untuk run ini, perbarui **source repository dan notebook**, pertahankan folder output project, kemudian pilih `START_FROM="narrate"`. Jalankan cell konfigurasi/helpers/Secrets serta pipeline agar konfigurasi baru diterapkan. Tidak perlu mengulang segment atau vision jika storyboard, story plan/memory, scene cards, dan evidence lengkap dari sumber yang sama masih tersedia. Jika global planning belum lengkap gunakan `plan`; pada sesi fresh tanpa artefak gunakan `segment`. Notebook tetap default `segment` untuk video baru. Setup menolak checkout yang belum memiliki perbaikan ini.
+
+Trace mencatat `local_read_timeout`/`local_connect_timeout`, `request_stage` (`tokenize` atau `completion`), `request_timeout_seconds`, latensi dan token budget. Prompt, credential, dan pesan mentah transport tidak disimpan. Jika masih gagal, kirim `diagnostics_<run_id>.zip` dari run baru; berkas tambahan dari run lama belum diperlukan untuk diagnosis ini.
 
 ### Melanjutkan sesudah visual selesai
 

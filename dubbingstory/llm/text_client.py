@@ -7,6 +7,8 @@ silently truncated to fit a smaller model. State contains routing metadata only.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 import json
 import math
 import os
@@ -23,6 +25,23 @@ from dubbingstory.llm.diagnostics import LLMDiagnostics, response_usage
 
 class TextGenerationError(RuntimeError):
     """A configured text route failed; do not substitute invented narration."""
+
+
+class LocalGenerationTimeout(TextGenerationError):
+    """Completion read timeout; batching callers may retry smaller groups."""
+
+
+_BATCH_TIMEOUT_RECOVERY = ContextVar("text_batch_timeout_recovery", default=False)
+
+
+@contextmanager
+def batch_timeout_recovery():
+    """Permit early timeout escalation only while a splitting caller executes."""
+    token = _BATCH_TIMEOUT_RECOVERY.set(True)
+    try:
+        yield
+    finally:
+        _BATCH_TIMEOUT_RECOVERY.reset(token)
 
 
 class ContextBudgetError(TextGenerationError):
@@ -239,6 +258,13 @@ class TextLLMClient:
         from dubbingstory.vision.gemini_analyzer import GeminiVideoAnalyzer
 
         call_id = kwargs.pop("_call_id", None) or uuid4().hex
+        # Cloud thinking and local context reservations need independent caps.
+        # kwargs is a copy: a later local fallback keeps its original reservation.
+        if getattr(self.cfg, "llm_gemini_max_output_tokens", None) is not None:
+            kwargs["max_output_tokens"] = _positive_int(self.cfg, "llm_gemini_max_output_tokens", 8192)
+        thinking_budget = getattr(self.cfg, "llm_gemini_thinking_budget", None)
+        if thinking_budget is not None:
+            kwargs["thinking_budget"] = thinking_budget
         key = getattr(self.cfg, "api_key_gemini", "")
         if not key:
             raise TextGenerationError("Gemini key unavailable; configure llm.provider: local to use Qwen only")
@@ -328,9 +354,13 @@ class TextLLMClient:
                 finish_reason, validation_error, status_code = None, "", None
                 error_type = ""
                 token_budget = None
+                request_stage = "tokenize"
+                request_timeout = min(timeout, max(0, deadline - time.monotonic()))
                 try:
                     token_budget = self._token_budget(session, base_url, local_model, messages,
                                                       max_tokens, timeout, deadline)
+                    request_stage = "completion"
+                    request_timeout = min(timeout, max(0, deadline - time.monotonic()))
                     raw = self._post(session, base_url + "/chat/completions",
                                      {"model": local_model, "messages": messages,
                                       "temperature": temperature, "max_tokens": max_tokens,
@@ -365,6 +395,7 @@ class TextLLMClient:
                         finish_reason=finish_reason, usage=response_usage(raw.get("usage")),
                         provider_request_id=raw.get("id"), http_status=200,
                         token_budget=token_budget,
+                        request_stage=request_stage, request_timeout_seconds=request_timeout,
                         latency_seconds=time.monotonic() - attempt_started,
                     )
                     print(f"   LLM {task_name}: local attempt {attempt}/{attempts} succeeded ({time.monotonic() - started:.1f}s)")
@@ -391,6 +422,12 @@ class TextLLMClient:
                 except (ValueError, TypeError, KeyError, IndexError, AttributeError) as exc:
                     error_type = type(exc).__name__
                     category, retryable = "invalid_json_response", True
+                except requests.ReadTimeout as exc:
+                    error_type = type(exc).__name__
+                    category, retryable = "local_read_timeout", True
+                except requests.ConnectTimeout as exc:
+                    error_type = type(exc).__name__
+                    category, retryable = "local_connect_timeout", True
                 except requests.RequestException as exc:
                     error_type = type(exc).__name__
                     category, retryable = "local_transport_error", True
@@ -404,11 +441,21 @@ class TextLLMClient:
                     finish_reason=finish_reason, usage=response_usage(raw.get("usage")),
                     provider_request_id=raw.get("id"), http_status=status_code,
                     token_budget=token_budget,
+                    request_stage=request_stage, request_timeout_seconds=request_timeout,
                     latency_seconds=time.monotonic() - attempt_started,
                 )
                 print(f"   LLM {task_name}: local attempt {attempt}/{attempts} failed ({category})")
                 if safe_error:
                     print(f"      Validation: {safe_error[:500]}")
+                if (category == "local_read_timeout" and request_stage == "completion"
+                        and _BATCH_TIMEOUT_RECOVERY.get()):
+                    # Do not spend another full timeout on the same oversized
+                    # work group. The caller can split it, or fail for a singleton.
+                    raise LocalGenerationTimeout(
+                        f"Local completion timed out after {request_timeout:.1f}s while waiting for JSON. "
+                        "Split the request or increase llm.local.timeout_seconds/budget_seconds; "
+                        "saved artifacts can be resumed."
+                    ) from None
                 if category in {"schema_or_language_rejected", "invalid_result_envelope", "invalid_json_shape",
                                 "invalid_json_response", "incomplete_output", "empty_output"}:
                     correction = "\n" + diagnostics.correction(safe_error or category, content)

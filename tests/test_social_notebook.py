@@ -449,15 +449,16 @@ def test_text_configuration_matches_router_contract(tmp_path, separate):
     config = eval(compile(ast.Expression(llm_node), str(NOTEBOOK), "eval"), values)
     assert config["provider"] == "gemini"
     assert config["gemini"] == {"max_attempts": 3, "timeout_seconds": 30, "budget_seconds": 90,
-                                "initial_wait_seconds": 5, "wait_increment_seconds": 5}
+                                "initial_wait_seconds": 5, "wait_increment_seconds": 5,
+                                "max_output_tokens": 8192, "thinking_budget": 0}
     assert config["fallback"] == {"enabled": True, "state_path": str(tmp_path / "llm_runtime_state.json"), "run_id": ""}
     assert config["local"] == {"base_url": url, "model": model,
-                               "max_attempts": 2, "timeout_seconds": 60, "budget_seconds": 120,
+                               "max_attempts": 2, "timeout_seconds": 120, "budget_seconds": 240,
                                "max_tokens": 2048, "context_window": context_window}
     assert config["diagnostics"] == {"enabled": True, "path": str(tmp_path / "llm_attempts.jsonl"),
                                       "max_output_chars": 12000}
     assert config["preflight"] == {"enabled": True, "safety_margin": 256}
-    assert config["batching"] == {"enabled": True, "max_scenes": 4, "max_beats": 4, "output_tokens": 2048}
+    assert config["batching"] == {"enabled": True, "max_scenes": 4, "max_beats": 2, "output_tokens": 2048}
 
 
 def test_separate_text_model_is_opt_in_with_existing_runtime_defaults():

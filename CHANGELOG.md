@@ -11,6 +11,17 @@ All notable changes to the **dubbingstory** project will be documented in this f
 - **Major (X.y.z)**: Incremented for incompatible API changes (breaking changes).
 - **Patch (x.y.Z)**: Incremented for backward-compatible bug fixes or minor patches.
 
+## [0.10.5]
+
+### Fixed
+- Separate optional Gemini text output/thinking controls from the local output reservation. The social notebook uses 8192 cloud output tokens and disables thinking only for supported Gemini 2.5 Flash/Flash-Lite text calls; vision and Gemini 3+ keep their model defaults. Planning cache identity includes both controls.
+- Split chronological text groups after local completion read timeouts or context overflow during generation/repair. Apply to full narration, refinement, QA and hierarchical planning; keep source timing, anchors and complete coverage. Singleton failures remain explicit. Non-batched summary/duration calls retain their configured retries.
+- Social notebook starts with two narration beats per request, 120-second local request timeout and 240-second call budget. Preserve the attached notebook's video, voice/model and audio choices. Trace records distinguish read/connect failures and include request stage/timeout without request bodies.
+
+### Validation
+- The supplied run completed visual analysis and global planning. Gemini repeatedly finished with MAX_TOKENS: roughly 1962 thinking tokens left only about 70 answer tokens from the shared 2048 cap. The final local narration request fit context but hit read timeouts at about 60 seconds; the later EngineDeadError followed notebook server cleanup.
+- Add mocked cloud/local budget, model-specific thinking, timeout splitting, chronology/anchor, cache and notebook regressions for Kaggle. Development verification is static only; no tests, model inference or media processing executed locally. Resume this run from narrate with the updated source and notebook; provider availability and live performance remain to be checked in Kaggle.
+
 ## [0.10.4]
 
 ### Added

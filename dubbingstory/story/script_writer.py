@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
-from dubbingstory.llm.batching import budgeted_groups, context_batching_enabled
+from dubbingstory.llm.batching import generate_budgeted_batches, context_batching_enabled
 
 from dubbingstory.story.action_anchors import (
     canonical_action_anchors, normalized_tokens, preserve_action_phrases,
@@ -447,17 +447,19 @@ def _generate_batched_narration(*, scenes, narration_plan, story_plan, story_mem
             style_config=style_config, hedging_threshold=hedging_threshold, mode="full",
         ) + batch_continuity_note(group, entries, merged)
 
-    for index, group in enumerate(budgeted_groups(
-        entries, prompt_for, analyzer, task_name=f"full-narration-{language}",
-        max_items=max_items, max_output_tokens=tokens,
-    ), 1):
+    def generate(group):
         group_plan = narration_batch_plan(narration_plan, group)
         raw = _extract_segment_list(_call_json(
             analyzer, model, prompt_for(group), language=language,
-            task_name=f"full-narration-batch-{index}",
+            task_name=f"full-narration-{language}-{group[0]['scene_id']}-{group[-1]['scene_id']}",
             payload_validator=_narration_response_validator(group_plan), max_output_tokens=tokens,
         ))
-        validated = _validate_narration(raw, scenes, group_plan, language)
+        return _validate_narration(raw, scenes, group_plan, language)
+
+    for group, validated in generate_budgeted_batches(
+        entries, prompt_for, analyzer, generate, task_name=f"full-narration-{language}",
+        max_items=max_items, max_output_tokens=tokens,
+    ):
         merged.extend(validated)
         print(f"   Narration batches: {len(merged)}/{len(entries)} beats validated")
     # No caller receives any partial narration when a later group fails.
@@ -484,10 +486,7 @@ def _batched_qa_rewrite(narration, *, qa, narration_plan, story_plan, language,
             story_plan=scoped_story, language=language, style=style, style_config=style_config,
         ) + batch_continuity_note(group, entries, merged)
 
-    for index, group in enumerate(budgeted_groups(
-        entries, prompt_for, analyzer, task_name=f"narration-rewrite-{language}",
-        max_items=max_items, max_output_tokens=tokens,
-    ), 1):
+    def generate(group):
         group_plan = narration_batch_plan(narration_plan, group)
         base_validator = _narration_response_validator(group_plan)
 
@@ -505,7 +504,7 @@ def _batched_qa_rewrite(narration, *, qa, narration_plan, story_plan, language,
         validator.response_schema = base_validator.response_schema
         raw = _extract_segment_list(_call_json(
             analyzer, model, prompt_for(group), temperature=0.25, language=language,
-            task_name=f"narration-rewrite-batch-{index}", payload_validator=validator,
+            task_name=f"narration-rewrite-{language}-{group[0]['scene_id']}-{group[-1]['scene_id']}", payload_validator=validator,
             max_output_tokens=tokens,
         ))
         revised = _validate_narration(raw, scenes, group_plan, language)
@@ -513,6 +512,12 @@ def _batched_qa_rewrite(narration, *, qa, narration_plan, story_plan, language,
             if item.get("action_sync_enabled"):
                 anchors = original[item["scene_id"]].get("action_anchors", [])
                 item["action_anchors"] = canonical_action_anchors(anchors, item["text"], item)
+        return revised
+
+    for group, revised in generate_budgeted_batches(
+        entries, prompt_for, analyzer, generate, task_name=f"narration-rewrite-{language}",
+        max_items=max_items, max_output_tokens=tokens,
+    ):
         merged.extend(revised)
     error = _narration_response_validator(narration_plan)(merged)
     if error:

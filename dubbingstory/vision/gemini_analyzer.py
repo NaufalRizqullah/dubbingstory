@@ -58,6 +58,28 @@ class _ResponseValidationError(ValueError):
         self.category = category
 
 
+def _text_thinking_options(model: str, budget: int | None) -> dict:
+    """Only Gemini 2.5 text requests opt into the legacy thinking budget."""
+    if budget is None:
+        return {}
+    if type(budget) is not int or not -1 <= budget <= 32768:
+        raise ValueError("Gemini thinking_budget must be an integer from -1 to 32768 or null")
+    name = model.removeprefix("models/")
+    match = re.fullmatch(r"gemini-2\.5-(flash-lite|flash|pro)(?:-.*)?", name)
+    if not match:
+        # Gemini 3+ uses thinking levels. Unknown model aliases retain SDK defaults.
+        return {}
+    family = match.group(1)
+    if family == "pro" and budget == 0:
+        print("      Gemini 2.5 Pro cannot disable thinking; keeping the model default")
+        return {}
+    minimum = 128 if family == "pro" else (512 if family == "flash-lite" else 1)
+    maximum = 32768 if family == "pro" else 24576
+    if budget not in {-1, 0} and not minimum <= budget <= maximum:
+        raise ValueError("Gemini thinking_budget is outside the selected model's supported range")
+    return {"thinking_config": types.ThinkingConfig(thinking_budget=budget)}
+
+
 def _extract_status_code(exc: Exception):
     """Extract HTTP status code from various exception types."""
     for attr in ("status_code", "code", "status"):
@@ -198,6 +220,7 @@ class GeminiVideoAnalyzer:
         task_name: str = "analysis",
         model_override: str | None = None,
         max_output_tokens: int | None = None,
+        thinking_budget: int | None = None,
     ) -> dict | list:
         """Call Gemini with retry logic and optional semantic validation.
 
@@ -226,6 +249,9 @@ class GeminiVideoAnalyzer:
         call_id = getattr(self, "diagnostics_call_id", None) or uuid4().hex
         text_only = all(isinstance(item, str) for item in base_contents)
         payload_schema = getattr(response_validator, "response_schema", None) if text_only else None
+        # Validate once before retrying. Vision calls deliberately keep defaults.
+        if text_only:
+            _text_thinking_options(primary_model, thinking_budget)
 
         for attempt in range(1, max_attempts + 1):
             remaining = deadline - time.monotonic()
@@ -245,6 +271,7 @@ class GeminiVideoAnalyzer:
                     http_options=_http_options(min(timeout_seconds, remaining)),
                     **({"max_output_tokens": int(max_output_tokens)} if max_output_tokens is not None else {}),
                     **({"response_json_schema": payload_schema} if isinstance(payload_schema, dict) else {}),
+                    **(_text_thinking_options(model, thinking_budget) if text_only else {}),
                 )
                 print(
                     f"      [Gemini:{task_name}] Attempt {attempt}/{max_attempts} "
@@ -363,6 +390,7 @@ class GeminiVideoAnalyzer:
         task_name: str = "json",
         model: str | None = None,
         max_output_tokens: int | None = None,
+        thinking_budget: int | None = None,
     ) -> dict | list:
         """Generate text-only JSON while preserving the exact prompt across retries."""
         return self._generate_with_retry(
@@ -372,6 +400,7 @@ class GeminiVideoAnalyzer:
             task_name=task_name,
             model_override=model,
             max_output_tokens=max_output_tokens,
+            thinking_budget=thinking_budget,
         )
 
     def analyze_timed_frames(self, frames: list[dict], prompt: str,
